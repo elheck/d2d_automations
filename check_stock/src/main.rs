@@ -63,6 +63,31 @@ fn write_to_output<W: Write>(writer: &mut W, content: &str) -> io::Result<()> {
     writer.write_all(content.as_bytes())
 }
 
+/// Parse a location code, converting the prefix letter to a number for sorting
+fn parse_location_code(loc: &str) -> Vec<i32> {
+    // Split the location at "-L0" to get only the main part
+    let main_part = loc.split("-L0").next().unwrap_or(loc);
+    
+    main_part.split('-')
+        .enumerate()
+        .map(|(i, part)| {
+            if i == 0 {
+                // Convert prefix letter to corresponding number for sorting
+                match part.chars().next().unwrap_or('A') {
+                    'A' => 1,
+                    'B' => 2,
+                    'C' => 3,
+                    'D' => 4,
+                    _ => 0,
+                }
+            } else {
+                // Parse the numeric part
+                part.parse::<i32>().unwrap_or(0)
+            }
+        })
+        .collect()
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -78,11 +103,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut found_cards = false;
     let mut total_price = 0.0;
-    let mut output = String::new();
-
-    output.push_str(&inventory_message);
-    output.push_str(&wantslist_message);
-    output.push_str(header);
+    let mut output_entries = Vec::new();
 
     // Process each card in the wantslist
     for (needed_quantity, card_name) in wantslist {
@@ -133,25 +154,44 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            // Display results for this card
+            // Create output entry for this card
             if !found_copies.is_empty() {
                 let total_found: i32 = found_copies.iter()
                     .map(|(qty, _, _)| qty)
                     .sum();
 
-                output.push_str(&format!("{} x {} (total: {:.2} €)\n", needed_quantity, card_name, card_total_cost));
+                let mut card_output = Vec::new();
+                card_output.push(format!("{} x {} (total: {:.2} €)\n", needed_quantity, card_name, card_total_cost));
                 
+                // Sort copies by location if available
+                found_copies.sort_by(|(_, _, card_a), (_, _, card_b)| {
+                    let loc_a = card_a.location.as_ref().map(|s| s.as_str()).unwrap_or("");
+                    let loc_b = card_b.location.as_ref().map(|s| s.as_str()).unwrap_or("");
+                    
+                    if loc_a.is_empty() && loc_b.is_empty() {
+                        std::cmp::Ordering::Equal
+                    } else if loc_a.is_empty() {
+                        std::cmp::Ordering::Greater
+                    } else if loc_b.is_empty() {
+                        std::cmp::Ordering::Less
+                    } else {
+                        let parts_a = parse_location_code(loc_a);
+                        let parts_b = parse_location_code(loc_b);
+                        parts_a.cmp(&parts_b)
+                    }
+                });
+
                 // Show copies from each set with their individual prices
-                for (qty, set_name, card) in found_copies {
+                for (qty, set_name, card) in &found_copies {
                     // Add location information if available
                     let location_info = card.location.as_ref()
                         .filter(|loc| !loc.trim().is_empty())
                         .map(|loc| format!(" [Location: {}]", loc))
                         .unwrap_or_default();
                     
-                    output.push_str(&format!("    {} {} [{}] from {}, {} condition - {:.2} €{}\n",
+                    card_output.push(format!("    {} {} [{}] from {}, {} condition - {:.2} €{}\n",
                         qty,
-                        if qty == 1 { "copy" } else { "copies" },
+                        if *qty == 1 { "copy" } else { "copies" },
                         card.language,
                         set_name,
                         card.condition,
@@ -162,14 +202,48 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Show warning only if we have some cards but not enough
                 if total_found < needed_quantity {
-                    output.push_str(&format!("    WARNING: Only {} of {} copies available!\n", 
+                    card_output.push(format!("    WARNING: Only {} of {} copies available!\n", 
                         total_found, needed_quantity));
                 }
 
+                card_output.push(String::from("\n"));
+                
+                // Add to output entries with sort key based on the first card's location
+                let sort_key = found_copies.first()
+                    .and_then(|(_, _, card)| card.location.as_ref())
+                    .map(|loc| loc.to_string())
+                    .unwrap_or_else(|| String::from(""));
+                    
+                output_entries.push((sort_key, card_output.join("")));
                 total_price += card_total_cost;
-                output.push('\n');
             }
         }
+    }
+
+    // Sort the entire output by location if available
+    output_entries.sort_by(|(loc_a, _), (loc_b, _)| {
+        if loc_a.is_empty() && loc_b.is_empty() {
+            std::cmp::Ordering::Equal
+        } else if loc_a.is_empty() {
+            std::cmp::Ordering::Greater
+        } else if loc_b.is_empty() {
+            std::cmp::Ordering::Less
+        } else {
+            let parts_a = parse_location_code(loc_a);
+            let parts_b = parse_location_code(loc_b);
+            parts_a.cmp(&parts_b)
+        }
+    });
+
+    // Build final output
+    let mut output = String::new();
+    output.push_str(&inventory_message);
+    output.push_str(&wantslist_message);
+    output.push_str(header);
+
+    // Add all card entries in sorted order
+    for (_, entry) in output_entries {
+        output.push_str(&entry);
     }
 
     // Display final results
