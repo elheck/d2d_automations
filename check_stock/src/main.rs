@@ -165,8 +165,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 
                 // Sort copies by location if available
                 found_copies.sort_by(|(_, _, card_a), (_, _, card_b)| {
-                    let loc_a = card_a.location.as_ref().map(|s| s.as_str()).unwrap_or("");
-                    let loc_b = card_b.location.as_ref().map(|s| s.as_str()).unwrap_or("");
+                    let loc_a = card_a.location.as_deref().unwrap_or("");
+                    let loc_b = card_b.location.as_deref().unwrap_or("");
                     
                     if loc_a.is_empty() && loc_b.is_empty() {
                         std::cmp::Ordering::Equal
