@@ -68,15 +68,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if !matching_cards.is_empty() {
             found_cards = true;
             
-            // Find the cheapest version
-            let cheapest_card = matching_cards.iter()
-                .min_by(|a, b| {
-                    let price_a = a.price.parse::<f64>().unwrap_or(f64::MAX);
-                    let price_b = b.price.parse::<f64>().unwrap_or(f64::MAX);
-                    price_a.partial_cmp(&price_b).unwrap()
-                })
-                .unwrap();
-
             // Group cards by set
             let mut cards_by_set: HashMap<String, Vec<&d2d_automations::Card>> = HashMap::new();
             for card in &matching_cards {
@@ -84,61 +75,64 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 cards_by_set.entry(set_key).or_default().push(card);
             }
 
-            if let Ok(price) = cheapest_card.price.parse::<f64>() {
-                let mut remaining_needed = needed_quantity;
-                let mut found_copies = Vec::new();
+            let mut remaining_needed = needed_quantity;
+            let mut found_copies = Vec::new();
+            let mut card_total_cost = 0.0;
 
-                // Sort sets by price to use cheapest sets first
-                let mut sets: Vec<_> = cards_by_set.iter().collect();
-                sets.sort_by(|a, b| {
-                    let price_a = a.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
-                    let price_b = b.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
-                    price_a.partial_cmp(&price_b).unwrap()
-                });
+            // Sort sets by price to use cheapest sets first
+            let mut sets: Vec<_> = cards_by_set.iter().collect();
+            sets.sort_by(|a, b| {
+                let price_a = a.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
+                let price_b = b.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
+                price_a.partial_cmp(&price_b).unwrap()
+            });
 
-                // Calculate how many copies we can provide from each set
-                for (set_name, cards) in sets {
-                    if remaining_needed <= 0 {
-                        break;
-                    }
-
-                    let total_in_set: i32 = cards.iter()
-                        .map(|card| card.quantity.parse::<i32>().unwrap_or(0))
-                        .sum();
-
-                    if total_in_set > 0 {
-                        let copies_from_set = remaining_needed.min(total_in_set);
-                        found_copies.push((copies_from_set, set_name, cards[0]));
-                        remaining_needed -= copies_from_set;
-                    }
+            // Calculate how many copies we can provide from each set
+            for (set_name, cards) in sets {
+                if remaining_needed <= 0 {
+                    break;
                 }
 
-                if !found_copies.is_empty() {
-                    let total_found: i32 = found_copies.iter()
-                        .map(|(qty, _, _)| qty)
-                        .sum();
+                let total_in_set: i32 = cards.iter()
+                    .map(|card| card.quantity.parse::<i32>().unwrap_or(0))
+                    .sum();
 
-                    println!("{} x {} ({:.2} €)", needed_quantity, card_name, price);
-                    
-                    // Show copies from each set
-                    for (qty, set_name, card) in found_copies {
-                        println!("    {} {} [{}] from {}, {} condition",
-                            qty,
-                            if qty == 1 { "copy" } else { "copies" },
-                            card.language,
-                            set_name,
-                            card.condition
-                        );
+                if total_in_set > 0 {
+                    let copies_from_set = remaining_needed.min(total_in_set);
+                    if let Ok(price) = cards[0].price.parse::<f64>() {
+                        card_total_cost += price * copies_from_set as f64;
                     }
-
-                    if total_found < needed_quantity {
-                        println!("    WARNING: Only {} of {} copies available!", 
-                            total_found, needed_quantity);
-                    }
-
-                    total_price += price * total_found as f64;
-                    println!("");
+                    found_copies.push((copies_from_set, set_name, cards[0]));
+                    remaining_needed -= copies_from_set;
                 }
+            }
+
+            if !found_copies.is_empty() {
+                let total_found: i32 = found_copies.iter()
+                    .map(|(qty, _, _)| qty)
+                    .sum();
+
+                println!("{} x {} (total: {:.2} €)", needed_quantity, card_name, card_total_cost);
+                
+                // Show copies from each set with their individual prices
+                for (qty, set_name, card) in found_copies {
+                    println!("    {} {} [{}] from {}, {} condition - {:.2} €",
+                        qty,
+                        if qty == 1 { "copy" } else { "copies" },
+                        card.language,
+                        set_name,
+                        card.condition,
+                        card.price.parse::<f64>().unwrap_or(0.0)
+                    );
+                }
+
+                if total_found < needed_quantity {
+                    println!("    WARNING: Only {} of {} copies available!", 
+                        total_found, needed_quantity);
+                }
+
+                total_price += card_total_cost;
+                println!("");
             }
         }
     }
