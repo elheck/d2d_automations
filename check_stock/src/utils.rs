@@ -5,8 +5,10 @@ pub fn path_exists<P: AsRef<Path>>(path: P) -> bool {
     Path::new(path.as_ref()).exists()
 }
 
-/// Helper function to get the current timestamp
-pub fn get_timestamp() -> String {
+pub mod time {
     use chrono::Utc;
-    Utc::now().to_rfc3339()
+    
+    pub fn get_current_time() -> String {
+        Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
+    }
 }

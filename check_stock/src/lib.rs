@@ -8,7 +8,7 @@ pub use errors::Error;
 
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::io::{BufRead};
+use std::io::BufRead;
 
 /// Represents a card from the inventory CSV file
 /// Contains all possible fields that might be present in different CSV formats

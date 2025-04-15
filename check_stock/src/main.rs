@@ -1,9 +1,21 @@
+use clap::Parser;
 use d2d_automations::read_csv;
-use std::env;
 use std::process;
 use std::fs::File;
 use std::io::{self, BufRead};
 use std::collections::HashMap;
+
+/// A tool to check Magic: The Gathering card inventory against a decklist
+#[derive(Parser, Debug)]
+#[command(version, about)]
+struct Args {
+    /// Path to the CSV inventory file
+    inventory_csv: String,
+
+    /// Path to the decklist file
+    #[arg(short = 'w', long = "wants")]
+    decklist: String,
+}
 
 /// Parses a single line from a decklist
 /// Format: "{quantity} {card_name}"
@@ -41,42 +53,15 @@ fn read_decklist(path: &str) -> Result<Vec<(i32, String)>, io::Error> {
     Ok(deck)
 }
 
-/// Main function that handles the stock checking process
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = env::args().collect();
-    
-    // Check for minimum number of arguments
-    if args.len() < 4 {
-        eprintln!("Usage: {} <inventory.csv> -w <decklist.txt>", args[0]);
-        process::exit(1);
-    }
+    let args = Args::parse();
 
-    // Get the inventory path (first argument)
-    let inventory_path = &args[1];
-
-    // Look for -w flag and get decklist path
-    let mut decklist_path = None;
-    for i in 2..args.len() - 1 {
-        if args[i] == "-w" {
-            decklist_path = Some(&args[i + 1]);
-            break;
-        }
-    }
-
-    let decklist_path = match decklist_path {
-        Some(path) => path,
-        None => {
-            eprintln!("Error: -w flag and decklist path are required");
-            eprintln!("Usage: {} <inventory.csv> -w <decklist.txt>", args[0]);
-            process::exit(1);
-        }
-    };
-
-    // Read inventory and decklist files
-    let inventory = read_csv(inventory_path)?;
+    // Read inventory
+    let inventory = read_csv(&args.inventory_csv)?;
     println!("Loaded inventory with {} cards", inventory.len());
 
-    let decklist = read_decklist(decklist_path)?;
+    // Read decklist
+    let decklist = read_decklist(&args.decklist)?;
     println!("\nChecking availability for {} cards in decklist...\n", decklist.len());
 
     let mut found_cards = false;
