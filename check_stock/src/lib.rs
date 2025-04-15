@@ -18,9 +18,29 @@ pub struct Card {
     pub set: String,
     #[serde(rename = "setCode")]
     pub set_code: String,
+    pub cn: String,
     pub condition: String,
     pub language: String,
+    #[serde(rename = "isFoil")]
+    pub is_foil: String,
+    #[serde(rename = "isPlayset")]
+    pub is_playset: String,
+    #[serde(rename = "isSigned")]
+    pub is_signed: String,
     pub price: String,
+    pub comment: String,
+    pub location: Option<String>,
+    #[serde(rename = "nameDE")]
+    pub name_de: String,
+    #[serde(rename = "nameES")]
+    pub name_es: String,
+    #[serde(rename = "nameFR")]
+    pub name_fr: String,
+    #[serde(rename = "nameIT")]
+    pub name_it: String,
+    pub rarity: String,
+    #[serde(rename = "listedAt")]
+    pub listed_at: String,
 }
 
 #[derive(Debug)]
@@ -30,12 +50,19 @@ pub struct DeckEntry {
 }
 
 pub fn read_csv(path: &str) -> Result<Vec<Card>, Box<dyn std::error::Error>> {
-    let mut rdr = csv::Reader::from_path(path)?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .flexible(true)  // Allow flexible number of columns
+        .trim(csv::Trim::All)  // Trim whitespace from fields
+        .from_path(path)?;
+    
     let mut cards = Vec::new();
 
     for result in rdr.deserialize() {
         let card: Card = result?;
-        cards.push(card);
+        // Only include cards that have a valid price and quantity
+        if !card.price.trim().is_empty() && !card.quantity.trim().is_empty() {
+            cards.push(card);
+        }
     }
 
     Ok(cards)

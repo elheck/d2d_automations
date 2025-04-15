@@ -116,13 +116,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 
                 // Show copies from each set with their individual prices
                 for (qty, set_name, card) in found_copies {
-                    println!("    {} {} [{}] from {}, {} condition - {:.2} €",
+                    let location_info = card.location.as_ref()
+                        .filter(|loc| !loc.trim().is_empty())
+                        .map(|loc| format!(" [Location: {}]", loc))
+                        .unwrap_or_default();
+                    
+                    println!("    {} {} [{}] from {}, {} condition - {:.2} €{}",
                         qty,
                         if qty == 1 { "copy" } else { "copies" },
                         card.language,
                         set_name,
                         card.condition,
-                        card.price.parse::<f64>().unwrap_or(0.0)
+                        card.price.parse::<f64>().unwrap_or(0.0),
+                        location_info
                     );
                 }
 
