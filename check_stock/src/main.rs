@@ -5,22 +5,22 @@ use std::fs::File;
 use std::io::{self, BufRead};
 use std::collections::HashMap;
 
-/// A tool to check Magic: The Gathering card inventory against a decklist
+/// A tool to check Magic: The Gathering card inventory against a wantslist
 #[derive(Parser, Debug)]
 #[command(version, about)]
 struct Args {
     /// Path to the CSV inventory file
     inventory_csv: String,
 
-    /// Path to the decklist file
+    /// Path to the wantslist file
     #[arg(short = 'w', long = "wants")]
-    decklist: String,
+    wantslist: String,
 }
 
-/// Parses a single line from a decklist
+/// Parses a single line from a wantslist
 /// Format: "{quantity} {card_name}"
 /// Returns None if the line format is invalid
-fn parse_deck_line(line: &str) -> Option<(i32, String)> {
+fn parse_wants_line(line: &str) -> Option<(i32, String)> {
     let parts: Vec<&str> = line.trim().splitn(2, ' ').collect();
     if parts.len() != 2 {
         return None;
@@ -31,13 +31,13 @@ fn parse_deck_line(line: &str) -> Option<(i32, String)> {
     Some((quantity, name))
 }
 
-/// Reads a decklist from a file
+/// Reads a wantslist from a file
 /// Skips empty lines and the "Deck" header
 /// Returns a vector of (quantity, card_name) tuples
-fn read_decklist(path: &str) -> Result<Vec<(i32, String)>, io::Error> {
+fn read_wantslist(path: &str) -> Result<Vec<(i32, String)>, io::Error> {
     let file = File::open(path)?;
     let reader = io::BufReader::new(file);
-    let mut deck = Vec::new();
+    let mut wants = Vec::new();
     
     for line in reader.lines() {
         let line = line?;
@@ -45,12 +45,12 @@ fn read_decklist(path: &str) -> Result<Vec<(i32, String)>, io::Error> {
             continue;
         }
         
-        if let Some((quantity, name)) = parse_deck_line(&line) {
-            deck.push((quantity, name));
+        if let Some((quantity, name)) = parse_wants_line(&line) {
+            wants.push((quantity, name));
         }
     }
     
-    Ok(deck)
+    Ok(wants)
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -60,17 +60,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let inventory = read_csv(&args.inventory_csv)?;
     println!("Loaded inventory with {} cards", inventory.len());
 
-    // Read decklist
-    let decklist = read_decklist(&args.decklist)?;
-    println!("\nChecking availability for {} cards in decklist...\n", decklist.len());
+    // Read wantslist
+    let wantslist = read_wantslist(&args.wantslist)?;
+    println!("\nChecking availability for {} cards in wantslist...\n", wantslist.len());
 
     let mut found_cards = false;
     let mut total_price = 0.0;
     println!("AVAILABLE CARDS IN STOCK:");
     println!("========================\n");
 
-    // Process each card in the decklist
-    for (needed_quantity, card_name) in decklist {
+    // Process each card in the wantslist
+    for (needed_quantity, card_name) in wantslist {
         // Find all matching cards in inventory
         let matching_cards: Vec<_> = inventory.iter()
             .filter(|card| card.name.eq_ignore_ascii_case(&card_name))
@@ -159,7 +159,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Display final results
     if !found_cards {
-        println!("No cards from your decklist were found in stock.");
+        println!("No cards from your wantslist were found in stock.");
     } else {
         println!("========================");
         println!("Total price for available cards: {:.2} €", total_price);

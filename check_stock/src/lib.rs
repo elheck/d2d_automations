@@ -46,9 +46,9 @@ pub struct Card {
     pub listed_at: String,
 }
 
-/// Represents a card entry in a decklist
+/// Represents a card entry in a wantslist
 #[derive(Debug)]
-pub struct DeckEntry {
+pub struct WantsEntry {
     pub quantity: i32,
     pub name: String,
 }
@@ -74,9 +74,9 @@ pub fn read_csv(path: &str) -> Result<Vec<Card>, Box<dyn std::error::Error>> {
     Ok(cards)
 }
 
-/// Parses a single line from a decklist file
+/// Parses a single line from a wantslist file
 /// Returns a tuple of (quantity, card_name) if valid
-fn parse_deck_line(line: &str) -> Option<(i32, String)> {
+fn parse_wants_line(line: &str) -> Option<(i32, String)> {
     let parts: Vec<&str> = line.trim().splitn(2, ' ').collect();
     if parts.len() != 2 {
         return None;
@@ -87,12 +87,12 @@ fn parse_deck_line(line: &str) -> Option<(i32, String)> {
     Some((quantity, name))
 }
 
-/// Reads and parses a decklist file
-/// Returns a vector of DeckEntry structs
-pub fn read_decklist(path: &str) -> Result<Vec<DeckEntry>, std::io::Error> {
+/// Reads and parses a wantslist file
+/// Returns a vector of WantsEntry structs
+pub fn read_wantslist(path: &str) -> Result<Vec<WantsEntry>, std::io::Error> {
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
-    let mut deck = Vec::new();
+    let mut wants = Vec::new();
     
     for line in reader.lines() {
         let line = line?;
@@ -101,20 +101,20 @@ pub fn read_decklist(path: &str) -> Result<Vec<DeckEntry>, std::io::Error> {
             continue;
         }
         
-        if let Some((quantity, name)) = parse_deck_line(&line) {
-            deck.push(DeckEntry { quantity, name });
+        if let Some((quantity, name)) = parse_wants_line(&line) {
+            wants.push(WantsEntry { quantity, name });
         }
     }
     
-    Ok(deck)
+    Ok(wants)
 }
 
-/// Checks inventory stock against a decklist
+/// Checks inventory stock against a wantslist
 /// Returns a HashMap mapping card names to available copies
-pub fn check_stock<'a>(deck: &[DeckEntry], inventory: &'a [Card]) -> HashMap<String, Vec<&'a Card>> {
+pub fn check_stock<'a>(wants: &[WantsEntry], inventory: &'a [Card]) -> HashMap<String, Vec<&'a Card>> {
     let mut results = HashMap::new();
     
-    for entry in deck {
+    for entry in wants {
         let matching_cards: Vec<&Card> = inventory
             .iter()
             .filter(|card| card.name.eq_ignore_ascii_case(&entry.name))
