@@ -2,8 +2,9 @@ use clap::Parser;
 use d2d_automations::read_csv;
 use std::process;
 use std::fs::File;
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, Write};
 use std::collections::HashMap;
+use std::path::Path;
 
 /// A tool to check Magic: The Gathering card inventory against a wantslist
 #[derive(Parser, Debug)]
@@ -15,6 +16,11 @@ struct Args {
     /// Path to the wantslist file
     #[arg(short = 'w', long = "wants")]
     wantslist: String,
+
+    /// Write output to a file instead of stdout
+    /// The output file will have the same name as the input wantslist with "_in_stock" appended
+    #[arg(short = 'o', long = "write-output")]
+    write_output: bool,
 }
 
 /// Parses a single line from a wantslist
@@ -53,21 +59,30 @@ fn read_wantslist(path: &str) -> Result<Vec<(i32, String)>, io::Error> {
     Ok(wants)
 }
 
+fn write_to_output<W: Write>(writer: &mut W, content: &str) -> io::Result<()> {
+    writer.write_all(content.as_bytes())
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // Read inventory
     let inventory = read_csv(&args.inventory_csv)?;
-    println!("Loaded inventory with {} cards", inventory.len());
+    let inventory_message = format!("Loaded inventory with {} cards\n", inventory.len());
 
     // Read wantslist
     let wantslist = read_wantslist(&args.wantslist)?;
-    println!("\nChecking availability for {} cards in wantslist...\n", wantslist.len());
+    let wantslist_message = format!("\nChecking availability for {} cards in wantslist...\n\n", wantslist.len());
+
+    let header = "AVAILABLE CARDS IN STOCK:\n========================\n\n";
 
     let mut found_cards = false;
     let mut total_price = 0.0;
-    println!("AVAILABLE CARDS IN STOCK:");
-    println!("========================\n");
+    let mut output = String::new();
+
+    output.push_str(&inventory_message);
+    output.push_str(&wantslist_message);
+    output.push_str(header);
 
     // Process each card in the wantslist
     for (needed_quantity, card_name) in wantslist {
@@ -124,7 +139,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|(qty, _, _)| qty)
                     .sum();
 
-                println!("{} x {} (total: {:.2} €)", needed_quantity, card_name, card_total_cost);
+                output.push_str(&format!("{} x {} (total: {:.2} €)\n", needed_quantity, card_name, card_total_cost));
                 
                 // Show copies from each set with their individual prices
                 for (qty, set_name, card) in found_copies {
@@ -134,7 +149,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .map(|loc| format!(" [Location: {}]", loc))
                         .unwrap_or_default();
                     
-                    println!("    {} {} [{}] from {}, {} condition - {:.2} €{}",
+                    output.push_str(&format!("    {} {} [{}] from {}, {} condition - {:.2} €{}\n",
                         qty,
                         if qty == 1 { "copy" } else { "copies" },
                         card.language,
@@ -142,27 +157,45 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         card.condition,
                         card.price.parse::<f64>().unwrap_or(0.0),
                         location_info
-                    );
+                    ));
                 }
 
                 // Show warning only if we have some cards but not enough
                 if total_found < needed_quantity {
-                    println!("    WARNING: Only {} of {} copies available!", 
-                        total_found, needed_quantity);
+                    output.push_str(&format!("    WARNING: Only {} of {} copies available!\n", 
+                        total_found, needed_quantity));
                 }
 
                 total_price += card_total_cost;
-                println!("");
+                output.push('\n');
             }
         }
     }
 
     // Display final results
     if !found_cards {
-        println!("No cards from your wantslist were found in stock.");
+        output.push_str("No cards from your wantslist were found in stock.\n");
     } else {
-        println!("========================");
-        println!("Total price for available cards: {:.2} €", total_price);
+        output.push_str("========================\n");
+        output.push_str(&format!("Total price for available cards: {:.2} €\n", total_price));
+    }
+
+    if args.write_output {
+        // Create output filename by appending "_in_stock" before the extension
+        let input_path = Path::new(&args.wantslist);
+        let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+        let extension = input_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        let output_filename = if extension.is_empty() {
+            format!("{}_in_stock", stem)
+        } else {
+            format!("{}_in_stock.{}", stem, extension)
+        };
+
+        let mut output_file = File::create(&output_filename)?;
+        write_to_output(&mut output_file, &output)?;
+        println!("Results written to {}", output_filename);
+    } else {
+        print!("{}", output);
     }
 
     Ok(())
