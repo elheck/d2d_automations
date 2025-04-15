@@ -5,6 +5,9 @@ use std::fs::File;
 use std::io::{self, BufRead};
 use std::collections::HashMap;
 
+/// Parses a single line from a decklist
+/// Format: "{quantity} {card_name}"
+/// Returns None if the line format is invalid
 fn parse_deck_line(line: &str) -> Option<(i32, String)> {
     let parts: Vec<&str> = line.trim().splitn(2, ' ').collect();
     if parts.len() != 2 {
@@ -16,6 +19,9 @@ fn parse_deck_line(line: &str) -> Option<(i32, String)> {
     Some((quantity, name))
 }
 
+/// Reads a decklist from a file
+/// Skips empty lines and the "Deck" header
+/// Returns a vector of (quantity, card_name) tuples
 fn read_decklist(path: &str) -> Result<Vec<(i32, String)>, io::Error> {
     let file = File::open(path)?;
     let reader = io::BufReader::new(file);
@@ -35,22 +41,41 @@ fn read_decklist(path: &str) -> Result<Vec<(i32, String)>, io::Error> {
     Ok(deck)
 }
 
+/// Main function that handles the stock checking process
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     
-    if args.len() != 3 {
-        eprintln!("Usage: {} <inventory.csv> <decklist.txt>", args[0]);
+    // Check for minimum number of arguments
+    if args.len() < 4 {
+        eprintln!("Usage: {} <inventory.csv> -w <decklist.txt>", args[0]);
         process::exit(1);
     }
 
+    // Get the inventory path (first argument)
     let inventory_path = &args[1];
-    let decklist_path = &args[2];
 
-    // Read inventory
+    // Look for -w flag and get decklist path
+    let mut decklist_path = None;
+    for i in 2..args.len() - 1 {
+        if args[i] == "-w" {
+            decklist_path = Some(&args[i + 1]);
+            break;
+        }
+    }
+
+    let decklist_path = match decklist_path {
+        Some(path) => path,
+        None => {
+            eprintln!("Error: -w flag and decklist path are required");
+            eprintln!("Usage: {} <inventory.csv> -w <decklist.txt>", args[0]);
+            process::exit(1);
+        }
+    };
+
+    // Read inventory and decklist files
     let inventory = read_csv(inventory_path)?;
     println!("Loaded inventory with {} cards", inventory.len());
 
-    // Read decklist
     let decklist = read_decklist(decklist_path)?;
     println!("\nChecking availability for {} cards in decklist...\n", decklist.len());
 
@@ -59,8 +84,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("AVAILABLE CARDS IN STOCK:");
     println!("========================\n");
 
-    // Check each card in the decklist
+    // Process each card in the decklist
     for (needed_quantity, card_name) in decklist {
+        // Find all matching cards in inventory
         let matching_cards: Vec<_> = inventory.iter()
             .filter(|card| card.name.eq_ignore_ascii_case(&card_name))
             .collect();
@@ -68,7 +94,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if !matching_cards.is_empty() {
             found_cards = true;
             
-            // Group cards by set
+            // Group cards by set for better organization
             let mut cards_by_set: HashMap<String, Vec<&d2d_automations::Card>> = HashMap::new();
             for card in &matching_cards {
                 let set_key = format!("{} ({})", &card.set, &card.set_code);
@@ -79,7 +105,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let mut found_copies = Vec::new();
             let mut card_total_cost = 0.0;
 
-            // Sort sets by price to use cheapest sets first
+            // Sort sets by price to prioritize cheaper versions
             let mut sets: Vec<_> = cards_by_set.iter().collect();
             sets.sort_by(|a, b| {
                 let price_a = a.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
@@ -87,7 +113,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 price_a.partial_cmp(&price_b).unwrap()
             });
 
-            // Calculate how many copies we can provide from each set
+            // Calculate available copies from each set
             for (set_name, cards) in sets {
                 if remaining_needed <= 0 {
                     break;
@@ -107,6 +133,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            // Display results for this card
             if !found_copies.is_empty() {
                 let total_found: i32 = found_copies.iter()
                     .map(|(qty, _, _)| qty)
@@ -116,6 +143,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 
                 // Show copies from each set with their individual prices
                 for (qty, set_name, card) in found_copies {
+                    // Add location information if available
                     let location_info = card.location.as_ref()
                         .filter(|loc| !loc.trim().is_empty())
                         .map(|loc| format!(" [Location: {}]", loc))
@@ -132,6 +160,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
 
+                // Show warning only if we have some cards but not enough
                 if total_found < needed_quantity {
                     println!("    WARNING: Only {} of {} copies available!", 
                         total_found, needed_quantity);
@@ -143,6 +172,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Display final results
     if !found_cards {
         println!("No cards from your decklist were found in stock.");
     } else {
@@ -153,6 +183,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Program entry point
+/// Handles any errors from the run function
 fn main() {
     if let Err(e) = run() {
         eprintln!("Error: {}", e);
