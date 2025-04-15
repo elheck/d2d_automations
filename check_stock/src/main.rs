@@ -3,6 +3,7 @@ use std::env;
 use std::process;
 use std::fs::File;
 use std::io::{self, BufRead};
+use std::collections::HashMap;
 
 fn parse_deck_line(line: &str) -> Option<(i32, String)> {
     let parts: Vec<&str> = line.trim().splitn(2, ' ').collect();
@@ -64,12 +65,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .filter(|card| card.name.eq_ignore_ascii_case(&card_name))
             .collect();
 
-        let total_available: i32 = matching_cards.iter()
-            .map(|card| card.quantity.parse::<i32>().unwrap_or(0))
-            .sum();
-
-        // Only show cards that are in stock and have enough quantity
-        if !matching_cards.is_empty() && total_available >= needed_quantity {
+        if !matching_cards.is_empty() {
             found_cards = true;
             
             // Find the cheapest version
@@ -81,22 +77,68 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .unwrap();
 
+            // Group cards by set
+            let mut cards_by_set: HashMap<String, Vec<&d2d_automations::Card>> = HashMap::new();
+            for card in &matching_cards {
+                let set_key = format!("{} ({})", &card.set, &card.set_code);
+                cards_by_set.entry(set_key).or_default().push(card);
+            }
+
             if let Ok(price) = cheapest_card.price.parse::<f64>() {
-                total_price += price * needed_quantity as f64;
-                
-                println!("{} x {} ({:.2} €)", 
-                    needed_quantity,
-                    card_name,
-                    price
-                );
-                println!("    {} copies available [{}] from {} ({}), {} condition",
-                    cheapest_card.quantity,
-                    cheapest_card.language,
-                    cheapest_card.set,
-                    cheapest_card.set_code,
-                    cheapest_card.condition
-                );
-                println!("");
+                let mut remaining_needed = needed_quantity;
+                let mut found_copies = Vec::new();
+
+                // Sort sets by price to use cheapest sets first
+                let mut sets: Vec<_> = cards_by_set.iter().collect();
+                sets.sort_by(|a, b| {
+                    let price_a = a.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
+                    let price_b = b.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
+                    price_a.partial_cmp(&price_b).unwrap()
+                });
+
+                // Calculate how many copies we can provide from each set
+                for (set_name, cards) in sets {
+                    if remaining_needed <= 0 {
+                        break;
+                    }
+
+                    let total_in_set: i32 = cards.iter()
+                        .map(|card| card.quantity.parse::<i32>().unwrap_or(0))
+                        .sum();
+
+                    if total_in_set > 0 {
+                        let copies_from_set = remaining_needed.min(total_in_set);
+                        found_copies.push((copies_from_set, set_name, cards[0]));
+                        remaining_needed -= copies_from_set;
+                    }
+                }
+
+                if !found_copies.is_empty() {
+                    let total_found: i32 = found_copies.iter()
+                        .map(|(qty, _, _)| qty)
+                        .sum();
+
+                    println!("{} x {} ({:.2} €)", needed_quantity, card_name, price);
+                    
+                    // Show copies from each set
+                    for (qty, set_name, card) in found_copies {
+                        println!("    {} {} [{}] from {}, {} condition",
+                            qty,
+                            if qty == 1 { "copy" } else { "copies" },
+                            card.language,
+                            set_name,
+                            card.condition
+                        );
+                    }
+
+                    if total_found < needed_quantity {
+                        println!("    WARNING: Only {} of {} copies available!", 
+                            total_found, needed_quantity);
+                    }
+
+                    total_price += price * total_found as f64;
+                    println!("");
+                }
             }
         }
     }
@@ -105,7 +147,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("No cards from your decklist were found in stock.");
     } else {
         println!("========================");
-        println!("Total price for deck: {:.2} €", total_price);
+        println!("Total price for available cards: {:.2} €", total_price);
     }
 
     Ok(())
