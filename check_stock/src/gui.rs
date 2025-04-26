@@ -26,7 +26,6 @@ pub struct StockCheckerApp {
     inventory_path: String,
     wantslist_path: String,
     output: String,
-    save_to_file: bool,
     preferred_language: Language,
     show_picking_list: bool,
 }
@@ -37,7 +36,6 @@ impl Default for StockCheckerApp {
             inventory_path: String::new(),
             wantslist_path: String::new(),
             output: String::new(),
-            save_to_file: false,
             preferred_language: Language::English,
             show_picking_list: false,
         }
@@ -86,17 +84,30 @@ impl eframe::App for StockCheckerApp {
             });
 
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.save_to_file, "Save output to file");
-                ui.separator();
                 ui.checkbox(&mut self.show_picking_list, "Show as picking list");
             });
 
-            if ui.button("Check Stock").clicked() {
-                match self.check_stock() {
-                    Ok(output) => self.output = output,
-                    Err(e) => self.output = format!("Error: {}", e),
+            ui.horizontal(|ui| {
+                if ui.button("Check Stock").clicked() {
+                    match self.check_stock() {
+                        Ok(output) => self.output = output,
+                        Err(e) => self.output = format!("Error: {}", e),
+                    }
                 }
-            }
+
+                if !self.output.is_empty() {
+                    if ui.button("Save Output").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_file_name("stock_check_output.txt")
+                            .add_filter("Text Files", &["txt"])
+                            .save_file() {
+                                if let Err(e) = std::fs::write(&path, &self.output) {
+                                    self.output = format!("Error saving file: {}\n\n{}", e, self.output);
+                                }
+                        }
+                    }
+                }
+            });
 
             ui.separator();
 
@@ -128,7 +139,7 @@ impl StockCheckerApp {
         let args = crate::Args {
             inventory_csv: Some(self.inventory_path.clone()),
             wantslist: Some(self.wantslist_path.clone()),
-            write_output: self.save_to_file,
+            write_output: false, // Always false since we handle saving separately
             language: Some(lang_code.to_string()),
         };
 
