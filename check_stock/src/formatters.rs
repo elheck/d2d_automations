@@ -109,8 +109,21 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
         let card = matched_card.card;
         let sort_key = card.location.as_deref().unwrap_or("").to_string();
 
+        // Get localized name based on language
+        let mut name = match card.language.as_str() {
+            "German" | "de" => card.name_de.clone(),
+            "Spanish" | "es" => card.name_es.clone(),
+            "French" | "fr" => card.name_fr.clone(),
+            "Italian" | "it" => card.name_it.clone(),
+            _ => card.name.clone()
+        };
+
+        // If localized name is empty, fall back to English name
+        if name.trim().is_empty() {
+            name = card.name.clone();
+        }
+
         // Add special conditions to name
-        let mut name = card.name.to_string();
         let mut special_conditions = Vec::new();
         if card.is_foil == "1" || card.is_foil.to_lowercase() == "true" {
             special_conditions.push("Foil");
