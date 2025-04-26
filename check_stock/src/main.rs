@@ -94,7 +94,8 @@ fn parse_location_code(loc: &str) -> Vec<i32> {
         .collect()
 }
 
-fn get_card_name<'a>(card: &'a d2d_automations::Card, language: Option<&str>) -> &'a str {
+/// Get the card name in the specified language if available
+pub fn get_card_name<'a>(card: &'a d2d_automations::Card, language: Option<&str>) -> &'a str {
     match language {
         Some("de") if !card.name_de.is_empty() => &card.name_de,
         Some("es") if !card.name_es.is_empty() => &card.name_es,
@@ -291,6 +292,59 @@ pub fn run_with_args(args: &Args) -> Result<String, Box<dyn std::error::Error>> 
     }
 
     Ok(output)
+}
+
+fn generate_picking_list(
+    matching_cards: &[&d2d_automations::Card],
+) -> String {
+    let mut output_entries = Vec::new();
+
+    // Create entries for each card
+    for card in matching_cards {
+        // Get the name in the card's actual language
+        let name = match card.language.as_str() {
+            "German" | "de" => &card.name_de,
+            "Spanish" | "es" => &card.name_es,
+            "French" | "fr" => &card.name_fr,
+            "Italian" | "it" => &card.name_it,
+            _ => &card.name,
+        };
+
+        let sort_key = card.location.as_deref().unwrap_or("").to_string();
+        let entry = format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
+            name,
+            card.language,
+            card.rarity,
+            card.cn,
+            card.set,
+            card.location.as_deref().unwrap_or("")
+        );
+        output_entries.push((sort_key, entry));
+    }
+
+    // Sort by location
+    output_entries.sort_by(|(loc_a, _), (loc_b, _)| {
+        if loc_a.is_empty() && loc_b.is_empty() {
+            std::cmp::Ordering::Equal
+        } else if loc_a.is_empty() {
+            std::cmp::Ordering::Greater
+        } else if loc_b.is_empty() {
+            std::cmp::Ordering::Less
+        } else {
+            let parts_a = parse_location_code(loc_a);
+            let parts_b = parse_location_code(loc_b);
+            parts_a.cmp(&parts_b)
+        }
+    });
+
+    // Combine all entries
+    let mut output = String::from("Name\tLanguage\tRarity\tCollector Number\tSet\tLocation\n");
+    output.push_str("========================================================\n");
+    for (_, entry) in output_entries {
+        output.push_str(&entry);
+    }
+    output
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {

@@ -2,7 +2,7 @@ use eframe::egui;
 use egui::ViewportBuilder;
 
 #[derive(PartialEq)]
-pub enum Language {
+enum Language {
     English,
     German,
     Spanish,
@@ -28,6 +28,7 @@ pub struct StockCheckerApp {
     output: String,
     save_to_file: bool,
     preferred_language: Language,
+    show_picking_list: bool,
 }
 
 impl Default for StockCheckerApp {
@@ -38,6 +39,7 @@ impl Default for StockCheckerApp {
             output: String::new(),
             save_to_file: false,
             preferred_language: Language::English,
+            show_picking_list: false,
         }
     }
 }
@@ -72,7 +74,7 @@ impl eframe::App for StockCheckerApp {
 
             ui.horizontal(|ui| {
                 ui.label("Preferred Language:");
-                egui::ComboBox::from_id_source("language_selector")
+                egui::ComboBox::new("language_selector", "")
                     .selected_text(self.preferred_language.as_str())
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.preferred_language, Language::English, "English");
@@ -83,7 +85,11 @@ impl eframe::App for StockCheckerApp {
                     });
             });
 
-            ui.checkbox(&mut self.save_to_file, "Save output to file");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.save_to_file, "Save output to file");
+                ui.separator();
+                ui.checkbox(&mut self.show_picking_list, "Show as picking list");
+            });
 
             if ui.button("Check Stock").clicked() {
                 match self.check_stock() {
@@ -107,8 +113,6 @@ impl eframe::App for StockCheckerApp {
 
 impl StockCheckerApp {
     fn check_stock(&self) -> Result<String, Box<dyn std::error::Error>> {
-        use crate::{Args, run_with_args};
-
         if self.inventory_path.is_empty() || self.wantslist_path.is_empty() {
             return Err("Please select both inventory and wantslist files".into());
         }
@@ -121,14 +125,37 @@ impl StockCheckerApp {
             Language::Italian => "it",
         };
 
-        let args = Args {
+        let args = crate::Args {
             inventory_csv: Some(self.inventory_path.clone()),
             wantslist: Some(self.wantslist_path.clone()),
             write_output: self.save_to_file,
             language: Some(lang_code.to_string()),
         };
 
-        run_with_args(&args)
+        // Run stock check and get normal output
+        let normal_output = crate::run_with_args(&args)?;
+
+        if self.show_picking_list {
+            // For picking list, we need to process the inventory again
+            let inventory = d2d_automations::read_csv(&self.inventory_path)?;
+            let wantslist = crate::read_wantslist(&self.wantslist_path)?;
+            
+            // Find all matching cards
+            let mut all_matching_cards = Vec::new();
+            for (_, card_name) in wantslist {
+                let matching_cards: Vec<_> = inventory.iter()
+                    .filter(|card| {
+                        let name = crate::get_card_name(card, Some(lang_code));
+                        name.eq_ignore_ascii_case(&card_name)
+                    })
+                    .collect();
+                all_matching_cards.extend(matching_cards);
+            }
+
+            Ok(crate::generate_picking_list(&all_matching_cards))
+        } else {
+            Ok(normal_output)
+        }
     }
 }
 
@@ -142,6 +169,6 @@ pub fn launch_gui() -> Result<(), eframe::Error> {
     eframe::run_native(
         "MTG Stock Checker",
         options,
-        Box::new(|_cc| Box::new(StockCheckerApp::default())),
+        Box::new(|_cc| Ok(Box::new(StockCheckerApp::default()))),
     )
 }
