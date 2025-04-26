@@ -1,7 +1,7 @@
 use eframe::egui;
 use egui::ViewportBuilder;
 use crate::card_matching::find_matching_cards;
-use crate::formatters::{format_regular_output, format_picking_list, format_invoice_list};
+use crate::formatters::{format_regular_output, format_picking_list, format_invoice_list, format_update_stock_csv};
 use crate::io::{read_csv, read_wantslist};
 
 #[derive(PartialEq)]
@@ -40,6 +40,7 @@ enum OutputFormat {
     Regular,
     PickingList,
     InvoiceList,
+    UpdateStock,
 }
 
 impl OutputFormat {
@@ -48,6 +49,7 @@ impl OutputFormat {
             OutputFormat::Regular => "Regular",
             OutputFormat::PickingList => "Picking List",
             OutputFormat::InvoiceList => "Invoice List",
+            OutputFormat::UpdateStock => "Update Stock CSV",
         }
     }
 }
@@ -115,12 +117,13 @@ impl eframe::App for StockCheckerApp {
 
             ui.horizontal(|ui| {
                 ui.label("Output Format:");
-                egui::ComboBox::new("output_format_selector", "")
+                egui::ComboBox::new("output_format", "")
                     .selected_text(self.output_format.as_str())
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.output_format, OutputFormat::Regular, "Regular");
                         ui.selectable_value(&mut self.output_format, OutputFormat::PickingList, "Picking List");
                         ui.selectable_value(&mut self.output_format, OutputFormat::InvoiceList, "Invoice List");
+                        ui.selectable_value(&mut self.output_format, OutputFormat::UpdateStock, "Update Stock CSV");
                     });
             });
 
@@ -134,13 +137,23 @@ impl eframe::App for StockCheckerApp {
 
                 if !self.output.is_empty() {
                     if ui.button("Save Output").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_file_name("stock_check_output.txt")
-                            .add_filter("Text Files", &["txt"])
-                            .save_file() {
-                                if let Err(e) = std::fs::write(&path, &self.output) {
-                                    self.output = format!("Error saving file: {}\n\n{}", e, self.output);
-                                }
+                        let default_name = match self.output_format {
+                            OutputFormat::UpdateStock => "stock_update.csv",
+                            _ => "stock_check_output.txt"
+                        };
+                        
+                        let file_dialog = rfd::FileDialog::new()
+                            .set_file_name(default_name);
+                            
+                        let file_dialog = match self.output_format {
+                            OutputFormat::UpdateStock => file_dialog.add_filter("CSV Files", &["csv"]),
+                            _ => file_dialog.add_filter("Text Files", &["txt"])
+                        };
+
+                        if let Some(path) = file_dialog.save_file() {
+                            if let Err(e) = std::fs::write(path, &self.output) {
+                                self.output = format!("Error saving file: {}", e);
+                            }
                         }
                     }
                 }
@@ -194,6 +207,12 @@ impl StockCheckerApp {
                     .flat_map(|(_, cards)| cards.iter().cloned())
                     .collect();
                 format_invoice_list(&all_cards)
+            },
+            OutputFormat::UpdateStock => {
+                let all_cards: Vec<_> = all_matches.iter()
+                    .flat_map(|(_, cards)| cards.iter().cloned())
+                    .collect();
+                format_update_stock_csv(&all_cards)
             }
         };
 

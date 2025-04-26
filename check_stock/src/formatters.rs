@@ -306,3 +306,39 @@ pub fn format_invoice_list(matched_cards: &[MatchedCard]) -> String {
 
     output
 }
+
+pub fn format_update_stock_csv(matched_cards: &[MatchedCard]) -> String {
+    let mut output = String::new();
+    
+    // Header with all columns from the Card struct
+    output.push_str("cardmarketId,quantity,name,set,setCode,cn,condition,language,isFoil,isPlayset,isSigned,price,comment,location,nameDE,nameES,nameFR,nameIT,rarity\n");
+    
+    // Add each card with negative quantity to indicate removal, preserving all other fields
+    for matched_card in matched_cards {
+        let card = matched_card.card;
+        output.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            card.cardmarket_id,
+            -matched_card.quantity, // Negative quantity for stock reduction
+            card.name,
+            card.set,
+            card.set_code,
+            card.cn,
+            card.condition,
+            card.language,
+            card.is_foil,
+            card.is_playset,
+            card.is_signed,
+            card.price,
+            card.comment.replace(",", "\\,"), // Escape commas in comments
+            card.location.as_deref().unwrap_or(""),
+            card.name_de,
+            card.name_es,
+            card.name_fr,
+            card.name_it,
+            card.rarity
+        ));
+    }
+    
+    output
+}
