@@ -24,11 +24,30 @@ pub fn find_matching_cards<'a>(
     inventory: &'a [Card],
     preferred_language: Option<&str>
 ) -> Vec<MatchedCard<'a>> {
-    // Find cards matching the name in preferred language
+    // Find cards matching the name in any language, prioritizing preferred language
     let matching_cards: Vec<_> = inventory.iter()
         .filter(|card| {
-            let name = get_card_name(card, preferred_language);
-            name.eq_ignore_ascii_case(card_name)
+            // Check preferred language first
+            if let Some(lang) = preferred_language {
+                let localized_name = match lang {
+                    "de" => &card.name_de,
+                    "es" => &card.name_es,
+                    "fr" => &card.name_fr,
+                    "it" => &card.name_it,
+                    _ => &card.name
+                };
+                if !localized_name.is_empty() && localized_name.eq_ignore_ascii_case(card_name) {
+                    // If we find a match in preferred language, prioritize it
+                    return true;
+                }
+            }
+
+            // If no match in preferred language, check all languages
+            card.name.eq_ignore_ascii_case(card_name) ||
+            (!card.name_de.is_empty() && card.name_de.eq_ignore_ascii_case(card_name)) ||
+            (!card.name_es.is_empty() && card.name_es.eq_ignore_ascii_case(card_name)) ||
+            (!card.name_fr.is_empty() && card.name_fr.eq_ignore_ascii_case(card_name)) ||
+            (!card.name_it.is_empty() && card.name_it.eq_ignore_ascii_case(card_name))
         })
         .collect();
 
@@ -36,11 +55,28 @@ pub fn find_matching_cards<'a>(
         return Vec::new();
     }
 
-    // Group cards by set
+    // Sort matched cards to prioritize preferred language
     let mut cards_by_set: HashMap<String, Vec<&Card>> = HashMap::new();
-    for card in &matching_cards {
+    for card in matching_cards {
         let set_key = format!("{} ({})", &card.set, &card.set_code);
-        cards_by_set.entry(set_key).or_default().push(card);
+        let cards = cards_by_set.entry(set_key).or_default();
+        
+        // Insert prioritizing preferred language
+        if let Some(lang) = preferred_language {
+            if card.language.eq_ignore_ascii_case(lang) || 
+               (lang == "de" && card.language == "German") ||
+               (lang == "fr" && card.language == "French") ||
+               (lang == "es" && card.language == "Spanish") ||
+               (lang == "it" && card.language == "Italian") {
+                // Insert at the beginning for preferred language
+                cards.insert(0, card);
+            } else {
+                // Append other languages
+                cards.push(card);
+            }
+        } else {
+            cards.push(card);
+        }
     }
 
     let mut remaining_needed = needed_quantity;
@@ -60,14 +96,7 @@ pub fn find_matching_cards<'a>(
             break;
         }
 
-        let mut cards_vec = cards.clone();
-        cards_vec.sort_by(|a, b| {
-            let price_a = a.price.parse::<f64>().unwrap_or(f64::MAX);
-            let price_b = b.price.parse::<f64>().unwrap_or(f64::MAX);
-            price_a.partial_cmp(&price_b).unwrap()
-        });
-
-        for card in cards_vec {
+        for card in cards {
             if remaining_needed <= 0 {
                 break;
             }
