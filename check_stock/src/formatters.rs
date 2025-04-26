@@ -69,8 +69,14 @@ pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)]) -> String {
     }
 
     if !matches.is_empty() {
+        let total_cards: i32 = matches.iter()
+            .flat_map(|(_, cards)| cards.iter())
+            .map(|mc| mc.quantity)
+            .sum();
+
         output.push_str("========================\n");
         output.push_str(&format!("Total price for available cards: {:.2} €\n", total_price));
+        output.push_str(&format!("Total cards picked: {}\n", total_cards));
     } else {
         output.push_str("No cards from your wantslist were found in stock.\n");
     }
@@ -200,6 +206,12 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
     for (_, entry) in output_entries {
         output.push_str(&entry);
     }
+
+    // Add total cards count
+    let total_cards: i32 = matched_cards.iter().map(|mc| mc.quantity).sum();
+    output.push_str(&separator);
+    output.push_str(&format!("Total cards picked: {}\n", total_cards));
+
     output
 }
 
