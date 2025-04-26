@@ -2,8 +2,8 @@ use clap::Parser;
 use std::process;
 use std::fs::File;
 use std::io::{self, Write, BufRead};
-use std::collections::HashMap;
 use std::path::Path;
+use std::collections::HashMap;
 
 mod gui;
 
@@ -124,7 +124,7 @@ pub fn run_with_args(args: &Args) -> Result<String, Box<dyn std::error::Error>> 
 
     // Process each card in the wantslist
     for (needed_quantity, card_name) in wantslist {
-        // Find all matching cards in inventory
+        // Find all matching cards in inventory in preferred language
         let matching_cards: Vec<_> = inventory.iter()
             .filter(|card| {
                 let name = get_card_name(card, args.language.as_deref());
@@ -160,17 +160,29 @@ pub fn run_with_args(args: &Args) -> Result<String, Box<dyn std::error::Error>> 
                     break;
                 }
 
-                let total_in_set: i32 = cards.iter()
-                    .map(|card| card.quantity.parse::<i32>().unwrap_or(0))
-                    .sum();
+                let mut cards_vec = cards.clone();
+                // Sort cards within a set by price
+                cards_vec.sort_by(|a, b| {
+                    let price_a = a.price.parse::<f64>().unwrap_or(f64::MAX);
+                    let price_b = b.price.parse::<f64>().unwrap_or(f64::MAX);
+                    price_a.partial_cmp(&price_b).unwrap()
+                });
 
-                if total_in_set > 0 {
-                    let copies_from_set = remaining_needed.min(total_in_set);
-                    if let Ok(price) = cards[0].price.parse::<f64>() {
-                        card_total_cost += price * copies_from_set as f64;
+                // Add each card from the set
+                for card in cards_vec {
+                    if remaining_needed <= 0 {
+                        break;
                     }
-                    found_copies.push((copies_from_set, set_name, cards[0]));
-                    remaining_needed -= copies_from_set;
+                    if let Ok(quantity) = card.quantity.parse::<i32>() {
+                        if quantity > 0 {
+                            let copies = remaining_needed.min(quantity);
+                            if let Ok(price) = card.price.parse::<f64>() {
+                                card_total_cost += price * copies as f64;
+                            }
+                            found_copies.push((copies, set_name, card));
+                            remaining_needed -= copies;
+                        }
+                    }
                 }
             }
 
@@ -298,8 +310,14 @@ fn generate_picking_list(
     matching_cards: &[&d2d_automations::Card],
 ) -> String {
     let mut output_entries = Vec::new();
+    let mut max_loc_len = 0;
+    let mut max_name_len = 0;
+    let mut max_lang_len = 0;
+    let mut max_rarity_len = 0;
+    let mut max_cn_len = 0;
+    let mut max_set_len = 0;
 
-    // Create entries for each card
+    // First pass to collect maximum lengths for alignment
     for card in matching_cards {
         // Get the name in the card's actual language
         let name = match card.language.as_str() {
@@ -310,15 +328,39 @@ fn generate_picking_list(
             _ => &card.name,
         };
 
+        max_loc_len = max_loc_len.max(card.location.as_deref().unwrap_or("").len());
+        max_name_len = max_name_len.max(name.len());
+        max_lang_len = max_lang_len.max(card.language.len());
+        max_rarity_len = max_rarity_len.max(card.rarity.len());
+        max_cn_len = max_cn_len.max(card.cn.len());
+        max_set_len = max_set_len.max(card.set.len());
+    }
+
+    // Create entries for each card
+    for card in matching_cards {
+        let name = match card.language.as_str() {
+            "German" | "de" => &card.name_de,
+            "Spanish" | "es" => &card.name_es,
+            "French" | "fr" => &card.name_fr,
+            "Italian" | "it" => &card.name_it,
+            _ => &card.name,
+        };
+
         let sort_key = card.location.as_deref().unwrap_or("").to_string();
         let entry = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{:<width_loc$} | {:<width_name$} | {:<width_lang$} | {:<width_rarity$} | {:<width_cn$} | {:<width_set$}\n",
+            card.location.as_deref().unwrap_or(""),
             name,
             card.language,
             card.rarity,
             card.cn,
             card.set,
-            card.location.as_deref().unwrap_or("")
+            width_loc = max_loc_len,
+            width_name = max_name_len,
+            width_lang = max_lang_len,
+            width_rarity = max_rarity_len,
+            width_cn = max_cn_len,
+            width_set = max_set_len,
         );
         output_entries.push((sort_key, entry));
     }
@@ -338,9 +380,44 @@ fn generate_picking_list(
         }
     });
 
+    // Create header with proper alignment
+    let header = format!(
+        "{:<width_loc$} | {:<width_name$} | {:<width_lang$} | {:<width_rarity$} | {:<width_cn$} | {:<width_set$}\n",
+        "Location",
+        "Name",
+        "Language",
+        "Rarity",
+        "Collector Number",
+        "Set",
+        width_loc = max_loc_len,
+        width_name = max_name_len,
+        width_lang = max_lang_len,
+        width_rarity = max_rarity_len,
+        width_cn = max_cn_len,
+        width_set = max_set_len,
+    );
+
+    // Create separator line
+    let separator = format!(
+        "{:-<width_loc$}-+-{:-<width_name$}-+-{:-<width_lang$}-+-{:-<width_rarity$}-+-{:-<width_cn$}-+-{:-<width_set$}\n",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        width_loc = max_loc_len,
+        width_name = max_name_len,
+        width_lang = max_lang_len,
+        width_rarity = max_rarity_len,
+        width_cn = max_cn_len,
+        width_set = max_set_len,
+    );
+
     // Combine all entries
-    let mut output = String::from("Name\tLanguage\tRarity\tCollector Number\tSet\tLocation\n");
-    output.push_str("========================================================\n");
+    let mut output = String::new();
+    output.push_str(&header);
+    output.push_str(&separator);
     for (_, entry) in output_entries {
         output.push_str(&entry);
     }

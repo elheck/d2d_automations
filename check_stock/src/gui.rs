@@ -132,29 +132,74 @@ impl StockCheckerApp {
             language: Some(lang_code.to_string()),
         };
 
-        // Run stock check and get normal output
-        let normal_output = crate::run_with_args(&args)?;
-
         if self.show_picking_list {
-            // For picking list, we need to process the inventory again
+            // Process inventory and wantslist just like in run_with_args
             let inventory = d2d_automations::read_csv(&self.inventory_path)?;
             let wantslist = crate::read_wantslist(&self.wantslist_path)?;
             
-            // Find all matching cards
             let mut all_matching_cards = Vec::new();
-            for (_, card_name) in wantslist {
+            
+            // Process each card in the wantslist (same as run_with_args)
+            for (needed_quantity, card_name) in wantslist {
+                // Find matching cards in preferred language
                 let matching_cards: Vec<_> = inventory.iter()
                     .filter(|card| {
                         let name = crate::get_card_name(card, Some(lang_code));
                         name.eq_ignore_ascii_case(&card_name)
                     })
                     .collect();
-                all_matching_cards.extend(matching_cards);
+
+                if !matching_cards.is_empty() {
+                    // Group cards by set and price, just like run_with_args
+                    let mut cards_by_set: std::collections::HashMap<String, Vec<&d2d_automations::Card>> = std::collections::HashMap::new();
+                    for card in &matching_cards {
+                        let set_key = format!("{} ({})", &card.set, &card.set_code);
+                        cards_by_set.entry(set_key).or_default().push(card);
+                    }
+
+                    let mut remaining_needed = needed_quantity;
+
+                    // Sort sets by price to prioritize cheaper versions
+                    let mut sets: Vec<_> = cards_by_set.iter().collect();
+                    sets.sort_by(|a, b| {
+                        let price_a = a.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
+                        let price_b = b.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
+                        price_a.partial_cmp(&price_b).unwrap()
+                    });
+
+                    // Add cards from each set until we have enough
+                    for (_, cards) in sets {
+                        if remaining_needed <= 0 {
+                            break;
+                        }
+
+                        let mut cards_vec = cards.clone();
+                        cards_vec.sort_by(|a, b| {
+                            let price_a = a.price.parse::<f64>().unwrap_or(f64::MAX);
+                            let price_b = b.price.parse::<f64>().unwrap_or(f64::MAX);
+                            price_a.partial_cmp(&price_b).unwrap()
+                        });
+
+                        for card in cards_vec {
+                            if remaining_needed <= 0 {
+                                break;
+                            }
+                            if let Ok(quantity) = card.quantity.parse::<i32>() {
+                                if quantity > 0 {
+                                    let copies = remaining_needed.min(quantity);
+                                    all_matching_cards.push(card);
+                                    remaining_needed -= copies;
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             Ok(crate::generate_picking_list(&all_matching_cards))
         } else {
-            Ok(normal_output)
+            // Regular output mode
+            crate::run_with_args(&args)
         }
     }
 }
