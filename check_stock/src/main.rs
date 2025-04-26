@@ -23,6 +23,10 @@ pub struct Args {
     /// The output file will have the same name as the input wantslist with "_in_stock" appended
     #[arg(short = 'o', long = "write-output")]
     write_output: bool,
+
+    /// Preferred language for card names (en, de, es, fr, it)
+    #[arg(short = 'l', long = "language", default_value = "en")]
+    language: Option<String>,
 }
 
 /// Parses a single line from a wantslist
@@ -90,6 +94,16 @@ fn parse_location_code(loc: &str) -> Vec<i32> {
         .collect()
 }
 
+fn get_card_name<'a>(card: &'a d2d_automations::Card, language: Option<&str>) -> &'a str {
+    match language {
+        Some("de") if !card.name_de.is_empty() => &card.name_de,
+        Some("es") if !card.name_es.is_empty() => &card.name_es,
+        Some("fr") if !card.name_fr.is_empty() => &card.name_fr,
+        Some("it") if !card.name_it.is_empty() => &card.name_it,
+        _ => &card.name // Default to English or if preferred language not available
+    }
+}
+
 pub fn run_with_args(args: &Args) -> Result<String, Box<dyn std::error::Error>> {
     // Read inventory
     let inventory = d2d_automations::read_csv(args.inventory_csv.as_ref()
@@ -111,7 +125,10 @@ pub fn run_with_args(args: &Args) -> Result<String, Box<dyn std::error::Error>> 
     for (needed_quantity, card_name) in wantslist {
         // Find all matching cards in inventory
         let matching_cards: Vec<_> = inventory.iter()
-            .filter(|card| card.name.eq_ignore_ascii_case(&card_name))
+            .filter(|card| {
+                let name = get_card_name(card, args.language.as_deref());
+                name.eq_ignore_ascii_case(&card_name)
+            })
             .collect();
 
         if !matching_cards.is_empty() {

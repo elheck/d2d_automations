@@ -1,11 +1,33 @@
 use eframe::egui;
 use egui::ViewportBuilder;
 
+#[derive(PartialEq)]
+pub enum Language {
+    English,
+    German,
+    Spanish,
+    French,
+    Italian,
+}
+
+impl Language {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Language::English => "English",
+            Language::German => "German",
+            Language::Spanish => "Spanish",
+            Language::French => "French",
+            Language::Italian => "Italian",
+        }
+    }
+}
+
 pub struct StockCheckerApp {
     inventory_path: String,
     wantslist_path: String,
     output: String,
     save_to_file: bool,
+    preferred_language: Language,
 }
 
 impl Default for StockCheckerApp {
@@ -15,6 +37,7 @@ impl Default for StockCheckerApp {
             wantslist_path: String::new(),
             output: String::new(),
             save_to_file: false,
+            preferred_language: Language::English,
         }
     }
 }
@@ -47,6 +70,19 @@ impl eframe::App for StockCheckerApp {
                 ui.text_edit_singleline(&mut self.wantslist_path);
             });
 
+            ui.horizontal(|ui| {
+                ui.label("Preferred Language:");
+                egui::ComboBox::from_id_source("language_selector")
+                    .selected_text(self.preferred_language.as_str())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.preferred_language, Language::English, "English");
+                        ui.selectable_value(&mut self.preferred_language, Language::German, "German");
+                        ui.selectable_value(&mut self.preferred_language, Language::Spanish, "Spanish");
+                        ui.selectable_value(&mut self.preferred_language, Language::French, "French");
+                        ui.selectable_value(&mut self.preferred_language, Language::Italian, "Italian");
+                    });
+            });
+
             ui.checkbox(&mut self.save_to_file, "Save output to file");
 
             if ui.button("Check Stock").clicked() {
@@ -77,10 +113,19 @@ impl StockCheckerApp {
             return Err("Please select both inventory and wantslist files".into());
         }
 
+        let lang_code = match self.preferred_language {
+            Language::English => "en",
+            Language::German => "de",
+            Language::Spanish => "es",
+            Language::French => "fr",
+            Language::Italian => "it",
+        };
+
         let args = Args {
             inventory_csv: Some(self.inventory_path.clone()),
             wantslist: Some(self.wantslist_path.clone()),
             write_output: self.save_to_file,
+            language: Some(lang_code.to_string()),
         };
 
         run_with_args(&args)
