@@ -1,21 +1,23 @@
 use clap::Parser;
-use d2d_automations::read_csv;
 use std::process;
 use std::fs::File;
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write, BufRead};
 use std::collections::HashMap;
 use std::path::Path;
+
+mod gui;
 
 /// A tool to check Magic: The Gathering card inventory against a wantslist
 #[derive(Parser, Debug)]
 #[command(version, about)]
-struct Args {
+pub struct Args {
     /// Path to the CSV inventory file
-    inventory_csv: String,
+    #[arg(long = "inventory", short = 'i')]
+    inventory_csv: Option<String>,
 
     /// Path to the wantslist file
     #[arg(short = 'w', long = "wants")]
-    wantslist: String,
+    wantslist: Option<String>,
 
     /// Write output to a file instead of stdout
     /// The output file will have the same name as the input wantslist with "_in_stock" appended
@@ -88,15 +90,15 @@ fn parse_location_code(loc: &str) -> Vec<i32> {
         .collect()
 }
 
-fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
-
+pub fn run_with_args(args: &Args) -> Result<String, Box<dyn std::error::Error>> {
     // Read inventory
-    let inventory = read_csv(&args.inventory_csv)?;
+    let inventory = d2d_automations::read_csv(args.inventory_csv.as_ref()
+        .ok_or("Inventory CSV path not provided")?)?;
     let inventory_message = format!("Loaded inventory with {} cards\n", inventory.len());
 
     // Read wantslist
-    let wantslist = read_wantslist(&args.wantslist)?;
+    let wantslist = read_wantslist(args.wantslist.as_ref()
+        .ok_or("Wantslist path not provided")?)?;
     let wantslist_message = format!("\nChecking availability for {} cards in wantslist...\n\n", wantslist.len());
 
     let header = "AVAILABLE CARDS IN STOCK:\n========================\n\n";
@@ -256,7 +258,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.write_output {
         // Create output filename by appending "_in_stock" before the extension
-        let input_path = Path::new(&args.wantslist);
+        let wantslist_path = args.wantslist.as_ref().unwrap();
+        let input_path = Path::new(wantslist_path);
         let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
         let extension = input_path.extension().and_then(|s| s.to_str()).unwrap_or("");
         let output_filename = if extension.is_empty() {
@@ -268,15 +271,28 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let mut output_file = File::create(&output_filename)?;
         write_to_output(&mut output_file, &output)?;
         println!("Results written to {}", output_filename);
-    } else {
-        print!("{}", output);
     }
 
+    Ok(output)
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse_from(std::env::args_os());
+    
+    // If no inventory or wantslist provided, launch GUI
+    if args.inventory_csv.is_none() || args.wantslist.is_none() {
+        return Ok(gui::launch_gui()?);
+    }
+    
+    let output = run_with_args(&args)?;
+    
+    if !args.write_output {
+        print!("{}", output);
+    }
     Ok(())
 }
 
 /// Program entry point
-/// Handles any errors from the run function
 fn main() {
     if let Err(e) = run() {
         eprintln!("Error: {}", e);
