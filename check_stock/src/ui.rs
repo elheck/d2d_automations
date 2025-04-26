@@ -135,25 +135,23 @@ impl eframe::App for StockCheckerApp {
                     }
                 }
 
-                if !self.output.is_empty() {
-                    if ui.button("Save Output").clicked() {
-                        let default_name = match self.output_format {
-                            OutputFormat::UpdateStock => "stock_update.csv",
-                            _ => "stock_check_output.txt"
-                        };
+                if !self.output.is_empty() && ui.button("Save Output").clicked() {
+                    let default_name = match self.output_format {
+                        OutputFormat::UpdateStock => "stock_update.csv",
+                        _ => "stock_check_output.txt"
+                    };
+                    
+                    let file_dialog = rfd::FileDialog::new()
+                        .set_file_name(default_name);
                         
-                        let file_dialog = rfd::FileDialog::new()
-                            .set_file_name(default_name);
-                            
-                        let file_dialog = match self.output_format {
-                            OutputFormat::UpdateStock => file_dialog.add_filter("CSV Files", &["csv"]),
-                            _ => file_dialog.add_filter("Text Files", &["txt"])
-                        };
+                    let file_dialog = match self.output_format {
+                        OutputFormat::UpdateStock => file_dialog.add_filter("CSV Files", &["csv"]),
+                        _ => file_dialog.add_filter("Text Files", &["txt"])
+                    };
 
-                        if let Some(path) = file_dialog.save_file() {
-                            if let Err(e) = std::fs::write(path, &self.output) {
-                                self.output = format!("Error saving file: {}", e);
-                            }
+                    if let Some(path) = file_dialog.save_file() {
+                        if let Err(e) = std::fs::write(path, &self.output) {
+                            self.output = format!("Error saving file: {}", e);
                         }
                     }
                 }

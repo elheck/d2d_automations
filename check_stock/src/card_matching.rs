@@ -29,25 +29,20 @@ pub fn find_matching_cards<'a>(
         .filter(|card| {
             // Check preferred language first
             if let Some(lang) = preferred_language {
-                let localized_name = match lang {
-                    "de" => &card.name_de,
-                    "es" => &card.name_es,
-                    "fr" => &card.name_fr,
-                    "it" => &card.name_it,
-                    _ => &card.name
-                };
-                if !localized_name.is_empty() && localized_name.eq_ignore_ascii_case(card_name) {
+                let localized_name = get_card_name(card, Some(lang));
+                if localized_name.eq_ignore_ascii_case(card_name) {
                     // If we find a match in preferred language, prioritize it
                     return true;
                 }
             }
 
             // If no match in preferred language, check all languages
-            card.name.eq_ignore_ascii_case(card_name) ||
-            (!card.name_de.is_empty() && card.name_de.eq_ignore_ascii_case(card_name)) ||
-            (!card.name_es.is_empty() && card.name_es.eq_ignore_ascii_case(card_name)) ||
-            (!card.name_fr.is_empty() && card.name_fr.eq_ignore_ascii_case(card_name)) ||
-            (!card.name_it.is_empty() && card.name_it.eq_ignore_ascii_case(card_name))
+            let english_name = get_card_name(card, None);
+            english_name.eq_ignore_ascii_case(card_name) ||
+            get_card_name(card, Some("de")).eq_ignore_ascii_case(card_name) ||
+            get_card_name(card, Some("es")).eq_ignore_ascii_case(card_name) ||
+            get_card_name(card, Some("fr")).eq_ignore_ascii_case(card_name) ||
+            get_card_name(card, Some("it")).eq_ignore_ascii_case(card_name)
         })
         .collect();
 
