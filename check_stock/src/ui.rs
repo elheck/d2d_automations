@@ -1,7 +1,7 @@
 use eframe::egui;
 use egui::ViewportBuilder;
 use crate::card_matching::find_matching_cards;
-use crate::formatters::{format_regular_output, format_picking_list};
+use crate::formatters::{format_regular_output, format_picking_list, format_invoice_list};
 use crate::io::{read_csv, read_wantslist};
 
 #[derive(PartialEq)]
@@ -35,12 +35,29 @@ impl Language {
     }
 }
 
+#[derive(PartialEq)]
+enum OutputFormat {
+    Regular,
+    PickingList,
+    InvoiceList,
+}
+
+impl OutputFormat {
+    fn as_str(&self) -> &'static str {
+        match self {
+            OutputFormat::Regular => "Regular",
+            OutputFormat::PickingList => "Picking List",
+            OutputFormat::InvoiceList => "Invoice List",
+        }
+    }
+}
+
 pub struct StockCheckerApp {
     inventory_path: String,
     wantslist_path: String,
     output: String,
     preferred_language: Language,
-    show_picking_list: bool,
+    output_format: OutputFormat,
 }
 
 impl Default for StockCheckerApp {
@@ -50,7 +67,7 @@ impl Default for StockCheckerApp {
             wantslist_path: String::new(),
             output: String::new(),
             preferred_language: Language::English,
-            show_picking_list: false,
+            output_format: OutputFormat::Regular,
         }
     }
 }
@@ -97,7 +114,14 @@ impl eframe::App for StockCheckerApp {
             });
 
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.show_picking_list, "Show as picking list");
+                ui.label("Output Format:");
+                egui::ComboBox::new("output_format_selector", "")
+                    .selected_text(self.output_format.as_str())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.output_format, OutputFormat::Regular, "Regular");
+                        ui.selectable_value(&mut self.output_format, OutputFormat::PickingList, "Picking List");
+                        ui.selectable_value(&mut self.output_format, OutputFormat::InvoiceList, "Invoice List");
+                    });
             });
 
             ui.horizontal(|ui| {
@@ -157,14 +181,20 @@ impl StockCheckerApp {
             all_matches.push((wants_entry.name, matched_cards));
         }
 
-        let output = if self.show_picking_list {
-            // Flatten all matched cards into a single list
-            let all_cards: Vec<_> = all_matches.iter()
-                .flat_map(|(_, cards)| cards.iter().cloned())
-                .collect();
-            format_picking_list(&all_cards)
-        } else {
-            format_regular_output(&all_matches)
+        let output = match self.output_format {
+            OutputFormat::Regular => format_regular_output(&all_matches),
+            OutputFormat::PickingList => {
+                let all_cards: Vec<_> = all_matches.iter()
+                    .flat_map(|(_, cards)| cards.iter().cloned())
+                    .collect();
+                format_picking_list(&all_cards)
+            },
+            OutputFormat::InvoiceList => {
+                let all_cards: Vec<_> = all_matches.iter()
+                    .flat_map(|(_, cards)| cards.iter().cloned())
+                    .collect();
+                format_invoice_list(&all_cards)
+            }
         };
 
         Ok(output)

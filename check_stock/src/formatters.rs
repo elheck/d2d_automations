@@ -202,3 +202,95 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
     }
     output
 }
+
+pub fn format_invoice_list(matched_cards: &[MatchedCard]) -> String {
+    let mut total_price = 0.0;
+    let mut output_entries = Vec::new();
+    let mut max_name_len = 0;
+    let mut max_lang_len = 0;
+    let mut max_cond_len = 0;
+
+    // Calculate maximum lengths for alignment
+    for matched_card in matched_cards {
+        let card = matched_card.card;
+        max_name_len = max_name_len.max(card.name.len());
+        max_lang_len = max_lang_len.max(card.language.len());
+        max_cond_len = max_cond_len.max(card.condition.len());
+    }
+
+    // Create entries for each card
+    for matched_card in matched_cards {
+        let card = matched_card.card;
+        let price = card.price.parse::<f64>().unwrap_or(0.0);
+        let line_total = price * matched_card.quantity as f64;
+        total_price += line_total;
+
+        // Add special conditions to name
+        let mut name = card.name.to_string();
+        let mut special_conditions = Vec::new();
+        if card.is_foil == "1" || card.is_foil.to_lowercase() == "true" {
+            special_conditions.push("Foil");
+        }
+        if card.is_signed == "1" || card.is_signed.to_lowercase() == "true" {
+            special_conditions.push("Signed");
+        }
+        if !special_conditions.is_empty() {
+            name = format!("{} ({})", name, special_conditions.join(", "));
+        }
+
+        let entry = format!(
+            "{:>3} x {:<width_name$} | {:<width_lang$} | {:<width_cond$} | {:>6.2} € | {:>7.2} €\n",
+            matched_card.quantity,
+            name,
+            card.language,
+            card.condition,
+            price,
+            line_total,
+            width_name = max_name_len,
+            width_lang = max_lang_len,
+            width_cond = max_cond_len,
+        );
+        output_entries.push(entry);
+    }
+
+    // Create header
+    let header = format!(
+        "{:>3} x {:<width_name$} | {:<width_lang$} | {:<width_cond$} | {:>6} | {:>7}\n",
+        "Qty",
+        "Name",
+        "Lang",
+        "Cond",
+        "Price",
+        "Total",
+        width_name = max_name_len,
+        width_lang = max_lang_len,
+        width_cond = max_cond_len,
+    );
+
+    // Create separator line
+    let separator = format!(
+        "{:-<4}-+-{:-<width_name$}-+-{:-<width_lang$}-+-{:-<width_cond$}-+-{:-<8}-+-{:-<9}\n",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        width_name = max_name_len,
+        width_lang = max_lang_len,
+        width_cond = max_cond_len,
+    );
+
+    // Combine all entries
+    let mut output = String::new();
+    output.push_str(&header);
+    output.push_str(&separator);
+    for entry in output_entries {
+        output.push_str(&entry);
+    }
+    output.push_str(&separator);
+    let total_width = max_name_len + max_lang_len + max_cond_len + 7;
+    output.push_str(&format!("{:<total_width$} {:>7.2} €\n", "Total:", total_price));
+
+    output
+}
