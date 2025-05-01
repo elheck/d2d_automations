@@ -1,8 +1,11 @@
 use eframe::egui;
 use egui::ViewportBuilder;
-use crate::card_matching::find_matching_cards;
-use crate::formatters::{format_regular_output, format_picking_list, format_invoice_list, format_update_stock_csv};
-use crate::io::{read_csv, read_wantslist};
+use crate::{
+    card_matching::find_matching_cards,
+    formatters::{format_regular_output, format_picking_list, format_invoice_list, format_update_stock_csv},
+    io::{read_csv, read_wantslist},
+    stock_analysis::{StockAnalysis, format_stock_analysis},
+};
 
 #[derive(PartialEq)]
 enum Language {
@@ -52,7 +55,15 @@ impl OutputFormat {
     }
 }
 
+#[derive(PartialEq)]
+enum Screen {
+    Welcome,
+    StockChecker,
+    StockAnalysis,
+}
+
 pub struct StockCheckerApp {
+    current_screen: Screen,
     inventory_path: String,
     wantslist_path: String,
     output: String,
@@ -65,11 +76,15 @@ pub struct StockCheckerApp {
     show_output_window: bool,
     output_window_content: String,
     output_window_title: String,
+    stock_analysis_inventory_path: String,
+    stock_analysis_output: String,
+    stock_analysis_free_slots: i32,
 }
 
 impl Default for StockCheckerApp {
     fn default() -> Self {
         Self {
+            current_screen: Screen::Welcome,
             inventory_path: String::new(),
             wantslist_path: String::new(),
             output: String::new(),
@@ -82,185 +97,290 @@ impl Default for StockCheckerApp {
             show_output_window: false,
             output_window_content: String::new(),
             output_window_title: String::new(),
+            stock_analysis_inventory_path: String::new(),
+            stock_analysis_output: String::new(),
+            stock_analysis_free_slots: 5,  // Default minimum free slots
         }
     }
 }
 
 impl eframe::App for StockCheckerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Show output window if enabled
-        if self.show_output_window {
-            egui::Window::new(&self.output_window_title)
-                .default_size([800.0, 600.0])
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical()
-                        .max_height(ui.available_height() - 40.0)
-                        .show(ui, |ui| {
-                            ui.add(egui::TextEdit::multiline(&mut self.output_window_content)
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(20)
-                                .font(egui::TextStyle::Monospace));
-                        });
-                    
-                    ui.horizontal(|ui| {
-                        if ui.button("Close").clicked() {
-                            self.show_output_window = false;
+        match self.current_screen {
+            Screen::Welcome => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(100.0);
+                        ui.heading("Welcome to D2D Automations");
+                        ui.add_space(20.0);
+                        
+                        if ui.button("Stock Checker").clicked() {
+                            self.current_screen = Screen::StockChecker;
                         }
-                        if ui.button("Save to File").clicked() {
-                            if let Some(path) = rfd::FileDialog::new()
-                                .set_file_name(match self.output_window_title.as_str() {
-                                    "Picking List" => "picking_list.txt",
-                                    "Invoice List" => "invoice_list.txt",
-                                    "Stock Update" => "stock_update.csv",
-                                    _ => "output.txt",
-                                })
-                                .add_filter(
-                                    if self.output_window_title == "Stock Update" { 
-                                        "CSV Files"
-                                    } else {
-                                        "Text Files"
-                                    },
-                                    &[if self.output_window_title == "Stock Update" { "csv" } else { "txt" }]
-                                )
-                                .save_file() {
-                                    if let Err(e) = std::fs::write(&path, &self.output_window_content) {
-                                        self.output = format!("Error saving file: {}", e);
-                                    }
-                            }
+                        
+                        ui.add_space(10.0);
+                        
+                        if ui.button("Stock Analysis").clicked() {
+                            self.current_screen = Screen::StockAnalysis;
                         }
                     });
                 });
-        }
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("MTG Stock Checker");
-            
-            // File pickers
-            ui.horizontal(|ui| {
-                ui.label("Inventory CSV:");
-                if ui.button("Browse").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("CSV", &["csv"])
-                        .pick_file() {
-                            self.inventory_path = path.display().to_string();
-                        }
+            },
+            Screen::StockChecker => {
+                // Show output window if enabled
+                if self.show_output_window {
+                    egui::Window::new(&self.output_window_title)
+                        .default_size([800.0, 600.0])
+                        .show(ctx, |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(ui.available_height() - 40.0)
+                                .show(ui, |ui| {
+                                    ui.add(egui::TextEdit::multiline(&mut self.output_window_content)
+                                        .desired_width(f32::INFINITY)
+                                        .desired_rows(20)
+                                        .font(egui::TextStyle::Monospace));
+                                });
+                            
+                            ui.horizontal(|ui| {
+                                if ui.button("Close").clicked() {
+                                    self.show_output_window = false;
+                                }
+                                if ui.button("Save to File").clicked() {
+                                    if let Some(path) = rfd::FileDialog::new()
+                                        .set_file_name(match self.output_window_title.as_str() {
+                                            "Picking List" => "picking_list.txt",
+                                            "Invoice List" => "invoice_list.txt",
+                                            "Stock Update" => "stock_update.csv",
+                                            _ => "output.txt",
+                                        })
+                                        .add_filter(
+                                            if self.output_window_title == "Stock Update" { 
+                                                "CSV Files"
+                                            } else {
+                                                "Text Files"
+                                            },
+                                            &[if self.output_window_title == "Stock Update" { "csv" } else { "txt" }]
+                                        )
+                                        .save_file() {
+                                            if let Err(e) = std::fs::write(&path, &self.output_window_content) {
+                                                self.output = format!("Error saving file: {}", e);
+                                            }
+                                    }
+                                }
+                            });
+                        });
                 }
-                ui.text_edit_singleline(&mut self.inventory_path);
-            });
 
-            ui.horizontal(|ui| {
-                ui.label("Wantslist:");
-                if ui.button("Browse").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .pick_file() {
-                            self.wantslist_path = path.display().to_string();
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("← Back to Welcome Screen").clicked() {
+                            self.current_screen = Screen::Welcome;
                         }
-                }
-                ui.text_edit_singleline(&mut self.wantslist_path);
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Preferred Language:");
-                egui::ComboBox::new("language_selector", "")
-                    .selected_text(self.preferred_language.as_str())
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.preferred_language, Language::English, "English");
-                        ui.selectable_value(&mut self.preferred_language, Language::German, "German");
-                        ui.selectable_value(&mut self.preferred_language, Language::Spanish, "Spanish");
-                        ui.selectable_value(&mut self.preferred_language, Language::French, "French");
-                        ui.selectable_value(&mut self.preferred_language, Language::Italian, "Italian");
                     });
-                ui.checkbox(&mut self.preferred_language_only, "Only show cards in preferred language");
-            });
+                    ui.add_space(10.0);
+                    
+                    ui.heading("MTG Stock Checker");
+                    
+                    // File pickers
+                    ui.horizontal(|ui| {
+                        ui.label("Inventory CSV:");
+                        if ui.button("Browse").clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("CSV", &["csv"])
+                                .pick_file() {
+                                    self.inventory_path = path.display().to_string();
+                                }
+                        }
+                        ui.text_edit_singleline(&mut self.inventory_path);
+                    });
 
-            ui.horizontal(|ui| {
-                if ui.button("Check Stock").clicked() {
-                    match self.check_stock() {
-                        Ok(_) => {},
-                        Err(e) => {
-                            self.output = format!("Error: {}", e);
+                    ui.horizontal(|ui| {
+                        ui.label("Wantslist:");
+                        if ui.button("Browse").clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .pick_file() {
+                                    self.wantslist_path = path.display().to_string();
+                                }
+                        }
+                        ui.text_edit_singleline(&mut self.wantslist_path);
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Preferred Language:");
+                        egui::ComboBox::new("language_selector", "")
+                            .selected_text(self.preferred_language.as_str())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.preferred_language, Language::English, "English");
+                                ui.selectable_value(&mut self.preferred_language, Language::German, "German");
+                                ui.selectable_value(&mut self.preferred_language, Language::Spanish, "Spanish");
+                                ui.selectable_value(&mut self.preferred_language, Language::French, "French");
+                                ui.selectable_value(&mut self.preferred_language, Language::Italian, "Italian");
+                            });
+                        ui.checkbox(&mut self.preferred_language_only, "Only show cards in preferred language");
+                    });
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Check Stock").clicked() {
+                            match self.check_stock() {
+                                Ok(_) => {},
+                                Err(e) => {
+                                    self.output = format!("Error: {}", e);
+                                }
+                            }
+                        }
+                    });
+
+                    ui.separator();
+
+                    if self.show_selection || self.selection_mode {
+                        ui.label("Select the cards you want to include:");
+                        egui::ScrollArea::vertical()
+                            .max_height(ui.available_height() - 50.0)
+                            .show(ui, |ui| {
+                                let mut idx = 0;
+                                for (card_name, cards) in &self.all_matches {
+                                    if !cards.is_empty() {
+                                        ui.label(format!("{}:", card_name));
+                                        for (card, quantity, set_name) in cards {
+                                            let mut checked = self.selected[idx];
+                                            let label = format!(
+                                                "{} {} [{}] from {} - {} condition - {:.2} €{}",
+                                                quantity,
+                                                card.name,
+                                                card.language,
+                                                set_name,
+                                                card.condition,
+                                                card.price.parse::<f64>().unwrap_or(0.0),
+                                                card.location.as_ref()
+                                                    .filter(|loc| !loc.trim().is_empty())
+                                                    .map(|loc| format!(" [Location: {}]", loc))
+                                                    .unwrap_or_default()
+                                            );
+                                            if ui.checkbox(&mut checked, label).changed() {
+                                                self.selected[idx] = checked;
+                                            }
+                                            idx += 1;
+                                        }
+                                        ui.add_space(4.0);
+                                    }
+                                }
+                            });
+
+                        ui.separator();
+                        ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                            ui.horizontal(|ui| {
+                                if ui.button("Generate Picking List").clicked() {
+                                    self.generate_selected_output_in_window(OutputFormat::PickingList);
+                                }
+                                if ui.button("Generate Invoice List").clicked() {
+                                    self.generate_selected_output_in_window(OutputFormat::InvoiceList);
+                                }
+                                if ui.button("Generate Stock Update CSV").clicked() {
+                                    self.generate_selected_output_in_window(OutputFormat::UpdateStock);
+                                }
+                                if ui.button("Return to Regular List").clicked() {
+                                    self.show_selection = false;
+                                    self.selection_mode = false;
+                                    self.generate_regular_output();
+                                }
+                            });
+                        });
+                    } else if !self.output.is_empty() {
+                        egui::ScrollArea::vertical()
+                            .max_height(ui.available_height() - 50.0)
+                            .show(ui, |ui| {
+                                ui.add(egui::TextEdit::multiline(&mut self.output)
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(20)
+                                    .font(egui::TextStyle::Monospace));
+                            });
+
+                        if !self.all_matches.is_empty() {
+                            ui.separator();
+                            ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                                ui.horizontal(|ui| {
+                                    if ui.button("Select Cards for Lists").clicked() {
+                                        self.start_selection();
+                                    }
+                                });
+                            });
                         }
                     }
-                }
-            });
+                });
+            },
+            Screen::StockAnalysis => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("← Back to Welcome Screen").clicked() {
+                            self.current_screen = Screen::Welcome;
+                        }
+                    });
+                    ui.add_space(10.0);
+                    
+                    ui.heading("Stock Analysis");
+                    ui.add_space(10.0);
 
-            ui.separator();
-
-            if self.show_selection || self.selection_mode {
-                ui.label("Select the cards you want to include:");
-                egui::ScrollArea::vertical()
-                    .max_height(ui.available_height() - 50.0)
-                    .show(ui, |ui| {
-                        let mut idx = 0;
-                        for (card_name, cards) in &self.all_matches {
-                            if !cards.is_empty() {
-                                ui.label(format!("{}:", card_name));
-                                for (card, quantity, set_name) in cards {
-                                    let mut checked = self.selected[idx];
-                                    let label = format!(
-                                        "{} {} [{}] from {} - {} condition - {:.2} €{}",
-                                        quantity,
-                                        card.name,
-                                        card.language,
-                                        set_name,
-                                        card.condition,
-                                        card.price.parse::<f64>().unwrap_or(0.0),
-                                        card.location.as_ref()
-                                            .filter(|loc| !loc.trim().is_empty())
-                                            .map(|loc| format!(" [Location: {}]", loc))
-                                            .unwrap_or_default()
-                                    );
-                                    if ui.checkbox(&mut checked, label).changed() {
-                                        self.selected[idx] = checked;
-                                    }
-                                    idx += 1;
+                    // File picker for inventory
+                    ui.horizontal(|ui| {
+                        ui.label("Inventory CSV:");
+                        if ui.button("Browse").clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("CSV", &["csv"])
+                                .pick_file() {
+                                    self.stock_analysis_inventory_path = path.display().to_string();
                                 }
-                                ui.add_space(4.0);
+                        }
+                        ui.text_edit_singleline(&mut self.stock_analysis_inventory_path);
+                    });
+
+                    ui.add_space(10.0);
+                    
+                    // Replace bin capacity slider with free slots slider
+                    ui.horizontal(|ui| {
+                        ui.label("Minimum Free Slots:");
+                        ui.add(egui::Slider::new(&mut self.stock_analysis_free_slots, 1..=30)
+                            .text("slots"));
+                    });
+
+                    ui.add_space(10.0);
+
+                    if ui.button("Analyze Stock").clicked() {
+                        match self.analyze_stock() {
+                            Ok(_) => {},
+                            Err(e) => {
+                                self.stock_analysis_output = format!("Error: {}", e);
                             }
                         }
-                    });
+                    }
 
-                ui.separator();
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                    ui.horizontal(|ui| {
-                        if ui.button("Generate Picking List").clicked() {
-                            self.generate_selected_output_in_window(OutputFormat::PickingList);
-                        }
-                        if ui.button("Generate Invoice List").clicked() {
-                            self.generate_selected_output_in_window(OutputFormat::InvoiceList);
-                        }
-                        if ui.button("Generate Stock Update CSV").clicked() {
-                            self.generate_selected_output_in_window(OutputFormat::UpdateStock);
-                        }
-                        if ui.button("Return to Regular List").clicked() {
-                            self.show_selection = false;
-                            self.selection_mode = false;
-                            self.generate_regular_output();
-                        }
-                    });
-                });
-            } else if !self.output.is_empty() {
-                egui::ScrollArea::vertical()
-                    .max_height(ui.available_height() - 50.0)
-                    .show(ui, |ui| {
-                        ui.add(egui::TextEdit::multiline(&mut self.output)
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(20)
-                            .font(egui::TextStyle::Monospace));
-                    });
-
-                if !self.all_matches.is_empty() {
                     ui.separator();
-                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                        ui.horizontal(|ui| {
-                            if ui.button("Select Cards for Lists").clicked() {
-                                self.start_selection();
+
+                    if !self.stock_analysis_output.is_empty() {
+                        egui::ScrollArea::vertical()
+                            .max_height(ui.available_height())
+                            .show(ui, |ui| {
+                                ui.add(egui::TextEdit::multiline(&mut self.stock_analysis_output)
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(20)
+                                    .font(egui::TextStyle::Monospace));
+                            });
+
+                        ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                            if ui.button("Save Analysis to File").clicked() {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .set_file_name("stock_analysis.txt")
+                                    .add_filter("Text Files", &["txt"])
+                                    .save_file() {
+                                        if let Err(e) = std::fs::write(&path, &self.stock_analysis_output) {
+                                            self.stock_analysis_output = format!("Error saving file: {}", e);
+                                        }
+                                }
                             }
                         });
-                    });
-                }
+                    }
+                });
             }
-        });
+        }
     }
 }
 
@@ -391,6 +511,18 @@ impl StockCheckerApp {
 
         self.output_window_title = format.title().to_string();
         self.show_output_window = true;
+    }
+
+    fn analyze_stock(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.stock_analysis_inventory_path.is_empty() {
+            return Err("Please select an inventory file".into());
+        }
+
+        let inventory = read_csv(&self.stock_analysis_inventory_path)?;
+        let analyzer = StockAnalysis::new(inventory);
+        let stats = analyzer.analyze_with_free_slots(self.stock_analysis_free_slots);
+        self.stock_analysis_output = format_stock_analysis(&stats);
+        Ok(())
     }
 }
 
