@@ -57,6 +57,7 @@ pub struct StockCheckerApp {
     wantslist_path: String,
     output: String,
     preferred_language: Language,
+    preferred_language_only: bool,
     all_matches: Vec<(String, Vec<(crate::models::Card, i32, String)>)>,
     selected: Vec<bool>,
     show_selection: bool,
@@ -73,6 +74,7 @@ impl Default for StockCheckerApp {
             wantslist_path: String::new(),
             output: String::new(),
             preferred_language: Language::English,
+            preferred_language_only: false,
             all_matches: Vec::new(),
             selected: Vec::new(),
             show_selection: false,
@@ -168,6 +170,7 @@ impl eframe::App for StockCheckerApp {
                         ui.selectable_value(&mut self.preferred_language, Language::French, "French");
                         ui.selectable_value(&mut self.preferred_language, Language::Italian, "Italian");
                     });
+                ui.checkbox(&mut self.preferred_language_only, "Only show cards in preferred language");
             });
 
             ui.horizontal(|ui| {
@@ -271,12 +274,21 @@ impl StockCheckerApp {
         self.all_matches.clear();
         
         for wants_entry in wantslist {
-            let matched_cards = find_matching_cards(
+            let mut matched_cards = find_matching_cards(
                 &wants_entry.name,
                 wants_entry.quantity,
                 &inventory,
                 Some(self.preferred_language.code())
             );
+
+            // Filter by preferred language if the checkbox is checked
+            if self.preferred_language_only {
+                matched_cards.retain(|mc| mc.card.language.eq_ignore_ascii_case(self.preferred_language.as_str()) ||
+                    (self.preferred_language == Language::German && mc.card.language == "German") ||
+                    (self.preferred_language == Language::French && mc.card.language == "French") ||
+                    (self.preferred_language == Language::Spanish && mc.card.language == "Spanish") ||
+                    (self.preferred_language == Language::Italian && mc.card.language == "Italian"));
+            }
             
             let owned_cards = matched_cards
                 .into_iter()
