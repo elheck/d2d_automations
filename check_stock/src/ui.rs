@@ -37,19 +37,17 @@ impl Language {
 
 #[derive(PartialEq)]
 enum OutputFormat {
-    Regular,
     PickingList,
     InvoiceList,
     UpdateStock,
 }
 
 impl OutputFormat {
-    fn as_str(&self) -> &'static str {
+    fn title(&self) -> &'static str {
         match self {
-            OutputFormat::Regular => "Regular",
             OutputFormat::PickingList => "Picking List",
             OutputFormat::InvoiceList => "Invoice List",
-            OutputFormat::UpdateStock => "Update Stock CSV",
+            OutputFormat::UpdateStock => "Stock Update",
         }
     }
 }
@@ -62,8 +60,7 @@ pub struct StockCheckerApp {
     all_matches: Vec<(String, Vec<(crate::models::Card, i32, String)>)>,
     selected: Vec<bool>,
     show_selection: bool,
-    selection_format: Option<OutputFormat>,
-    selection_mode: bool,  // New field to track if we're in selection mode
+    selection_mode: bool,
     show_output_window: bool,
     output_window_content: String,
     output_window_title: String,
@@ -79,7 +76,6 @@ impl Default for StockCheckerApp {
             all_matches: Vec::new(),
             selected: Vec::new(),
             show_selection: false,
-            selection_format: None,
             selection_mode: false,
             show_output_window: false,
             output_window_content: String::new(),
@@ -322,50 +318,6 @@ impl StockCheckerApp {
         self.selection_mode = true;
     }
 
-    fn generate_selected_output(&mut self, format: OutputFormat) {
-        let mut selected_matches = Vec::new();
-        let mut idx = 0;
-        
-        for (name, cards) in &self.all_matches {
-            let mut group_cards = Vec::new();
-            for (card, quantity, set_name) in cards {
-                if self.selected[idx] {
-                    group_cards.push(crate::card_matching::MatchedCard {
-                        card,
-                        quantity: *quantity,
-                        set_name: set_name.clone(),
-                    });
-                }
-                idx += 1;
-            }
-            if !group_cards.is_empty() {
-                selected_matches.push((name.clone(), group_cards));
-            }
-        }
-
-        self.output = match format {
-            OutputFormat::Regular => format_regular_output(&selected_matches),
-            OutputFormat::PickingList => {
-                let all_cards: Vec<_> = selected_matches.iter()
-                    .flat_map(|(_, cards)| cards.iter().cloned())
-                    .collect();
-                format_picking_list(&all_cards)
-            },
-            OutputFormat::InvoiceList => {
-                let all_cards: Vec<_> = selected_matches.iter()
-                    .flat_map(|(_, cards)| cards.iter().cloned())
-                    .collect();
-                format_invoice_list(&all_cards)
-            },
-            OutputFormat::UpdateStock => {
-                let all_cards: Vec<_> = selected_matches.iter()
-                    .flat_map(|(_, cards)| cards.iter().cloned())
-                    .collect();
-                format_update_stock_csv(&all_cards)
-            }
-        };
-    }
-
     fn generate_regular_output(&mut self) {
         let selected_matches: Vec<_> = self.all_matches.iter()
             .map(|(name, cards)| {
@@ -405,7 +357,6 @@ impl StockCheckerApp {
         }
 
         self.output_window_content = match format {
-            OutputFormat::Regular => format_regular_output(&selected_matches),
             OutputFormat::PickingList => {
                 let all_cards: Vec<_> = selected_matches.iter()
                     .flat_map(|(_, cards)| cards.iter().cloned())
@@ -426,13 +377,7 @@ impl StockCheckerApp {
             }
         };
 
-        self.output_window_title = match format {
-            OutputFormat::Regular => "Regular List",
-            OutputFormat::PickingList => "Picking List",
-            OutputFormat::InvoiceList => "Invoice List",
-            OutputFormat::UpdateStock => "Stock Update",
-        }.to_string();
-
+        self.output_window_title = format.title().to_string();
         self.show_output_window = true;
     }
 }
