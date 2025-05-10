@@ -202,9 +202,7 @@ impl StockCheckerScreen {
     }
 
     fn start_selection(state: &mut AppState) {
-        if state.selected.is_empty() {
-            state.selected = std::iter::repeat(true)
-                .take(state.all_matches.iter().map(|(_, cards)| cards.len()).sum())
+        if state.selected.is_empty() {              state.selected = std::iter::repeat_n(true, state.all_matches.iter().map(|(_, cards)| cards.len()).sum())
                 .collect();
         }
         state.show_selection = true;

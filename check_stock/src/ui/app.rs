@@ -6,18 +6,10 @@ use super::{
     screens::{WelcomeScreen, StockCheckerScreen, StockAnalysisScreen},
 };
 
+#[derive(Default)]
 pub struct StockCheckerApp {
     app_state: AppState,
     analysis_state: StockAnalysisState,
-}
-
-impl Default for StockCheckerApp {
-    fn default() -> Self {
-        Self {
-            app_state: AppState::default(),
-            analysis_state: StockAnalysisState::default(),
-        }
-    }
 }
 
 impl eframe::App for StockCheckerApp {

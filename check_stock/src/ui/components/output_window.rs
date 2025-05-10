@@ -41,7 +41,7 @@ impl<'a> OutputWindow<'a> {
                     }
                     if ui.button("Save to File").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
-                            .set_file_name(&format!("output.{}", self.default_extension))
+                            .set_file_name(format!("output.{}", self.default_extension))
                             .add_filter(
                                 if self.default_extension == "csv" { 
                                     "CSV Files"

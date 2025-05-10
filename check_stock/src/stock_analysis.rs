@@ -47,7 +47,7 @@ impl StockAnalysis {
         let parts: Vec<&str> = location.split('-').collect();
         if parts.len() >= 4 {
             // Only take the first 4 parts (e.g., "A-0-1-4")
-            if let Ok(_) = parts[3].parse::<i32>() {
+            if parts[3].parse::<i32>().is_ok() {
                 return Some(format!("{}-{}-{}-{}", parts[0], parts[1], parts[2], parts[3]));
             }
         }

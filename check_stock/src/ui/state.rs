@@ -1,6 +1,9 @@
 use crate::models::Card;
 use super::language::Language;
 
+type CardMatch = (Card, i32, String);
+type CardMatchGroup = (String, Vec<CardMatch>);
+
 #[derive(PartialEq)]
 pub enum Screen {
     Welcome,
@@ -32,7 +35,7 @@ pub struct AppState {
     pub output: String,
     pub preferred_language: Language,
     pub preferred_language_only: bool,
-    pub all_matches: Vec<(String, Vec<(Card, i32, String)>)>,
+    pub all_matches: Vec<CardMatchGroup>,
     pub selected: Vec<bool>,
     pub show_selection: bool,
     pub selection_mode: bool,
