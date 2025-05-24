@@ -74,7 +74,19 @@ jobs:
           cd check_stock
           cargo build --release --target ${{ matrix.target }} --verbose
 
-      - name: Verify Build Output
+      - name: Verify Build Output (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          cd check_stock/target/${{ matrix.target }}/release/
+          if (-not (Test-Path "${{ matrix.artifact_name }}")) {
+            Write-Error "Build artifact not found!"
+            exit 1
+          }
+
+      - name: Verify Build Output (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
         run: |
           cd check_stock/target/${{ matrix.target }}/release/
           if [ ! -f "${{ matrix.artifact_name }}" ]; then
@@ -82,16 +94,19 @@ jobs:
             exit 1
           fi
 
-      - name: Prepare Release Asset
+      - name: Prepare Release Asset (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          cd check_stock/target/${{ matrix.target }}/release/
+          Compress-Archive -Path "${{ matrix.artifact_name }}" -DestinationPath "../../../${{ matrix.asset_name }}.zip"
+
+      - name: Prepare Release Asset (Linux)
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           cd check_stock/target/${{ matrix.target }}/release/
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            7z a ../../../${{ matrix.asset_name }}.zip ${{ matrix.artifact_name }}
-          else
-            tar -czf ../../../${{ matrix.asset_name }}.tar.gz ${{ matrix.artifact_name }}
-          fi
-          cd -
+          tar -czf "../../../${{ matrix.asset_name }}.tar.gz" "${{ matrix.artifact_name }}"
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v1
