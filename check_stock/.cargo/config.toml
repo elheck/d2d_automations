@@ -1,4 +1,5 @@
 [target.x86_64-unknown-linux-gnu]
+linker = "clang"
 rustflags = [
     "-C", "link-arg=-fuse-ld=lld",
 ]
@@ -7,3 +8,6 @@ rustflags = [
 rustflags = [
     "-C", "target-feature=+crt-static",
 ]
+
+[build]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]

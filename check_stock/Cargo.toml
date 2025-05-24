@@ -2,6 +2,14 @@
 name = "d2d_automations"
 version = "0.1.0"
 edition = "2021"
+authors = ["Your Name"]
+description = "MTG Stock Checker and Analysis Tool"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true  # Automatically strip symbols from the binary
 
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
