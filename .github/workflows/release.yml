@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -54,10 +57,30 @@ jobs:
           target: ${{ matrix.target }}
           override: true
 
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            check_stock/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
       - name: Build
+        timeout-minutes: 30
         run: |
           cd check_stock
-          cargo build --release --target ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }} --verbose
+
+      - name: Verify Build Output
+        run: |
+          cd check_stock/target/${{ matrix.target }}/release/
+          if [ ! -f "${{ matrix.artifact_name }}" ]; then
+            echo "Build artifact not found!"
+            exit 1
+          fi
 
       - name: Prepare Release Asset
         shell: bash
@@ -72,8 +95,12 @@ jobs:
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: |
-            check_stock/${{ matrix.asset_name }}.*
+          files: check_stock/${{ matrix.asset_name }}.*
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
