@@ -16,7 +16,7 @@ pub struct Card {
     #[serde(rename = "isFoil")]
     pub is_foil: String,
     #[serde(rename = "isPlayset")]
-    pub is_playset: String,
+    pub is_playset: Option<String>,
     #[serde(rename = "isSigned")]
     pub is_signed: String,
     pub price: String,

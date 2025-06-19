@@ -97,7 +97,8 @@ pub fn find_matching_cards<'a>(
             }
             if let Ok(quantity) = card.quantity.parse::<i32>() {
                 if quantity > 0 {
-                    let effective_quantity = if card.is_playset == "1" || card.is_playset.to_lowercase() == "true" {
+                    let is_playset = card.is_playset.as_deref().map(|s| s == "1" || s.eq_ignore_ascii_case("true")).unwrap_or(false);
+                    let effective_quantity = if is_playset {
                         quantity * 4
                     } else {
                         quantity

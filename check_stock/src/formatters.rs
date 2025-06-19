@@ -136,7 +136,8 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
         }
 
         // Handle playsets
-        if card.is_playset == "1" || card.is_playset.to_lowercase() == "true" {
+        let is_playset = card.is_playset.as_deref().map(|s| s == "1" || s.eq_ignore_ascii_case("true")).unwrap_or(false);
+        if is_playset {
             name = format!("{} [Playset]", name);
         }
 
@@ -340,7 +341,7 @@ pub fn format_update_stock_csv(matched_cards: &[MatchedCard]) -> String {
             card.condition,
             card.language,
             card.is_foil,
-            card.is_playset,
+            card.is_playset.as_deref().unwrap_or(""),
             card.is_signed,
             card.price,
             card.comment.replace(",", "\\,"), // Escape commas in comments
