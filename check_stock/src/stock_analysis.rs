@@ -37,7 +37,10 @@ impl StockAnalysis {
         
         // Store bins that have the required number of free slots or more
         stats.available_bins = bin_counts.into_iter()
-            .filter(|(_, count)| count <= &(Self::BIN_CAPACITY - min_free_slots))
+            .filter(|(_, count)| {
+                let free_slots = Self::BIN_CAPACITY - count;
+                free_slots >= min_free_slots
+            })
             .collect();
 
         stats
@@ -58,12 +61,16 @@ impl StockAnalysis {
 pub fn format_stock_analysis(stats: &StockStats) -> String {
     let mut output = String::new();
     
-    output.push_str(&format!("Available Bin Locations (Capacity: {}):\n", StockAnalysis::BIN_CAPACITY));
-    output.push_str(&format!("(Showing bins with {} or more free slots)\n\n", 
-        StockAnalysis::BIN_CAPACITY - stats.available_bins.iter().next().map(|(_, count)| *count).unwrap_or(0)));
+    output.push_str(&format!("Bin Analysis (Maximum Capacity per Bin: {} cards)\n", StockAnalysis::BIN_CAPACITY));
+    output.push_str("-----------------------------------------------\n\n");
     
     let mut available_locs: Vec<_> = stats.available_bins.iter().collect();
-    available_locs.sort_by(|a, b| a.0.cmp(b.0));
+    available_locs.sort_by(|a, b| {
+        let free_slots_a = StockAnalysis::BIN_CAPACITY - a.1;
+        let free_slots_b = StockAnalysis::BIN_CAPACITY - b.1;
+        // Sort by free slots (descending), then by location
+        free_slots_b.cmp(&free_slots_a).then(a.0.cmp(b.0))
+    });
     
     for (location, count) in available_locs {
         let free_slots = StockAnalysis::BIN_CAPACITY - count;
