@@ -19,31 +19,43 @@ pub struct MatchedCard<'a> {
 }
 
 pub fn find_matching_cards<'a>(
+
     card_name: &str,
     needed_quantity: i32,
     inventory: &'a [Card],
-    preferred_language: Option<&str>
+    preferred_language: Option<&str>,
+    preferred_language_only: bool,
 ) -> Vec<MatchedCard<'a>> {
-    // Find cards matching the name in any language, prioritizing preferred language
+
     let trimmed_card_name = card_name.trim();
     let matching_cards: Vec<_> = inventory.iter()
         .filter(|card| {
-            // Check preferred language first
-            if let Some(lang) = preferred_language {
-                let localized_name = get_card_name(card, Some(lang)).trim();
-                if localized_name.eq_ignore_ascii_case(trimmed_card_name) {
-                    // If we find a match in preferred language, prioritize it
-                    return true;
+            if preferred_language_only {
+                if let Some(lang_code) = preferred_language {
+                    // Map language code to full language name
+                    let lang_full = match lang_code {
+                        "en" => "English",
+                        "de" => "German",
+                        "fr" => "French",
+                        "es" => "Spanish",
+                        "it" => "Italian",
+                        _ => lang_code,
+                    };
+                    get_card_name(card, Some(lang_code)).trim().eq_ignore_ascii_case(trimmed_card_name)
+                        && card.language.eq_ignore_ascii_case(lang_full)
+                } else {
+                    // If no preferred language is set, fallback to English
+                    get_card_name(card, None).trim().eq_ignore_ascii_case(trimmed_card_name)
+                        && card.language.eq_ignore_ascii_case("English")
                 }
+            } else {
+                // Match any language
+                get_card_name(card, None).trim().eq_ignore_ascii_case(trimmed_card_name)
+                    || get_card_name(card, Some("de")).trim().eq_ignore_ascii_case(trimmed_card_name)
+                    || get_card_name(card, Some("es")).trim().eq_ignore_ascii_case(trimmed_card_name)
+                    || get_card_name(card, Some("fr")).trim().eq_ignore_ascii_case(trimmed_card_name)
+                    || get_card_name(card, Some("it")).trim().eq_ignore_ascii_case(trimmed_card_name)
             }
-
-            // If no match in preferred language, check all languages
-            let english_name = get_card_name(card, None).trim();
-            english_name.eq_ignore_ascii_case(trimmed_card_name) ||
-            get_card_name(card, Some("de")).trim().eq_ignore_ascii_case(trimmed_card_name) ||
-            get_card_name(card, Some("es")).trim().eq_ignore_ascii_case(trimmed_card_name) ||
-            get_card_name(card, Some("fr")).trim().eq_ignore_ascii_case(trimmed_card_name) ||
-            get_card_name(card, Some("it")).trim().eq_ignore_ascii_case(trimmed_card_name)
         })
         .collect();
 
@@ -56,34 +68,43 @@ pub fn find_matching_cards<'a>(
     for card in matching_cards {
         let set_key = format!("{} ({})", &card.set, &card.set_code);
         let cards = cards_by_set.entry(set_key).or_default();
-        
-        // Insert prioritizing preferred language
-        if let Some(lang) = preferred_language {
-            if card.language.eq_ignore_ascii_case(lang) || 
-               (lang == "de" && card.language == "German") ||
-               (lang == "fr" && card.language == "French") ||
-               (lang == "es" && card.language == "Spanish") ||
-               (lang == "it" && card.language == "Italian") {
-                // Insert at the beginning for preferred language
-                cards.insert(0, card);
-            } else {
-                // Append other languages
-                cards.push(card);
-            }
-        } else {
-            cards.push(card);
-        }
+        cards.push(card);
+    }
+    // Sort cards within each set: preferred language first, then by price, name, cardmarket_id
+    for cards in cards_by_set.values_mut() {
+        cards.sort_by(|a, b| {
+            let lang_pref = |c: &Card| {
+                if let Some(lang) = preferred_language {
+                    c.language.eq_ignore_ascii_case(lang)
+                        || (lang == "de" && c.language == "German")
+                        || (lang == "fr" && c.language == "French")
+                        || (lang == "es" && c.language == "Spanish")
+                        || (lang == "it" && c.language == "Italian")
+                } else {
+                    false
+                }
+            };
+            lang_pref(b).cmp(&lang_pref(a)) // true first
+                .then_with(|| {
+                    let pa = a.price.parse::<f64>().unwrap_or(f64::MAX);
+                    let pb = b.price.parse::<f64>().unwrap_or(f64::MAX);
+                    pa.partial_cmp(&pb).unwrap()
+                })
+                .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a.cardmarket_id.cmp(&b.cardmarket_id))
+        });
     }
 
     let mut remaining_needed = needed_quantity;
     let mut result = Vec::new();
 
-    // Sort sets by price
+    // Sort sets by price, then by set name for determinism
     let mut sets: Vec<_> = cards_by_set.iter().collect();
     sets.sort_by(|a, b| {
         let price_a = a.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
         let price_b = b.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
         price_a.partial_cmp(&price_b).unwrap()
+            .then_with(|| a.0.cmp(&b.0))
     });
 
     // Add cards from each set until we have enough

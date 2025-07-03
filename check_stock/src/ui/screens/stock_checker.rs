@@ -85,25 +85,18 @@ impl StockCheckerScreen {
         let inventory = read_csv(&state.inventory_path)?;
         let wantslist = read_wantslist(&state.wantslist_path)?;
         state.all_matches.clear();
-        
+        // Reset selection to avoid mismatches when card count changes
+        state.selected.clear();
+
         for wants_entry in wantslist {
-            let mut matched_cards = find_matching_cards(
+            let matched_cards = find_matching_cards(
                 &wants_entry.name,
                 wants_entry.quantity,
                 &inventory,
-                Some(state.preferred_language.code())
+                Some(state.preferred_language.code()),
+                state.preferred_language_only,
             );
 
-            if state.preferred_language_only {
-                matched_cards.retain(|mc| {
-                    mc.card.language.eq_ignore_ascii_case(state.preferred_language.as_str()) ||
-                    (state.preferred_language == Language::German && mc.card.language == "German") ||
-                    (state.preferred_language == Language::French && mc.card.language == "French") ||
-                    (state.preferred_language == Language::Spanish && mc.card.language == "Spanish") ||
-                    (state.preferred_language == Language::Italian && mc.card.language == "Italian")
-                });
-            }
-            
             let owned_cards = matched_cards
                 .into_iter()
                 .map(|mc| {
@@ -111,7 +104,7 @@ impl StockCheckerScreen {
                     (card, mc.quantity, mc.set_name)
                 })
                 .collect();
-                
+
             state.all_matches.push((wants_entry.name, owned_cards));
         }
 
