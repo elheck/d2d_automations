@@ -1,0 +1,19 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug d2d_automations",
+            "program": "${workspaceFolder}/check_stock/target/debug/d2d_automations",
+            "args": [],
+            "cwd": "${workspaceFolder}/check_stock",
+            "sourceLanguages": ["rust"],
+            "env": {},
+            "stopOnEntry": false
+        }
+    ]
+}
