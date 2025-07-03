@@ -25,24 +25,25 @@ pub fn find_matching_cards<'a>(
     preferred_language: Option<&str>
 ) -> Vec<MatchedCard<'a>> {
     // Find cards matching the name in any language, prioritizing preferred language
+    let trimmed_card_name = card_name.trim();
     let matching_cards: Vec<_> = inventory.iter()
         .filter(|card| {
             // Check preferred language first
             if let Some(lang) = preferred_language {
-                let localized_name = get_card_name(card, Some(lang));
-                if localized_name.eq_ignore_ascii_case(card_name) {
+                let localized_name = get_card_name(card, Some(lang)).trim();
+                if localized_name.eq_ignore_ascii_case(trimmed_card_name) {
                     // If we find a match in preferred language, prioritize it
                     return true;
                 }
             }
 
             // If no match in preferred language, check all languages
-            let english_name = get_card_name(card, None);
-            english_name.eq_ignore_ascii_case(card_name) ||
-            get_card_name(card, Some("de")).eq_ignore_ascii_case(card_name) ||
-            get_card_name(card, Some("es")).eq_ignore_ascii_case(card_name) ||
-            get_card_name(card, Some("fr")).eq_ignore_ascii_case(card_name) ||
-            get_card_name(card, Some("it")).eq_ignore_ascii_case(card_name)
+            let english_name = get_card_name(card, None).trim();
+            english_name.eq_ignore_ascii_case(trimmed_card_name) ||
+            get_card_name(card, Some("de")).trim().eq_ignore_ascii_case(trimmed_card_name) ||
+            get_card_name(card, Some("es")).trim().eq_ignore_ascii_case(trimmed_card_name) ||
+            get_card_name(card, Some("fr")).trim().eq_ignore_ascii_case(trimmed_card_name) ||
+            get_card_name(card, Some("it")).trim().eq_ignore_ascii_case(trimmed_card_name)
         })
         .collect();
 
