@@ -33,7 +33,7 @@ impl StockCheckerScreen {
             FilePicker::new("Wantslist:", &mut state.wantslist_path)
                 .show(ui);
 
-            // Language selection
+            // Language selection and discount
             ui.horizontal(|ui| {
                 ui.label("Preferred Language:");
                 egui::ComboBox::new("language_selector", "")
@@ -46,6 +46,13 @@ impl StockCheckerScreen {
                         ui.selectable_value(&mut state.preferred_language, Language::Italian, "Italian");
                     });
                 ui.checkbox(&mut state.preferred_language_only, "Only show cards in preferred language");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Discount (%):");
+                let mut discount = state.discount_percent;
+                if ui.add(egui::DragValue::new(&mut discount).range(0.0..=100.0).speed(0.1)).changed() {
+                    state.discount_percent = discount;
+                }
             });
 
             ui.horizontal(|ui| {
@@ -223,7 +230,7 @@ impl StockCheckerScreen {
             })
             .collect();
         
-        state.output = format_regular_output(&selected_matches);
+        state.output = format_regular_output(&selected_matches, state.discount_percent);
     }
 
     fn generate_selected_output(state: &mut AppState, format: OutputFormat) {
@@ -247,18 +254,31 @@ impl StockCheckerScreen {
             }
         }
 
+        let discount_percent = state.discount_percent;
         state.output_window_content = match format {
             OutputFormat::PickingList => {
                 let all_cards: Vec<_> = selected_matches.iter()
                     .flat_map(|(_, cards)| cards.iter().cloned())
                     .collect();
-                format_picking_list(&all_cards)
+                let mut output = format_picking_list(&all_cards);
+                if discount_percent > 0.0 {
+                    let total_price: f64 = all_cards.iter().map(|mc| mc.card.price.parse::<f64>().unwrap_or(0.0) * mc.quantity as f64).sum();
+                    let discounted = total_price * (1.0 - discount_percent as f64 / 100.0);
+                    output.push_str(&format!("Total price after {discount_percent:.1}% discount: {discounted:.2} €\n"));
+                }
+                output
             },
             OutputFormat::InvoiceList => {
                 let all_cards: Vec<_> = selected_matches.iter()
                     .flat_map(|(_, cards)| cards.iter().cloned())
                     .collect();
-                format_invoice_list(&all_cards)
+                let mut output = format_invoice_list(&all_cards);
+                if discount_percent > 0.0 {
+                    let total_price: f64 = all_cards.iter().map(|mc| mc.card.price.parse::<f64>().unwrap_or(0.0) * mc.quantity as f64).sum();
+                    let discounted = total_price * (1.0 - discount_percent as f64 / 100.0);
+                    output.push_str(&format!("Total price after {discount_percent:.1}% discount: {discounted:.2} €\n"));
+                }
+                output
             },
             OutputFormat::UpdateStock => {
                 let all_cards: Vec<_> = selected_matches.iter()

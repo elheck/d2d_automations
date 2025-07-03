@@ -29,6 +29,7 @@ impl OutputFormat {
 }
 
 pub struct AppState {
+    pub discount_percent: f32, // 0.0 to 100.0
     pub current_screen: Screen,
     pub inventory_path: String,
     pub wantslist_path: String,
@@ -60,6 +61,7 @@ impl Default for AppState {
             show_output_window: false,
             output_window_content: String::new(),
             output_window_title: String::new(),
+            discount_percent: 10.0,
         }
     }
 }

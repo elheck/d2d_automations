@@ -1,8 +1,9 @@
 use crate::card_matching::{MatchedCard, parse_location_code};
 
-pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)]) -> String {
+pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)], discount_percent: f32) -> String {
     let mut output = String::new();
     let mut total_price = 0.0;
+    let discount_factor = 1.0 - (discount_percent as f64 / 100.0);
 
     for (card_name, matched_cards) in matches {
         if matched_cards.is_empty() {
@@ -12,11 +13,16 @@ pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)]) -> String {
         let card_total_cost: f64 = matched_cards.iter()
             .map(|mc| mc.card.price.parse::<f64>().unwrap_or(0.0) * mc.quantity as f64)
             .sum();
+        let discounted_card_total_cost = card_total_cost * discount_factor;
 
         let total_found: i32 = matched_cards.iter().map(|mc| mc.quantity).sum();
         let needed_quantity = matched_cards.first().map(|mc| mc.quantity).unwrap_or(0);
 
-        output.push_str(&format!("{needed_quantity} x {card_name} (total: {card_total_cost:.2} €)\n"));
+        if discount_percent > 0.0 {
+            output.push_str(&format!("{needed_quantity} x {card_name} (total: {discounted_card_total_cost:.2} € after {discount_percent:.1}% discount)\n"));
+        } else {
+            output.push_str(&format!("{needed_quantity} x {card_name} (total: {card_total_cost:.2} €)\n"));
+        }
 
         // Show copies from each set with their individual prices
         for matched_card in matched_cards {
@@ -64,7 +70,7 @@ pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)]) -> String {
         }
 
         output.push('\n');
-        total_price += card_total_cost;
+        total_price += discounted_card_total_cost;
     }
 
     if !matches.is_empty() {
@@ -74,7 +80,11 @@ pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)]) -> String {
             .sum();
 
         output.push_str("========================\n");
-        output.push_str(&format!("Total price for available cards: {total_price:.2} €\n"));
+        if discount_percent > 0.0 {
+            output.push_str(&format!("Total price for available cards after {discount_percent:.1}% discount: {total_price:.2} €\n"));
+        } else {
+            output.push_str(&format!("Total price for available cards: {total_price:.2} €\n"));
+        }
         output.push_str(&format!("Total cards picked: {total_cards}\n"));
     } else {
         output.push_str("No cards from your wantslist were found in stock.\n");
@@ -220,10 +230,12 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
         output.push_str(&entry);
     }
 
-    // Add total cards count
+    // Add total cards count and price
     let total_cards: i32 = matched_cards.iter().map(|mc| mc.quantity).sum();
+    let total_price: f64 = matched_cards.iter().map(|mc| mc.card.price.parse::<f64>().unwrap_or(0.0) * mc.quantity as f64).sum();
     output.push_str(&separator);
     output.push_str(&format!("Total cards picked: {total_cards}\n"));
+    output.push_str(&format!("Total price: {total_price:.2} €\n"));
 
     output
 }
@@ -249,6 +261,7 @@ pub fn format_invoice_list(matched_cards: &[MatchedCard]) -> String {
         let price = card.price.parse::<f64>().unwrap_or(0.0);
         let line_total = price * matched_card.quantity as f64;
         total_price += line_total;
+        // Discount will be applied in the wrapper function
 
         // Add special conditions to name
         let mut name = card.name.to_string();
@@ -316,7 +329,6 @@ pub fn format_invoice_list(matched_cards: &[MatchedCard]) -> String {
     output.push_str(&separator);
     let total_width = max_name_len + max_lang_len + max_cond_len + 7;
     output.push_str(&format!("{:<total_width$} {:>7.2} €\n", "Total:", total_price));
-
     output
 }
 
