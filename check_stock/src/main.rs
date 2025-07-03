@@ -7,7 +7,7 @@ mod stock_analysis;
 
 fn main() {
     if let Err(e) = ui::launch_gui() {
-        eprintln!("Error: {}", e);
+        eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }
