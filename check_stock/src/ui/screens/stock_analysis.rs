@@ -39,7 +39,7 @@ impl StockAnalysisScreen {
 
             if ui.button("Analyze Stock").clicked() {
                 if let Err(e) = Self::analyze_stock(state) {
-                    state.output = format!("Error: {}", e);
+                    state.output = format!("Error: {e}");
                 }
             }
 
@@ -62,7 +62,7 @@ impl StockAnalysisScreen {
                             .add_filter("Text Files", &["txt"])
                             .save_file() {
                                 if let Err(e) = std::fs::write(&path, &state.output) {
-                                    state.output = format!("Error saving file: {}", e);
+                            state.output = format!("Error saving file: {e}");
                                 }
                         }
                     }

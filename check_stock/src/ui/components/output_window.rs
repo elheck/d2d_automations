@@ -52,7 +52,7 @@ impl<'a> OutputWindow<'a> {
                             )
                             .save_file() {
                                 if let Err(e) = std::fs::write(&path, &self.content) {
-                                    *self.content = format!("Error saving file: {}", e);
+                            *self.content = format!("Error saving file: {e}");
                                 }
                         }
                     }

@@ -74,8 +74,7 @@ pub fn format_stock_analysis(stats: &StockStats) -> String {
     
     for (location, count) in available_locs {
         let free_slots = StockAnalysis::BIN_CAPACITY - count;
-        output.push_str(&format!("{}: {} cards ({} slots free)\n", 
-            location, count, free_slots));
+        output.push_str(&format!("{location}: {count} cards ({free_slots} slots free)\n"));
     }
     
     output

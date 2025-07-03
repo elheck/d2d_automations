@@ -16,13 +16,13 @@ pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)]) -> String {
         let total_found: i32 = matched_cards.iter().map(|mc| mc.quantity).sum();
         let needed_quantity = matched_cards.first().map(|mc| mc.quantity).unwrap_or(0);
 
-        output.push_str(&format!("{} x {} (total: {:.2} €)\n", needed_quantity, card_name, card_total_cost));
+        output.push_str(&format!("{needed_quantity} x {card_name} (total: {card_total_cost:.2} €)\n"));
 
         // Show copies from each set with their individual prices
         for matched_card in matched_cards {
             let location_info = matched_card.card.location.as_ref()
                 .filter(|loc| !loc.trim().is_empty())
-                .map(|loc| format!(" [Location: {}]", loc))
+                .map(|loc| format!(" [Location: {loc}]"))
                 .unwrap_or_default();
 
             // Add special conditions
@@ -60,8 +60,7 @@ pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)]) -> String {
         }
 
         if total_found < needed_quantity {
-            output.push_str(&format!("    WARNING: Only {} of {} copies available!\n", 
-                total_found, needed_quantity));
+              output.push_str(&format!("    WARNING: Only {total_found} of {needed_quantity} copies available!\n"));
         }
 
         output.push('\n');
@@ -75,8 +74,8 @@ pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)]) -> String {
             .sum();
 
         output.push_str("========================\n");
-        output.push_str(&format!("Total price for available cards: {:.2} €\n", total_price));
-        output.push_str(&format!("Total cards picked: {}\n", total_cards));
+        output.push_str(&format!("Total price for available cards: {total_price:.2} €\n"));
+        output.push_str(&format!("Total cards picked: {total_cards}\n"));
     } else {
         output.push_str("No cards from your wantslist were found in stock.\n");
     }
@@ -138,7 +137,7 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
         // Handle playsets
         let is_playset = card.is_playset.as_deref().map(|s| s == "1" || s.eq_ignore_ascii_case("true")).unwrap_or(false);
         if is_playset {
-            name = format!("{} [Playset]", name);
+            name = format!("{name} [Playset]");
         }
 
         // Add comment if present
@@ -224,7 +223,7 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
     // Add total cards count
     let total_cards: i32 = matched_cards.iter().map(|mc| mc.quantity).sum();
     output.push_str(&separator);
-    output.push_str(&format!("Total cards picked: {}\n", total_cards));
+    output.push_str(&format!("Total cards picked: {total_cards}\n"));
 
     output
 }

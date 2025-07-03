@@ -51,7 +51,7 @@ impl StockCheckerScreen {
             ui.horizontal(|ui| {
                 if ui.button("Check Stock").clicked() {
                     if let Err(e) = Self::check_stock(state) {
-                        state.output = format!("Error: {}", e);
+                        state.output = format!("Error: {e}");
                     }
                 }
             });
@@ -120,12 +120,12 @@ impl StockCheckerScreen {
                 let mut idx = 0;
                 for (card_name, cards) in &state.all_matches {
                     if !cards.is_empty() {
-                        ui.label(format!("{}:", card_name));
+                        ui.label(format!("{card_name}:"));
                         for (card, quantity, set_name) in cards {
                             let mut checked = state.selected[idx];
                             let location_info = card.location.as_ref()
                                 .filter(|loc| !loc.trim().is_empty())
-                                .map(|loc| format!(" [Location: {}]", loc))
+                                .map(|loc| format!(" [Location: {loc}]"))
                                 .unwrap_or_default();
                                 
                             let label = format!(
