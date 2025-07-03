@@ -104,7 +104,7 @@ pub fn find_matching_cards<'a>(
         let price_a = a.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
         let price_b = b.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
         price_a.partial_cmp(&price_b).unwrap()
-            .then_with(|| a.0.cmp(&b.0))
+            .then_with(|| b.0.cmp(a.0))
     });
 
     // Add cards from each set until we have enough
