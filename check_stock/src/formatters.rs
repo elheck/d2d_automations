@@ -333,37 +333,44 @@ pub fn format_invoice_list(matched_cards: &[MatchedCard]) -> String {
 }
 
 pub fn format_update_stock_csv(matched_cards: &[MatchedCard]) -> String {
-    let mut output = String::new();
-    
-    // Header with all columns from the Card struct
-    output.push_str("cardmarketId,quantity,name,set,setCode,cn,condition,language,isFoil,isPlayset,isSigned,price,comment,location,nameDE,nameES,nameFR,nameIT,rarity\n");
-    
-    // Add each card with negative quantity to indicate removal, preserving all other fields
+    use csv::WriterBuilder;
+    use std::io::Write;
+
+    let mut wtr = WriterBuilder::new()
+        .has_headers(true)
+        .from_writer(vec![]);
+
+    // Write header
+    let _ = wtr.write_record(&[
+        "cardmarketId","quantity","name","set","setCode","cn","condition","language","isFoil","isPlayset","isSigned","price","comment","location","nameDE","nameES","nameFR","nameIT","rarity"
+    ]);
+
     for matched_card in matched_cards {
         let card = matched_card.card;
-        output.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
-            card.cardmarket_id,
-            -matched_card.quantity, // Negative quantity for stock reduction
-            card.name,
-            card.set,
-            card.set_code,
-            card.cn,
-            card.condition,
-            card.language,
-            card.is_foil,
+        let quantity_str = (-matched_card.quantity).to_string();
+        let _ = wtr.write_record(&[
+            &card.cardmarket_id,
+            &quantity_str,
+            &card.name,
+            &card.set,
+            &card.set_code,
+            &card.cn,
+            &card.condition,
+            &card.language,
+            &card.is_foil,
             card.is_playset.as_deref().unwrap_or(""),
-            card.is_signed,
-            card.price,
-            card.comment.replace(",", "\\,"), // Escape commas in comments
+            &card.is_signed,
+            &card.price,
+            &card.comment,
             card.location.as_deref().unwrap_or(""),
-            card.name_de,
-            card.name_es,
-            card.name_fr,
-            card.name_it,
-            card.rarity
-        ));
+            &card.name_de,
+            &card.name_es,
+            &card.name_fr,
+            &card.name_it,
+            &card.rarity,
+        ]);
     }
-    
-    output
+
+    let data = wtr.into_inner().unwrap();
+    String::from_utf8(data).unwrap()
 }
