@@ -334,21 +334,20 @@ pub fn format_invoice_list(matched_cards: &[MatchedCard]) -> String {
 
 pub fn format_update_stock_csv(matched_cards: &[MatchedCard]) -> String {
     use csv::WriterBuilder;
-    use std::io::Write;
 
     let mut wtr = WriterBuilder::new()
         .has_headers(true)
         .from_writer(vec![]);
 
     // Write header
-    let _ = wtr.write_record(&[
+    let _ = wtr.write_record([
         "cardmarketId","quantity","name","set","setCode","cn","condition","language","isFoil","isPlayset","isSigned","price","comment","location","nameDE","nameES","nameFR","nameIT","rarity"
     ]);
 
     for matched_card in matched_cards {
         let card = matched_card.card;
         let quantity_str = (-matched_card.quantity).to_string();
-        let _ = wtr.write_record(&[
+        let _ = wtr.write_record([
             &card.cardmarket_id,
             &quantity_str,
             &card.name,
