@@ -43,3 +43,56 @@ jobs:
     - name: Clippy
       run: cargo clippy -- -D warnings
       working-directory: ./check_stock
+
+  build_and_test_accounting:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          pkg-config \
+          libssl-dev \
+          libfontconfig1-dev \
+          libfreetype6-dev \
+          libxcb1-dev \
+          libxcb-render0-dev \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev
+    
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          accounting/target
+        key: ${{ runner.os }}-accounting-cargo-${{ hashFiles('accounting/Cargo.lock') }}
+    
+    - name: Check code formatting
+      run: cargo fmt --all -- --check
+      working-directory: ./accounting
+    
+    - name: Check
+      run: cargo check --verbose
+      working-directory: ./accounting
+    
+    - name: Run tests
+      run: cargo test --verbose
+      working-directory: ./accounting
+    
+    - name: Clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
+      working-directory: ./accounting
+
+    - name: Build release
+      run: cargo build --release --verbose
+      working-directory: ./accounting
