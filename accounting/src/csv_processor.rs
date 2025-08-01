@@ -228,17 +228,17 @@ impl CsvProcessor {
 
     fn extract_quantity_from_description(&self, description: &str) -> u32 {
         debug!("Extracting quantity from description: {description}");
-        
+
         // Look for patterns like "2x", "10x", etc. at the beginning of the description
         if let Some(first_part) = description.split_whitespace().next() {
             if first_part.ends_with('x') {
-                if let Ok(quantity) = first_part[..first_part.len()-1].parse::<u32>() {
+                if let Ok(quantity) = first_part[..first_part.len() - 1].parse::<u32>() {
                     debug!("Found quantity: {quantity}");
                     return quantity;
                 }
             }
         }
-        
+
         debug!("No quantity found, defaulting to 1");
         1 // Default to 1 if no quantity is found
     }

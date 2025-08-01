@@ -26,6 +26,7 @@ pub struct InvoiceApp {
     api_connection_status: Option<bool>,
     runtime: Runtime,
     validation_errors: Vec<String>,
+    dry_run_mode: bool, // New field for dry-run mode
 }
 
 impl Default for InvoiceApp {
@@ -51,6 +52,7 @@ impl Default for InvoiceApp {
             api_connection_status: None,
             runtime,
             validation_errors: Vec::new(),
+            dry_run_mode: false, // Default to false (actual mode)
         }
     }
 }
@@ -148,19 +150,38 @@ impl eframe::App for InvoiceApp {
                 ui.add_space(20.0);
 
                 // Processing Section
-                ui.group(|ui| match &self.processing_state {
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.dry_run_mode, "Dry Run Mode")
+                            .on_hover_text("Enable to simulate invoice creation without actually creating invoices in SevDesk");
+
+                        if self.dry_run_mode {
+                            ui.colored_label(egui::Color32::YELLOW, "⚠ Dry Run: No invoices will be created");
+                        }
+                    });
+
+                    ui.separator();
+
+                    match &self.processing_state {
                     ProcessingState::Idle => {
                         let can_process = !self.orders.is_empty()
                             && !self.api_token.is_empty()
-                            && self.api_connection_status == Some(true);
+                            && (self.dry_run_mode || self.api_connection_status == Some(true));
+
+                        let button_text = if self.dry_run_mode {
+                            "Simulate Invoice Creation (Dry Run)"
+                        } else {
+                            "Create Invoices"
+                        };
 
                         if ui
-                            .add_enabled(can_process, egui::Button::new("Create Invoices"))
-                            .on_disabled_hover_text("Load CSV file and test API connection first")
+                            .add_enabled(can_process, egui::Button::new(button_text))
+                            .on_disabled_hover_text("Load CSV file and test API connection first (or enable dry run mode)")
                             .clicked()
                         {
                             info!(
-                                "Starting invoice creation process for {} orders",
+                                "Starting invoice {} for {} orders",
+                                if self.dry_run_mode { "simulation" } else { "creation process" },
                                 self.orders.len()
                             );
                             self.process_invoices();
@@ -171,18 +192,25 @@ impl eframe::App for InvoiceApp {
                         ui.add(egui::ProgressBar::new(0.0).animate(true));
                     }
                     ProcessingState::Processing { current, total } => {
-                        ui.label(format!("Processing invoices... ({current}/{total})"));
+                        let action = if self.dry_run_mode { "Simulating" } else { "Processing" };
+                        ui.label(format!("{action} invoices... ({current}/{total})"));
                         let progress = *current as f32 / *total as f32;
                         ui.add(egui::ProgressBar::new(progress));
                     }
                     ProcessingState::Completed => {
-                        ui.colored_label(egui::Color32::GREEN, "Processing completed!");
+                        let message = if self.dry_run_mode {
+                            "Simulation completed!"
+                        } else {
+                            "Processing completed!"
+                        };
+                        ui.colored_label(egui::Color32::GREEN, message);
                         if ui.button("Clear Results").clicked() {
                             info!("Clearing processing results");
                             self.results.clear();
                             self.processing_state = ProcessingState::Idle;
                         }
                     }
+                    } // Close the match statement
                 });
 
                 ui.add_space(20.0);
@@ -305,7 +333,12 @@ impl InvoiceApp {
 
     fn process_invoices(&mut self) {
         info!(
-            "Starting invoice processing for {} orders",
+            "Starting invoice {} for {} orders",
+            if self.dry_run_mode {
+                "simulation"
+            } else {
+                "processing"
+            },
             self.orders.len()
         );
         if self.orders.is_empty() || self.api_token.is_empty() {
@@ -326,29 +359,53 @@ impl InvoiceApp {
         let api = SevDeskApi::new(self.api_token.clone());
 
         for (index, order) in self.orders.iter().enumerate() {
+            let action = if self.dry_run_mode {
+                "Simulating"
+            } else {
+                "Processing"
+            };
             debug!(
-                "Processing order {}/{}: {} ({})",
+                "{} order {}/{}: {} ({})",
+                action,
                 index + 1,
                 self.orders.len(),
                 order.name,
                 order.order_id
             );
 
-            let result = self.runtime.block_on(api.create_invoice(order));
+            let result = if self.dry_run_mode {
+                // Dry run mode - simulate the invoice creation
+                self.runtime.block_on(api.simulate_invoice_creation(order))
+            } else {
+                // Normal mode - actually create the invoice
+                self.runtime.block_on(api.create_invoice(order))
+            };
+
             match result {
                 Ok(invoice_result) => {
                     if invoice_result.error.is_none() {
+                        let action = if self.dry_run_mode {
+                            "Simulated"
+                        } else {
+                            "Successfully created"
+                        };
                         info!(
-                            "Successfully created invoice for {}: {}",
+                            "{} invoice for {}: {}",
+                            action,
                             order.name,
                             invoice_result
                                 .invoice_number
                                 .as_ref()
-                                .unwrap_or(&"Unknown".to_string())
+                                .unwrap_or(&"[DRY RUN]".to_string())
                         );
                     } else {
                         error!(
-                            "Failed to create invoice for {}: {}",
+                            "Failed to {} invoice for {}: {}",
+                            if self.dry_run_mode {
+                                "simulate"
+                            } else {
+                                "create"
+                            },
                             order.name,
                             invoice_result.error.as_ref().unwrap()
                         );
@@ -356,7 +413,16 @@ impl InvoiceApp {
                     self.results.push(invoice_result);
                 }
                 Err(e) => {
-                    error!("Error processing invoice for {}: {}", order.name, e);
+                    error!(
+                        "Error {} invoice for {}: {}",
+                        if self.dry_run_mode {
+                            "simulating"
+                        } else {
+                            "processing"
+                        },
+                        order.name,
+                        e
+                    );
                     self.results.push(InvoiceCreationResult {
                         order_id: order.order_id.clone(),
                         customer_name: order.name.clone(),
@@ -376,7 +442,15 @@ impl InvoiceApp {
 
         let success_count = self.results.iter().filter(|r| r.error.is_none()).count();
         let error_count = self.results.len() - success_count;
-        info!("Invoice processing completed: {success_count} successful, {error_count} errors");
+        let action = if self.dry_run_mode {
+            "simulation"
+        } else {
+            "processing"
+        };
+        info!(
+            "Invoice {} completed: {success_count} successful, {error_count} errors",
+            action
+        );
 
         self.processing_state = ProcessingState::Completed;
     }

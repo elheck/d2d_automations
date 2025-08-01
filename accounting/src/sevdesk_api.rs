@@ -169,7 +169,7 @@ impl SevDeskApi {
             "Ireland" | "Irland" => 13,
             "Italy" | "Italien" => 14,
             "Jamaica" | "Jamaika" => 15,
-            
+
             // Extended country list from SevDesk API
             "Azerbaijan" | "Aserbaidschan" => 33,
             "Israel" => 36,
@@ -182,14 +182,14 @@ impl SevDeskApi {
             "Dubai" => 67,
             "Brazil" | "Brasilien" => 73,
             "England" => 74,
-            
+
             // Corrected country IDs based on actual SevDesk API data
             "Netherlands" | "Niederlande" => 18,
             "Poland" | "Polen" => 21,
             "Sweden" | "Schweden" => 25,
             "Spain" | "Spanien" => 29,
             "United States" | "USA" => 1353,
-            
+
             // African countries
             "Algeria" | "Algerien" => 1458,
             "Angola" => 1466,
@@ -209,7 +209,7 @@ impl SevDeskApi {
             "Guinea" => 1376,
             "Guinea-Bissau" => 1502,
             "Ivory Coast" | "Elfenbeinküste" => 1381,
-            
+
             // Asian countries
             "Armenia" | "Armenien" => 1348,
             "Bangladesh" | "Bangladesch" => 1440,
@@ -223,7 +223,7 @@ impl SevDeskApi {
             "Iraq" | "Irak" => 1419,
             "Jordan" | "Jordanien" => 1344,
             "Yemen" | "Jemen" => 1459,
-            
+
             // European countries
             "Albania" | "Albanien" => 1347,
             "Andorra" => 1418,
@@ -235,7 +235,7 @@ impl SevDeskApi {
             "Guernsey" => 1499,
             "Isle of Man" => 1513,
             "Jersey" => 1515,
-            
+
             // American countries
             "Antigua and Barbuda" | "Antigua und Barbuda" => 1449,
             "Aruba" => 1465,
@@ -254,7 +254,7 @@ impl SevDeskApi {
             "Guyana" => 1509,
             "Haiti" => 1512,
             "Honduras" => 1511,
-            
+
             // Caribbean and territories
             "Anguilla" => 1467,
             "American Samoa" | "Amerikanisch-Samoa" => 1469,
@@ -267,19 +267,21 @@ impl SevDeskApi {
             "Fiji" | "Fidschi" => 1494,
             "Guam" => 1508,
             "Guadeloupe" => 1438,
-            
+
             // Special territories
             "Antarctica" | "Antarktis" => 1470,
             "Bouvet Island" | "Bouvetinsel" => 1480,
             "British Indian Ocean Territory" | "Britisches Territorium im Indischen Ozean" => 1514,
             "French Guiana" | "Französisch Guyana" => 1507,
             "French Polynesia" | "Französisch-Polynesien" => 1351,
-            "French Southern and Antarctic Lands" | "Französische Süd-und Antarktisgebiete" => 1471,
+            "French Southern and Antarctic Lands" | "Französische Süd-und Antarktisgebiete" => {
+                1471
+            }
             "Heard Island and McDonald Islands" | "Heard und die McDonaldinseln" => 1510,
-            
+
             // Additional African countries
             "Djibouti" | "Dschibuti" => 1405,
-            
+
             _ => {
                 warn!("Unknown country '{country_name}', defaulting to Germany (ID: 1)");
                 1 // Default to Germany
@@ -332,6 +334,94 @@ impl SevDeskApi {
                 })
             }
         }
+    }
+
+    pub async fn simulate_invoice_creation(
+        &self,
+        order: &OrderRecord,
+    ) -> Result<InvoiceCreationResult> {
+        info!(
+            "Simulating invoice creation for order: {} ({})",
+            order.order_id, order.name
+        );
+        let order_id = order.order_id.clone();
+        let customer_name = order.name.clone();
+
+        // Simulate the validation steps without actually making API calls
+        match self.simulate_invoice_validation(order).await {
+            Ok(simulated_invoice_number) => {
+                info!("Successfully simulated invoice: {simulated_invoice_number} for order {order_id}");
+                Ok(InvoiceCreationResult {
+                    order_id,
+                    customer_name,
+                    invoice_id: Some(99999), // Fake ID for dry run
+                    invoice_number: Some(simulated_invoice_number),
+                    error: None,
+                })
+            }
+            Err(e) => {
+                error!("Failed to simulate invoice for order {order_id}: {e}");
+                Ok(InvoiceCreationResult {
+                    order_id,
+                    customer_name,
+                    invoice_id: None,
+                    invoice_number: None,
+                    error: Some(e.to_string()),
+                })
+            }
+        }
+    }
+
+    async fn simulate_invoice_validation(&self, order: &OrderRecord) -> Result<String> {
+        debug!(
+            "Simulating invoice validation for order: {}",
+            order.order_id
+        );
+
+        // Validate country mapping
+        let country_id = self.get_country_id(&order.country).await?;
+        debug!(
+            "Country '{}' would map to ID: {}",
+            order.country, country_id
+        );
+
+        // Validate price parsing
+        let merchandise_value = self.parse_price(&order.merchandise_value)?;
+        let shipment_costs = self.parse_price(&order.shipment_costs)?;
+        let total_value = self.parse_price(&order.total_value)?;
+        debug!(
+            "Prices would be - merchandise: {:.2}, shipping: {:.2}, total: {:.2}",
+            merchandise_value, shipment_costs, total_value
+        );
+
+        // Validate items and quantities
+        if !order.items.is_empty() {
+            debug!("Would create {} invoice positions:", order.items.len());
+            for (i, item) in order.items.iter().enumerate() {
+                debug!(
+                    "  Position {}: {} x {} @ {:.2} EUR",
+                    i + 1,
+                    item.quantity,
+                    item.localized_product_name,
+                    item.price
+                );
+            }
+        } else {
+            debug!(
+                "Would create fallback position: {} x {} @ {:.2} EUR",
+                order.article_count, order.localized_product_name, merchandise_value
+            );
+        }
+
+        if shipment_costs > 0.0 {
+            debug!("Would add shipping position: {:.2} EUR", shipment_costs);
+        }
+
+        // Generate a simulated invoice number
+        let simulated_invoice_number = format!("DRY-{}", order.order_id);
+        debug!("Simulated invoice number: {}", simulated_invoice_number);
+
+        Ok(simulated_invoice_number)
     }
 
     async fn get_current_user(&self) -> Result<u32> {
