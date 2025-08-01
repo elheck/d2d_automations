@@ -174,19 +174,21 @@ impl SevDeskApi {
             "Azerbaijan" | "Aserbaidschan" => 33,
             "Israel" => 36,
             "Australia" | "Australien" => 38,
-            "Netherlands" | "Niederlande" => 39,
             "Japan" => 40,
-            "Poland" | "Polen" => 42,
             "Belize" => 46,
-            "Sweden" | "Schweden" => 48,
             "Chile" => 49,
             "Iceland" | "Island" => 51,
-            "Spain" | "Spanien" => 55,
             "Hong Kong" | "Hongkong" => 59,
-            "United States" | "USA" => 60,
             "Dubai" => 67,
             "Brazil" | "Brasilien" => 73,
             "England" => 74,
+            
+            // Corrected country IDs based on actual SevDesk API data
+            "Netherlands" | "Niederlande" => 18,
+            "Poland" | "Polen" => 21,
+            "Sweden" | "Schweden" => 25,
+            "Spain" | "Spanien" => 29,
+            "United States" | "USA" => 1353,
             
             // African countries
             "Algeria" | "Algerien" => 1458,
