@@ -119,6 +119,9 @@ impl CsvProcessor {
         let city_field = parts[4].trim();
         let (zip, city) = self.parse_city_field(city_field)?;
 
+        // Parse individual items if multiple items are present
+        let items = self.parse_order_items(parts[15].trim(), parts[16].trim(), parts[17].trim())?;
+
         let order_record = OrderRecord {
             order_id: parts[0].trim().to_string(),
             username: parts[1].trim().to_string(),
@@ -140,10 +143,84 @@ impl CsvProcessor {
             description: parts[15].trim().to_string(),
             product_id: parts[16].trim().to_string(),
             localized_product_name: parts[17].trim().to_string(),
+            items,
         };
 
-        debug!("Parsed order record: {:?}", order_record.order_id);
+        debug!("Parsed order record: {:?} with {} items", order_record.order_id, order_record.items.len());
         Ok(order_record)
+    }
+
+    fn parse_order_items(
+        &self,
+        description: &str,
+        product_ids: &str, 
+        product_names: &str
+    ) -> Result<Vec<crate::models::OrderItem>> {
+        use crate::models::OrderItem;
+        
+        let descriptions = description.split(" | ").collect::<Vec<&str>>();
+        let ids = product_ids.split(" | ").collect::<Vec<&str>>();
+        let names = product_names.split(" | ").collect::<Vec<&str>>();
+
+        // Check if we have multiple items
+        if descriptions.len() == ids.len() && ids.len() == names.len() && descriptions.len() > 1 {
+            info!("Parsing {} individual items from order", descriptions.len());
+            let mut items = Vec::new();
+            
+            for ((desc, id), name) in descriptions.iter().zip(ids.iter()).zip(names.iter()) {
+                let price = self.extract_price_from_description(desc)?;
+                items.push(OrderItem {
+                    description: desc.trim().to_string(),
+                    product_id: id.trim().to_string(),
+                    localized_product_name: name.trim().to_string(),
+                    price,
+                });
+            }
+            
+            debug!("Successfully parsed {} items", items.len());
+            Ok(items)
+        } else {
+            // Single item - extract price from description if possible
+            let price = self.extract_price_from_description(description).unwrap_or(0.0);
+            let item = OrderItem {
+                description: description.to_string(),
+                product_id: product_ids.to_string(),
+                localized_product_name: product_names.to_string(),
+                price,
+            };
+            
+            debug!("Single item order, price: {:.2}", price);
+            Ok(vec![item])
+        }
+    }
+
+    fn extract_price_from_description(&self, description: &str) -> Result<f64> {
+        debug!("Extracting price from description: {}", description);
+        
+        // Look for pattern like "- 0,19 EUR" or "- 5,35 EUR"
+        if let Some(price_match) = description.split(" - ").last() {
+            if price_match.contains("EUR") {
+                let price_str = price_match.replace("EUR", "").trim().replace(',', ".");
+                if let Ok(price) = price_str.parse::<f64>() {
+                    debug!("Extracted price: {:.2}", price);
+                    return Ok(price);
+                }
+            }
+        }
+        
+        // Fallback: look for any number followed by EUR
+        for part in description.split_whitespace() {
+            if part.contains("EUR") {
+                let price_str = part.replace("EUR", "").replace(',', ".");
+                if let Ok(price) = price_str.parse::<f64>() {
+                    debug!("Extracted price (fallback): {:.2}", price);
+                    return Ok(price);
+                }
+            }
+        }
+        
+        warn!("Could not extract price from description: {}", description);
+        Err(anyhow::anyhow!("Could not extract price from description"))
     }
 
     fn parse_city_field(&self, city_field: &str) -> Result<(String, String)> {
@@ -261,7 +338,16 @@ impl CsvProcessor {
     }
     
     fn card_to_order(&self, card: CardRecord) -> OrderRecord {
+        use crate::models::OrderItem;
+        
         debug!("Converting card to order: {}", card.card_name);
+        
+        let item = OrderItem {
+            description: format!("{} - {} - {}", card.card_name, card.set_name, card.condition),
+            product_id: card.product_id.clone(),
+            localized_product_name: card.card_name.clone(),
+            price: self.parse_price(&card.price).unwrap_or(0.0),
+        };
         
         OrderRecord {
             order_id: card.product_id.clone(),
@@ -283,6 +369,7 @@ impl CsvProcessor {
             description: format!("{} - {} - {}", card.card_name, card.set_name, card.condition),
             product_id: card.product_id,
             localized_product_name: card.card_name,
+            items: vec![item],
         }
     }
 

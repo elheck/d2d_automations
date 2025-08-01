@@ -1,6 +1,14 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct OrderItem {
+    pub description: String,
+    pub product_id: String,
+    pub localized_product_name: String,
+    pub price: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct OrderRecord {
     pub order_id: String,
     pub username: String,
@@ -21,6 +29,8 @@ pub struct OrderRecord {
     pub description: String,
     pub product_id: String,
     pub localized_product_name: String,
+    #[serde(skip)]
+    pub items: Vec<OrderItem>, // Parsed individual items for multi-item orders
 }
 
 // Simplified structure for card inventory data

@@ -267,10 +267,10 @@ impl SevDeskApi {
                 id: contact_id,
                 object_name: "Contact".to_string(),
             },
-            invoice_date: chrono::Utc::now().format("%Y-%m-%d").to_string(),
-            header: format!("Invoice for Order {}", order.order_id),
-            head_text: Some("Thank you for your order.".to_string()),
-            foot_text: Some("Please pay within 14 days.".to_string()),
+            invoice_date: order.date_of_purchase.split(' ').next().unwrap_or("").to_string(),
+            header: format!("Rechnung für Bestellnummer {}", order.order_id),
+            head_text: Some("Vielen Dank für Ihre Bestellung.".to_string()),
+            foot_text: Some("Betrag beglichen.".to_string()),
             address: Some(formatted_address),
             address_country: SevDeskCountry { 
                 id: country_id,
@@ -326,18 +326,51 @@ impl SevDeskApi {
         let invoice_number = created_invoice.objects.invoice_number;
         debug!("Created invoice with ID: {} and number: {}", invoice_id, invoice_number);
 
-        // Add merchandise as invoice position
-        if merchandise_value > 0.0 {
-            debug!("Adding merchandise position: {} x {} = {}", 
+        // Add each item as a separate invoice position
+        let mut position_number = 1;
+        
+        if order.items.len() > 1 {
+            info!("Adding {} individual items to invoice", order.items.len());
+            for item in &order.items {
+                debug!("Adding item position {}: {} @ {:.2} EUR", 
+                    position_number, item.localized_product_name, item.price);
+                self.add_invoice_position(
+                    &invoice_id,
+                    position_number,
+                    &item.localized_product_name,
+                    &item.description,
+                    1.0, // Each item has quantity 1
+                    item.price,
+                ).await?;
+                position_number += 1;
+            }
+        } else if !order.items.is_empty() {
+            // Single item order
+            let item = &order.items[0];
+            debug!("Adding single item position: {} x {} @ {:.2} EUR", 
+                order.article_count, item.localized_product_name, item.price);
+            self.add_invoice_position(
+                &invoice_id,
+                position_number,
+                &item.localized_product_name,
+                &item.description,
+                order.article_count as f64,
+                item.price,
+            ).await?;
+            position_number += 1;
+        } else {
+            // Fallback to original merchandise value
+            debug!("No items found, using fallback merchandise position: {} x {} = {}", 
                 order.article_count, merchandise_value, order.article_count as f64 * merchandise_value);
             self.add_invoice_position(
                 &invoice_id,
-                1,
+                position_number,
                 &order.localized_product_name,
                 &order.description,
                 order.article_count as f64,
                 merchandise_value,
             ).await?;
+            position_number += 1;
         }
 
         // Add shipping costs as separate position if any
@@ -345,7 +378,7 @@ impl SevDeskApi {
             debug!("Adding shipping position: {}", shipment_costs);
             self.add_invoice_position(
                 &invoice_id,
-                2,
+                position_number,
                 "Shipping",
                 "Shipping costs",
                 1.0,
@@ -368,11 +401,12 @@ impl SevDeskApi {
         debug!("Adding invoice position {}: {} x {} @ {}", 
             position_number, quantity, name, price_gross);
             
-        let tax_rate = 19.0; // 19% VAT
-        let price_net = price_gross / (1.0 + tax_rate / 100.0);
-        let price_tax = price_gross - price_net;
+        // For Kleingewerbe (tax rule 11), no VAT is applied
+        let tax_rate = 0.0; // No VAT for Kleingewerbe
+        let price_net = price_gross; // Price is the same as gross since no VAT
+        let price_tax = 0.0; // No tax
 
-        debug!("Calculated prices - net: {:.2}, tax: {:.2}, gross: {:.2}", 
+        debug!("Kleingewerbe pricing - net: {:.2}, tax: {:.2}, gross: {:.2}", 
             price_net, price_tax, price_gross);
 
         let position = SevDeskInvoicePos {
