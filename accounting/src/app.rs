@@ -1,7 +1,7 @@
 use eframe::egui;
+use log::{debug, error, info, warn};
 use std::path::PathBuf;
 use tokio::runtime::Runtime;
-use log::{debug, info, warn, error};
 
 use crate::{
     csv_processor::CsvProcessor,
@@ -32,16 +32,16 @@ impl Default for InvoiceApp {
     fn default() -> Self {
         info!("Initializing InvoiceApp");
         let api_token = std::env::var("SEVDESK_API").unwrap_or_default();
-        
+
         if api_token.is_empty() {
             warn!("SEVDESK_API environment variable not set");
         } else {
             info!("SEVDESK_API environment variable found");
         }
-        
+
         debug!("Creating Tokio runtime");
         let runtime = Runtime::new().expect("Failed to create Tokio runtime");
-        
+
         Self {
             api_token,
             csv_file_path: None,
@@ -72,17 +72,19 @@ impl eframe::App for InvoiceApp {
                             egui::TextEdit::singleline(&mut self.api_token)
                                 .password(true)
                                 .desired_width(400.0)
-                                .hint_text("Enter your SevDesk API token")
+                                .hint_text("Enter your SevDesk API token"),
                         );
-                        
+
                         if response.changed() {
                             debug!("API token changed, resetting connection status");
                             self.api_connection_status = None;
                         }
 
-                        if ui.button("Test Connection")
+                        if ui
+                            .button("Test Connection")
                             .on_disabled_hover_text("Enter API token first")
-                            .clicked() && !self.api_token.is_empty()
+                            .clicked()
+                            && !self.api_token.is_empty()
                         {
                             info!("Testing API connection");
                             self.test_api_connection();
@@ -138,7 +140,7 @@ impl eframe::App for InvoiceApp {
                     if !self.orders.is_empty() {
                         ui.colored_label(
                             egui::Color32::GREEN,
-                            format!("Loaded {} orders", self.orders.len())
+                            format!("Loaded {} orders", self.orders.len()),
                         );
                     }
                 });
@@ -146,37 +148,39 @@ impl eframe::App for InvoiceApp {
                 ui.add_space(20.0);
 
                 // Processing Section
-                ui.group(|ui| {
-                    match &self.processing_state {
-                        ProcessingState::Idle => {
-                            let can_process = !self.orders.is_empty() 
-                                && !self.api_token.is_empty() 
-                                && self.api_connection_status == Some(true);
+                ui.group(|ui| match &self.processing_state {
+                    ProcessingState::Idle => {
+                        let can_process = !self.orders.is_empty()
+                            && !self.api_token.is_empty()
+                            && self.api_connection_status == Some(true);
 
-                            if ui.add_enabled(can_process, egui::Button::new("Create Invoices"))
-                                .on_disabled_hover_text("Load CSV file and test API connection first")
-                                .clicked()
-                            {
-                                info!("Starting invoice creation process for {} orders", self.orders.len());
-                                self.process_invoices();
-                            }
+                        if ui
+                            .add_enabled(can_process, egui::Button::new("Create Invoices"))
+                            .on_disabled_hover_text("Load CSV file and test API connection first")
+                            .clicked()
+                        {
+                            info!(
+                                "Starting invoice creation process for {} orders",
+                                self.orders.len()
+                            );
+                            self.process_invoices();
                         }
-                        ProcessingState::LoadingCsv => {
-                            ui.label("Loading CSV file...");
-                            ui.add(egui::ProgressBar::new(0.0).animate(true));
-                        }
-                        ProcessingState::Processing { current, total } => {
-                            ui.label(format!("Processing invoices... ({}/{})", current, total));
-                            let progress = *current as f32 / *total as f32;
-                            ui.add(egui::ProgressBar::new(progress));
-                        }
-                        ProcessingState::Completed => {
-                            ui.colored_label(egui::Color32::GREEN, "Processing completed!");
-                            if ui.button("Clear Results").clicked() {
-                                info!("Clearing processing results");
-                                self.results.clear();
-                                self.processing_state = ProcessingState::Idle;
-                            }
+                    }
+                    ProcessingState::LoadingCsv => {
+                        ui.label("Loading CSV file...");
+                        ui.add(egui::ProgressBar::new(0.0).animate(true));
+                    }
+                    ProcessingState::Processing { current, total } => {
+                        ui.label(format!("Processing invoices... ({}/{})", current, total));
+                        let progress = *current as f32 / *total as f32;
+                        ui.add(egui::ProgressBar::new(progress));
+                    }
+                    ProcessingState::Completed => {
+                        ui.colored_label(egui::Color32::GREEN, "Processing completed!");
+                        if ui.button("Clear Results").clicked() {
+                            info!("Clearing processing results");
+                            self.results.clear();
+                            self.processing_state = ProcessingState::Idle;
                         }
                     }
                 });
@@ -186,26 +190,37 @@ impl eframe::App for InvoiceApp {
                 // Results Section
                 if !self.results.is_empty() {
                     ui.group(|ui| {
-                        let success_count = self.results.iter().filter(|r| r.error.is_none()).count();
+                        let success_count =
+                            self.results.iter().filter(|r| r.error.is_none()).count();
                         let error_count = self.results.len() - success_count;
 
-                        ui.label(format!("Results: {} successful, {} errors", success_count, error_count));
-                        
+                        ui.label(format!(
+                            "Results: {} successful, {} errors",
+                            success_count, error_count
+                        ));
+
                         egui::ScrollArea::vertical()
                             .max_height(200.0)
                             .show(ui, |ui| {
                                 for result in &self.results {
                                     let (text, color) = match &result.error {
                                         None => (
-                                            format!("✓ {} - Invoice #{}", 
-                                                result.customer_name, 
-                                                result.invoice_number.as_ref().unwrap_or(&"Unknown".to_string())
+                                            format!(
+                                                "✓ {} - Invoice #{}",
+                                                result.customer_name,
+                                                result
+                                                    .invoice_number
+                                                    .as_ref()
+                                                    .unwrap_or(&"Unknown".to_string())
                                             ),
-                                            egui::Color32::GREEN
+                                            egui::Color32::GREEN,
                                         ),
                                         Some(error) => (
-                                            format!("✗ {} - Error: {}", result.customer_name, error),
-                                            egui::Color32::RED
+                                            format!(
+                                                "✗ {} - Error: {}",
+                                                result.customer_name, error
+                                            ),
+                                            egui::Color32::RED,
                                         ),
                                     };
                                     ui.colored_label(color, text);
@@ -220,7 +235,10 @@ impl eframe::App for InvoiceApp {
 
 impl InvoiceApp {
     fn test_api_connection(&mut self) {
-        debug!("Testing API connection with token length: {}", self.api_token.len());
+        debug!(
+            "Testing API connection with token length: {}",
+            self.api_token.len()
+        );
         if !self.api_token.is_empty() {
             let api = SevDeskApi::new(self.api_token.clone());
             match self.runtime.block_on(api.test_connection()) {
@@ -251,7 +269,7 @@ impl InvoiceApp {
             info!("Selected CSV file: {:?}", path);
             self.processing_state = ProcessingState::LoadingCsv;
             self.csv_file_path = Some(path.clone());
-            
+
             let processor = CsvProcessor::new();
             debug!("Starting CSV file processing");
             match self.runtime.block_on(processor.load_orders_from_csv(&path)) {
@@ -260,7 +278,7 @@ impl InvoiceApp {
                     // Validate orders
                     debug!("Validating loaded orders");
                     self.validation_errors = processor.validate_orders(&orders);
-                    
+
                     if self.validation_errors.is_empty() {
                         info!("All orders passed validation");
                         self.orders = orders;
@@ -271,7 +289,7 @@ impl InvoiceApp {
                         }
                         self.orders.clear();
                     }
-                    
+
                     self.processing_state = ProcessingState::Idle;
                 }
                 Err(e) => {
@@ -287,10 +305,16 @@ impl InvoiceApp {
     }
 
     fn process_invoices(&mut self) {
-        info!("Starting invoice processing for {} orders", self.orders.len());
+        info!(
+            "Starting invoice processing for {} orders",
+            self.orders.len()
+        );
         if self.orders.is_empty() || self.api_token.is_empty() {
-            warn!("Cannot process invoices: orders={}, token_empty={}", 
-                self.orders.len(), self.api_token.is_empty());
+            warn!(
+                "Cannot process invoices: orders={}, token_empty={}",
+                self.orders.len(),
+                self.api_token.is_empty()
+            );
             return;
         }
 
@@ -301,22 +325,34 @@ impl InvoiceApp {
         };
 
         let api = SevDeskApi::new(self.api_token.clone());
-        
+
         for (index, order) in self.orders.iter().enumerate() {
-            debug!("Processing order {}/{}: {} ({})", 
-                index + 1, self.orders.len(), order.name, order.order_id);
-            
+            debug!(
+                "Processing order {}/{}: {} ({})",
+                index + 1,
+                self.orders.len(),
+                order.name,
+                order.order_id
+            );
+
             let result = self.runtime.block_on(api.create_invoice(order));
             match result {
                 Ok(invoice_result) => {
                     if invoice_result.error.is_none() {
-                        info!("Successfully created invoice for {}: {}", 
-                            order.name, 
-                            invoice_result.invoice_number.as_ref().unwrap_or(&"Unknown".to_string()));
+                        info!(
+                            "Successfully created invoice for {}: {}",
+                            order.name,
+                            invoice_result
+                                .invoice_number
+                                .as_ref()
+                                .unwrap_or(&"Unknown".to_string())
+                        );
                     } else {
-                        error!("Failed to create invoice for {}: {}", 
-                            order.name, 
-                            invoice_result.error.as_ref().unwrap());
+                        error!(
+                            "Failed to create invoice for {}: {}",
+                            order.name,
+                            invoice_result.error.as_ref().unwrap()
+                        );
                     }
                     self.results.push(invoice_result);
                 }
@@ -341,8 +377,11 @@ impl InvoiceApp {
 
         let success_count = self.results.iter().filter(|r| r.error.is_none()).count();
         let error_count = self.results.len() - success_count;
-        info!("Invoice processing completed: {} successful, {} errors", success_count, error_count);
-        
+        info!(
+            "Invoice processing completed: {} successful, {} errors",
+            success_count, error_count
+        );
+
         self.processing_state = ProcessingState::Completed;
     }
 }

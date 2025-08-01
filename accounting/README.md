@@ -1,16 +1,20 @@
 # SevDesk Invoice Creator
 
-A Rust application with Iced GUI for creating invoices in SevDesk from CSV data.
+A Rust application with egui GUI for creating invoices in SevDesk from CSV data.
 
 ## Features
 
 - Load order data from CSV files (tab-separated format)
+- Parse multiple items per order correctly (no duplicate invoices)
 - Validate CSV data before processing
 - Test SevDesk API connection
 - Automatically create or find customers in SevDesk
 - Create invoices with line items for products and shipping
+- Support for Kleingewerbe (tax rule 11, 0% VAT)
+- German address format parsing (postal code + city)
 - Real-time progress tracking during invoice creation
 - Error handling and reporting
+- Configurable logging levels
 
 ## Setup
 
@@ -32,12 +36,13 @@ A Rust application with Iced GUI for creating invoices in SevDesk from CSV data.
      build-essential \
      pkg-config \
      libssl-dev \
-     libgtk-3-dev \
+     libfontconfig1-dev \
+     libfreetype6-dev \
+     libxcb1-dev \
      libxcb-render0-dev \
      libxcb-shape0-dev \
      libxcb-xfixes0-dev \
-     libxkbcommon-dev \
-     libx11-dev
+     libxkbcommon-dev
    ```
 
 4. **Build and run:**
@@ -45,6 +50,70 @@ A Rust application with Iced GUI for creating invoices in SevDesk from CSV data.
    cd accounting
    cargo run
    ```
+
+5. **Adjust logging level (optional):**
+   ```bash
+   # For debug output
+   RUST_LOG=sevdesk_invoicing=debug cargo run
+   
+   # Default is info level
+   cargo run
+   ```
+
+## Development
+
+### Testing
+```bash
+cargo test
+```
+
+### Code formatting
+```bash
+cargo fmt
+```
+
+### Linting
+```bash
+cargo clippy
+```
+
+### Building for release
+```bash
+cargo build --release
+```
+
+## CI/CD
+
+This project uses GitHub Actions for continuous integration and deployment:
+
+### Continuous Integration (rust.yml)
+- **Triggers:** Push to main branch, pull requests
+- **Jobs:**
+  - Code formatting check (`cargo fmt`)
+  - Linting with Clippy (`cargo clippy`)
+  - Build verification (`cargo build`)
+  - Test execution (`cargo test`)
+  - Release build (`cargo build --release`)
+
+### Release Builds (release.yml)
+- **Triggers:** Git tags starting with 'v' (e.g., `v1.0.0`)
+- **Artifacts:** Cross-platform binaries for Linux and Windows
+- **Assets:** Compressed archives attached to GitHub releases
+
+### Running CI locally
+```bash
+# Format check
+cargo fmt --all -- --check
+
+# Clippy linting
+cargo clippy --all-targets --all-features -- -D warnings
+
+# Tests
+cargo test --verbose
+
+# Release build
+cargo build --release --verbose
+```
 
 ## CSV Format
 

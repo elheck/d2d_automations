@@ -26,7 +26,7 @@ fn main() -> Result<(), eframe::Error> {
     };
 
     log::info!("Launching GUI application");
-    
+
     eframe::run_native(
         "SevDesk Invoice Creator",
         options,

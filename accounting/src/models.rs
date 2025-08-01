@@ -16,8 +16,8 @@ pub struct OrderRecord {
     pub username: String,
     pub name: String,
     pub street: String,
-    pub zip: String,        // Postal code
-    pub city: String,       // City name without postal code
+    pub zip: String,  // Postal code
+    pub city: String, // City name without postal code
     pub country: String,
     #[allow(dead_code)]
     pub is_professional: Option<String>,
@@ -97,7 +97,7 @@ pub struct AddressCategory {
 pub struct SevDeskInvoice {
     #[serde(rename = "invoiceNumber")]
     pub invoice_number: Option<String>,
-    pub contact: SevDeskContactRef,  // Back to contact reference
+    pub contact: SevDeskContactRef, // Back to contact reference
     #[serde(rename = "invoiceDate")]
     pub invoice_date: String,
     pub header: String,
@@ -213,7 +213,7 @@ pub struct SevDeskSingleObjectResponse<T> {
 
 #[derive(Debug, Deserialize)]
 pub struct ContactResponse {
-    pub id: String,  // SevDesk returns ID as string
+    pub id: String, // SevDesk returns ID as string
     #[allow(dead_code)]
     pub name: String,
     #[serde(rename = "objectName")]
@@ -229,14 +229,14 @@ pub struct ContactResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct InvoiceResponse {
-    pub id: String,  // SevDesk returns ID as string
+    pub id: String, // SevDesk returns ID as string
     #[serde(rename = "invoiceNumber")]
     pub invoice_number: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UserResponse {
-    pub id: String,  // SevDesk returns ID as string
+    pub id: String, // SevDesk returns ID as string
     pub username: String,
     #[serde(rename = "objectName")]
     #[allow(dead_code)]
