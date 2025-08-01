@@ -453,18 +453,4 @@ impl CsvProcessor {
         
         result
     }
-
-    pub fn group_orders_by_customer(&self, orders: &[OrderRecord]) -> std::collections::HashMap<String, Vec<OrderRecord>> {
-        info!("Grouping {} orders by customer", orders.len());
-        let mut grouped = std::collections::HashMap::new();
-        
-        for order in orders {
-            let key = format!("{} - {}", order.name, order.username);
-            debug!("Grouping order {} under customer key: {}", order.order_id, key);
-            grouped.entry(key).or_insert_with(Vec::new).push(order.clone());
-        }
-
-        info!("Grouped orders into {} customer groups", grouped.len());
-        grouped
-    }
 }

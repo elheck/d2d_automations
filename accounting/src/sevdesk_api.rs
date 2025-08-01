@@ -6,7 +6,7 @@ use serde_json;
 use crate::models::{
     ContactResponse, InvoiceResponse, OrderRecord, SevDeskAddress, SevDeskContact,
     SevDeskContactRef, SevDeskCountry, SevDeskInvoice, SevDeskInvoicePos, SevDeskInvoiceRef,
-    SevDeskObjectResponse, SevDeskSingleObjectResponse, SevDeskResponse, SevDeskUnity, SevDeskUser, AddressCategory,
+    SevDeskSingleObjectResponse, SevDeskResponse, SevDeskUnity, SevDeskUser, AddressCategory,
     ContactCategory, InvoiceCreationResult, UserResponse, SevDeskTaxRule,
 };
 

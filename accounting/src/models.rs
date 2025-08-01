@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize)]
 pub struct OrderItem {
     pub description: String,
+    #[allow(dead_code)]
     pub product_id: String,
     pub localized_product_name: String,
     pub price: f64,
@@ -11,22 +12,27 @@ pub struct OrderItem {
 #[derive(Debug, Clone, Deserialize)]
 pub struct OrderRecord {
     pub order_id: String,
+    #[allow(dead_code)]
     pub username: String,
     pub name: String,
     pub street: String,
     pub zip: String,        // Postal code
     pub city: String,       // City name without postal code
     pub country: String,
+    #[allow(dead_code)]
     pub is_professional: Option<String>,
+    #[allow(dead_code)]
     pub vat_number: Option<String>,
     pub date_of_purchase: String,
     pub article_count: u32,
     pub merchandise_value: String,
     pub shipment_costs: String,
     pub total_value: String,
+    #[allow(dead_code)]
     pub commission: String,
     pub currency: String,
     pub description: String,
+    #[allow(dead_code)]
     pub product_id: String,
     pub localized_product_name: String,
     #[serde(skip)]
@@ -39,9 +45,12 @@ pub struct CardRecord {
     pub product_id: String,
     pub card_name: String,
     pub set_name: String,
+    #[allow(dead_code)]
     pub collector_number: String,
+    #[allow(dead_code)]
     pub rarity: String,
     pub condition: String,
+    #[allow(dead_code)]
     pub language: String,
     pub price: String,
     pub currency: String,
@@ -184,13 +193,16 @@ pub struct SevDeskUnity {
 // API Response types
 #[derive(Debug, Deserialize)]
 pub struct SevDeskResponse<T> {
+    #[allow(dead_code)]
     pub success: Option<bool>,
     pub objects: Option<Vec<T>>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SevDeskObjectResponse<T> {
+    #[allow(dead_code)]
     pub success: bool,
+    #[allow(dead_code)]
     pub objects: T,
 }
 
@@ -202,12 +214,16 @@ pub struct SevDeskSingleObjectResponse<T> {
 #[derive(Debug, Deserialize)]
 pub struct ContactResponse {
     pub id: String,  // SevDesk returns ID as string
+    #[allow(dead_code)]
     pub name: String,
     #[serde(rename = "objectName")]
+    #[allow(dead_code)]
     pub object_name: String,
     // Add other fields that might be useful, but make them optional
     #[serde(rename = "customerNumber")]
+    #[allow(dead_code)]
     pub customer_number: Option<String>,
+    #[allow(dead_code)]
     pub status: Option<String>,
 }
 
@@ -223,13 +239,16 @@ pub struct UserResponse {
     pub id: String,  // SevDesk returns ID as string
     pub username: String,
     #[serde(rename = "objectName")]
+    #[allow(dead_code)]
     pub object_name: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct InvoiceCreationResult {
+    #[allow(dead_code)]
     pub order_id: String,
     pub customer_name: String,
+    #[allow(dead_code)]
     pub invoice_id: Option<u32>,
     pub invoice_number: Option<String>,
     pub error: Option<String>,
