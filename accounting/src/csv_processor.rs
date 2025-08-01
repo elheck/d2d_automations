@@ -116,7 +116,7 @@ impl CsvProcessor {
 
     fn parse_order_line(&self, line: &str) -> Result<OrderRecord> {
         debug!("Parsing CSV line: {line}");
-        let parts: Vec<&str> = line.split('\t').collect();
+        let parts: Vec<&str> = line.split(';').collect();
 
         if parts.len() < 18 {
             let error_msg = format!(
