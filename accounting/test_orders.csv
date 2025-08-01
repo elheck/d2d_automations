@@ -1,0 +1,4 @@
+OrderID;Username;Name;Street;City;Country;Is Professional;VAT Number;Date of Purchase;Article Count;Merchandise Value;Shipment Costs;Total Value;Commission;Currency;Description;Product ID;Localized Product Name
+1218804750;notsaicana;Lucas Cordeiro;Hedwig-Porschütz-Straße 28;10557 Berlin;Germany;;;2025-07-01 22:42:27;1;1,87;1,25;3,12;0,10;EUR;1x High Fae Trickster;795560;High Fae Trickster
+1218804751;testuser;Max Mustermann;Musterstraße 123;12345 Musterstadt;Deutschland;;;2025-07-02 14:30:15;2;15,99;2,50;18,49;0,50;EUR;2x Beispielkarte;123456;Beispielkarte
+1218804752;another_user;Anna Schmidt;Testweg 456;54321 Testheim;Germany;;;2025-07-03 09:15:30;1;25,00;3,00;28,00;1,00;EUR;1x Premium Card;789012;Premium Card
