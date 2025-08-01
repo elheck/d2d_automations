@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono;
+use chrono::Utc;
 use log::{debug, info, warn};
 use std::path::Path;
 
@@ -18,7 +18,7 @@ impl CsvProcessor {
         file_path: P,
     ) -> Result<Vec<OrderRecord>> {
         let path = file_path.as_ref();
-        info!("Loading orders from CSV file: {:?}", path);
+        info!("Loading orders from CSV file: {path:?}");
 
         let file_content = tokio::fs::read_to_string(path)
             .await
@@ -40,7 +40,7 @@ impl CsvProcessor {
 
         // Check if this is a proper CSV with headers
         let header_line = lines[0];
-        debug!("Header line: {}", header_line);
+        debug!("Header line: {header_line}");
 
         // If it contains typical CSV headers, parse as CSV
         if header_line.contains("OrderID")
@@ -115,7 +115,7 @@ impl CsvProcessor {
     }
 
     fn parse_order_line(&self, line: &str) -> Result<OrderRecord> {
-        debug!("Parsing CSV line: {}", line);
+        debug!("Parsing CSV line: {line}");
         let parts: Vec<&str> = line.split('\t').collect();
 
         if parts.len() < 18 {
@@ -123,7 +123,7 @@ impl CsvProcessor {
                 "Invalid CSV format. Expected at least 18 columns, got {}",
                 parts.len()
             );
-            warn!("{}", error_msg);
+            warn!("{error_msg}");
             return Err(anyhow::anyhow!(error_msg));
         }
 
@@ -217,20 +217,20 @@ impl CsvProcessor {
                 price,
             };
 
-            debug!("Single item order, price: {:.2}", price);
+            debug!("Single item order, price: {price:.2}");
             Ok(vec![item])
         }
     }
 
     fn extract_price_from_description(&self, description: &str) -> Result<f64> {
-        debug!("Extracting price from description: {}", description);
+        debug!("Extracting price from description: {description}");
 
         // Look for pattern like "- 0,19 EUR" or "- 5,35 EUR"
         if let Some(price_match) = description.split(" - ").last() {
             if price_match.contains("EUR") {
                 let price_str = price_match.replace("EUR", "").trim().replace(',', ".");
                 if let Ok(price) = price_str.parse::<f64>() {
-                    debug!("Extracted price: {:.2}", price);
+                    debug!("Extracted price: {price:.2}");
                     return Ok(price);
                 }
             }
@@ -241,40 +241,37 @@ impl CsvProcessor {
             if part.contains("EUR") {
                 let price_str = part.replace("EUR", "").replace(',', ".");
                 if let Ok(price) = price_str.parse::<f64>() {
-                    debug!("Extracted price (fallback): {:.2}", price);
+                    debug!("Extracted price (fallback): {price:.2}");
                     return Ok(price);
                 }
             }
         }
 
-        warn!("Could not extract price from description: {}", description);
+        warn!("Could not extract price from description: {description}");
         Err(anyhow::anyhow!("Could not extract price from description"))
     }
 
     fn parse_city_field(&self, city_field: &str) -> Result<(String, String)> {
-        debug!("Parsing city field: '{}'", city_field);
+        debug!("Parsing city field: '{city_field}'");
 
         // Split by first space to separate postal code from city name
         let parts: Vec<&str> = city_field.splitn(2, ' ').collect();
 
         if parts.len() < 2 {
             // If no space found, treat the whole thing as city name with empty postal code
-            warn!(
-                "City field '{}' doesn't contain postal code, using as city name only",
-                city_field
-            );
+            warn!("City field '{city_field}' doesn't contain postal code, using as city name only");
             return Ok(("".to_string(), city_field.to_string()));
         }
 
         let zip = parts[0].trim().to_string();
         let city = parts[1].trim().to_string();
 
-        debug!("Parsed city field: zip='{}', city='{}'", zip, city);
+        debug!("Parsed city field: zip='{zip}', city='{city}'");
         Ok((zip, city))
     }
 
     fn parse_card_line(&self, line: &str) -> Result<CardRecord> {
-        debug!("Attempting to parse as card data: {}", line);
+        debug!("Attempting to parse as card data: {line}");
 
         // Split by tab or multiple spaces
         let parts: Vec<String> = if line.contains('\t') {
@@ -367,7 +364,7 @@ impl CsvProcessor {
     fn parse_set_info(&self, set_info: &str) -> (String, String, String, String, String) {
         let parts: Vec<&str> = set_info.split(" - ").collect();
 
-        let set_name = parts.get(0).unwrap_or(&"Unknown").trim().to_string();
+        let set_name = parts.first().unwrap_or(&"Unknown").trim().to_string();
         let collector_number = parts.get(1).unwrap_or(&"").trim().to_string();
         let rarity = parts.get(2).unwrap_or(&"").trim().to_string();
         let condition = parts.get(3).unwrap_or(&"NM").trim().to_string();
@@ -401,7 +398,7 @@ impl CsvProcessor {
             country: "DE".to_string(),
             is_professional: None,
             vat_number: None,
-            date_of_purchase: chrono::Utc::now().format("%Y-%m-%d").to_string(),
+            date_of_purchase: Utc::now().format("%Y-%m-%d").to_string(),
             article_count: 1,
             merchandise_value: card.price.clone(),
             shipment_costs: "0.00".to_string(),
@@ -426,32 +423,29 @@ impl CsvProcessor {
             let line_num = index + 2; // +2 because CSV is 1-indexed and has header
 
             if order.name.trim().is_empty() {
-                let error_msg = format!("Line {}: Customer name is empty", line_num);
-                warn!("{}", error_msg);
+                let error_msg = format!("Line {line_num}: Customer name is empty");
+                warn!("{error_msg}");
                 errors.push(error_msg);
             }
 
             // Street and City can be empty for some orders, make them warnings instead
             if order.street.trim().is_empty() {
-                debug!(
-                    "Line {}: Street address is empty (this may be acceptable)",
-                    line_num
-                );
+                debug!("Line {line_num}: Street address is empty (this may be acceptable)");
             }
 
             if order.city.trim().is_empty() {
-                debug!("Line {}: City is empty (this may be acceptable)", line_num);
+                debug!("Line {line_num}: City is empty (this may be acceptable)");
             }
 
             if order.country.trim().is_empty() {
-                let error_msg = format!("Line {}: Country is empty", line_num);
-                warn!("{}", error_msg);
+                let error_msg = format!("Line {line_num}: Country is empty");
+                warn!("{error_msg}");
                 errors.push(error_msg);
             }
 
             if order.total_value.trim().is_empty() {
-                let error_msg = format!("Line {}: Total value is empty", line_num);
-                warn!("{}", error_msg);
+                let error_msg = format!("Line {line_num}: Total value is empty");
+                warn!("{error_msg}");
                 errors.push(error_msg);
             } else if self.parse_price(&order.total_value).is_err() {
                 // More lenient price parsing - accept comma as decimal separator
@@ -461,7 +455,7 @@ impl CsvProcessor {
                         "Line {}: Invalid total value format: {}",
                         line_num, order.total_value
                     );
-                    warn!("{}", error_msg);
+                    warn!("{error_msg}");
                     errors.push(error_msg);
                 } else {
                     debug!(
@@ -472,14 +466,14 @@ impl CsvProcessor {
             }
 
             if order.currency.trim().is_empty() {
-                let error_msg = format!("Line {}: Currency is empty", line_num);
-                warn!("{}", error_msg);
+                let error_msg = format!("Line {line_num}: Currency is empty");
+                warn!("{error_msg}");
                 errors.push(error_msg);
             }
 
             if order.date_of_purchase.trim().is_empty() {
-                let error_msg = format!("Line {}: Purchase date is empty", line_num);
-                warn!("{}", error_msg);
+                let error_msg = format!("Line {line_num}: Purchase date is empty");
+                warn!("{error_msg}");
                 errors.push(error_msg);
             }
         }
@@ -494,13 +488,13 @@ impl CsvProcessor {
     }
 
     fn parse_price(&self, price_str: &str) -> Result<f64> {
-        debug!("Parsing price string: {}", price_str);
+        debug!("Parsing price string: {price_str}");
         let clean_price = price_str.replace(',', ".");
         let result = clean_price.parse::<f64>().context("Failed to parse price");
 
         match &result {
-            Ok(value) => debug!("Successfully parsed price: {}", value),
-            Err(e) => warn!("Failed to parse price '{}': {}", price_str, e),
+            Ok(value) => debug!("Successfully parsed price: {value}"),
+            Err(e) => warn!("Failed to parse price '{price_str}': {e}"),
         }
 
         result

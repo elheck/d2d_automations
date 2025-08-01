@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use log::{debug, error, info, warn};
 use reqwest::Client;
-use serde_json;
 
 use crate::models::{
     AddressCategory, ContactCategory, ContactResponse, InvoiceCreationResult, InvoiceResponse,
@@ -31,7 +30,7 @@ impl SevDeskApi {
         debug!("Getting or creating contact for: {}", order.name);
         // First, try to find existing contact by name
         let search_url = format!("{}/Contact", self.base_url);
-        debug!("Searching for existing contact at: {}", search_url);
+        debug!("Searching for existing contact at: {search_url}");
 
         let response = self
             .client
@@ -49,7 +48,7 @@ impl SevDeskApi {
             .text()
             .await
             .context("Failed to read response text")?;
-        debug!("Contact search response body: {}", response_text);
+        debug!("Contact search response body: {response_text}");
 
         // Try to parse the response
         let contacts: SevDeskResponse<ContactResponse> = serde_json::from_str(&response_text)
@@ -97,7 +96,7 @@ impl SevDeskApi {
         };
 
         let create_url = format!("{}/Contact", self.base_url);
-        debug!("Creating new contact at: {}", create_url);
+        debug!("Creating new contact at: {create_url}");
         debug!(
             "Contact payload: {}",
             serde_json::to_string_pretty(&new_contact)
@@ -122,10 +121,7 @@ impl SevDeskApi {
                 .text()
                 .await
                 .context("Failed to read error response")?;
-            error!(
-                "Contact creation failed with status {}: {}",
-                status, error_text
-            );
+            error!("Contact creation failed with status {status}: {error_text}");
             return Err(anyhow::anyhow!(
                 "Failed to create contact: {} - {}",
                 status,
@@ -137,7 +133,7 @@ impl SevDeskApi {
             .text()
             .await
             .context("Failed to read response text")?;
-        debug!("Create contact response body: {}", response_text);
+        debug!("Create contact response body: {response_text}");
 
         let created_contact: SevDeskSingleObjectResponse<ContactResponse> =
             serde_json::from_str(&response_text)
@@ -154,7 +150,7 @@ impl SevDeskApi {
     }
 
     async fn get_country_id(&self, country_name: &str) -> Result<u32> {
-        debug!("Getting country ID for: {}", country_name);
+        debug!("Getting country ID for: {country_name}");
         // Common country mappings for SevDesk
         let country_id = match country_name {
             "Germany" | "Deutschland" => 1,
@@ -168,25 +164,22 @@ impl SevDeskApi {
             "Netherlands" | "Niederlande" => 9,
             "Belgium" | "Belgien" => 10,
             _ => {
-                warn!(
-                    "Unknown country '{}', defaulting to Germany (ID: 1)",
-                    country_name
-                );
+                warn!("Unknown country '{country_name}', defaulting to Germany (ID: 1)");
                 1 // Default to Germany
             }
         };
-        debug!("Country '{}' mapped to ID: {}", country_name, country_id);
+        debug!("Country '{country_name}' mapped to ID: {country_id}");
         Ok(country_id)
     }
 
     fn parse_price(&self, price_str: &str) -> Result<f64> {
-        debug!("Parsing price: '{}'", price_str);
+        debug!("Parsing price: '{price_str}'");
         let clean_price = price_str.replace(',', ".");
         let result = clean_price.parse::<f64>().context("Failed to parse price");
 
         match &result {
-            Ok(price) => debug!("Parsed price '{}' as {}", price_str, price),
-            Err(e) => error!("Failed to parse price '{}': {}", price_str, e),
+            Ok(price) => debug!("Parsed price '{price_str}' as {price}"),
+            Err(e) => error!("Failed to parse price '{price_str}': {e}"),
         }
 
         result
@@ -202,10 +195,7 @@ impl SevDeskApi {
 
         match self.create_invoice_internal(order).await {
             Ok((invoice_id, invoice_number)) => {
-                info!(
-                    "Successfully created invoice: {} for order {}",
-                    invoice_number, order_id
-                );
+                info!("Successfully created invoice: {invoice_number} for order {order_id}");
                 Ok(InvoiceCreationResult {
                     order_id,
                     customer_name,
@@ -215,7 +205,7 @@ impl SevDeskApi {
                 })
             }
             Err(e) => {
-                error!("Failed to create invoice for order {}: {}", order_id, e);
+                error!("Failed to create invoice for order {order_id}: {e}");
                 Ok(InvoiceCreationResult {
                     order_id,
                     customer_name,
@@ -247,7 +237,7 @@ impl SevDeskApi {
                 .text()
                 .await
                 .context("Failed to read error response")?;
-            error!("Get user failed with status {}: {}", status, error_text);
+            error!("Get user failed with status {status}: {error_text}");
             return Err(anyhow::anyhow!(
                 "Failed to get current user: {} - {}",
                 status,
@@ -259,7 +249,7 @@ impl SevDeskApi {
             .text()
             .await
             .context("Failed to read response text")?;
-        debug!("Get user response body: {}", response_text);
+        debug!("Get user response body: {response_text}");
 
         let users: SevDeskResponse<UserResponse> =
             serde_json::from_str(&response_text).context("Failed to parse get user response")?;
@@ -299,10 +289,7 @@ impl SevDeskApi {
         let shipment_costs = self.parse_price(&order.shipment_costs)?;
         let _total_value = self.parse_price(&order.total_value)?;
 
-        debug!(
-            "Parsed prices - merchandise: {}, shipping: {}",
-            merchandise_value, shipment_costs
-        );
+        debug!("Parsed prices - merchandise: {merchandise_value}, shipping: {shipment_costs}");
 
         // Create invoice
         let country_id = self.get_country_id(&order.country).await?;
@@ -357,7 +344,7 @@ impl SevDeskApi {
         };
 
         let create_invoice_url = format!("{}/Invoice", self.base_url);
-        debug!("Creating invoice at: {}", create_invoice_url);
+        debug!("Creating invoice at: {create_invoice_url}");
 
         let response = self
             .client
@@ -377,10 +364,7 @@ impl SevDeskApi {
                 .text()
                 .await
                 .context("Failed to read error response")?;
-            error!(
-                "Invoice creation failed with status {}: {}",
-                status, error_text
-            );
+            error!("Invoice creation failed with status {status}: {error_text}");
             return Err(anyhow::anyhow!(
                 "Failed to create invoice: {} - {}",
                 status,
@@ -392,7 +376,7 @@ impl SevDeskApi {
             .text()
             .await
             .context("Failed to read response text")?;
-        debug!("Create invoice response body: {}", response_text);
+        debug!("Create invoice response body: {response_text}");
 
         let created_invoice: SevDeskSingleObjectResponse<InvoiceResponse> =
             serde_json::from_str(&response_text)
@@ -400,10 +384,7 @@ impl SevDeskApi {
 
         let invoice_id = created_invoice.objects.id.clone();
         let invoice_number = created_invoice.objects.invoice_number;
-        debug!(
-            "Created invoice with ID: {} and number: {}",
-            invoice_id, invoice_number
-        );
+        debug!("Created invoice with ID: {invoice_id} and number: {invoice_number}");
 
         // Add each item as a separate invoice position
         let mut position_number = 1;
@@ -465,7 +446,7 @@ impl SevDeskApi {
 
         // Add shipping costs as separate position if any
         if shipment_costs > 0.0 {
-            debug!("Adding shipping position: {}", shipment_costs);
+            debug!("Adding shipping position: {shipment_costs}");
             self.add_invoice_position(
                 &invoice_id,
                 position_number,
@@ -489,10 +470,7 @@ impl SevDeskApi {
         quantity: f64,
         price_gross: f64,
     ) -> Result<()> {
-        debug!(
-            "Adding invoice position {}: {} x {} @ {}",
-            position_number, quantity, name, price_gross
-        );
+        debug!("Adding invoice position {position_number}: {quantity} x {name} @ {price_gross}");
 
         // For Kleingewerbe (tax rule 11), no VAT is applied
         let tax_rate = 0.0; // No VAT for Kleingewerbe
@@ -500,8 +478,7 @@ impl SevDeskApi {
         let price_tax = 0.0; // No tax
 
         debug!(
-            "Kleingewerbe pricing - net: {:.2}, tax: {:.2}, gross: {:.2}",
-            price_net, price_tax, price_gross
+            "Kleingewerbe pricing - net: {price_net:.2}, tax: {price_tax:.2}, gross: {price_gross:.2}"
         );
 
         let position = SevDeskInvoicePos {
@@ -527,7 +504,7 @@ impl SevDeskApi {
         };
 
         let create_position_url = format!("{}/InvoicePos", self.base_url);
-        debug!("Creating invoice position at: {}", create_position_url);
+        debug!("Creating invoice position at: {create_position_url}");
 
         let response = self
             .client
@@ -542,7 +519,7 @@ impl SevDeskApi {
         debug!("Create position response status: {}", response.status());
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            error!("Failed to create invoice position: {}", error_text);
+            error!("Failed to create invoice position: {error_text}");
         }
 
         Ok(())
@@ -551,7 +528,7 @@ impl SevDeskApi {
     pub async fn test_connection(&self) -> Result<bool> {
         info!("Testing SevDesk API connection");
         let test_url = format!("{}/Tools/bookkeepingSystemVersion", self.base_url);
-        debug!("Testing connection at: {}", test_url);
+        debug!("Testing connection at: {test_url}");
 
         let response = self
             .client
@@ -570,11 +547,11 @@ impl SevDeskApi {
 
         if !success {
             let error_text = response.text().await.unwrap_or_default();
-            warn!("API connection test failed: {}", error_text);
-            error!("Response body: {}", error_text);
+            warn!("API connection test failed: {error_text}");
+            error!("Response body: {error_text}");
         } else {
             let response_text = response.text().await.unwrap_or_default();
-            info!("API connection successful. Response: {}", response_text);
+            info!("API connection successful. Response: {response_text}");
         }
 
         Ok(success)

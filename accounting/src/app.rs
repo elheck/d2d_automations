@@ -171,7 +171,7 @@ impl eframe::App for InvoiceApp {
                         ui.add(egui::ProgressBar::new(0.0).animate(true));
                     }
                     ProcessingState::Processing { current, total } => {
-                        ui.label(format!("Processing invoices... ({}/{})", current, total));
+                        ui.label(format!("Processing invoices... ({current}/{total})"));
                         let progress = *current as f32 / *total as f32;
                         ui.add(egui::ProgressBar::new(progress));
                     }
@@ -195,8 +195,7 @@ impl eframe::App for InvoiceApp {
                         let error_count = self.results.len() - success_count;
 
                         ui.label(format!(
-                            "Results: {} successful, {} errors",
-                            success_count, error_count
+                            "Results: {success_count} successful, {error_count} errors"
                         ));
 
                         egui::ScrollArea::vertical()
@@ -251,7 +250,7 @@ impl InvoiceApp {
                     self.api_connection_status = Some(success);
                 }
                 Err(e) => {
-                    error!("API connection test error: {}", e);
+                    error!("API connection test error: {e}");
                     self.api_connection_status = Some(false);
                 }
             }
@@ -266,7 +265,7 @@ impl InvoiceApp {
             .add_filter("CSV files", &["csv"])
             .pick_file()
         {
-            info!("Selected CSV file: {:?}", path);
+            info!("Selected CSV file: {path:?}");
             self.processing_state = ProcessingState::LoadingCsv;
             self.csv_file_path = Some(path.clone());
 
@@ -285,7 +284,7 @@ impl InvoiceApp {
                     } else {
                         warn!("Found {} validation errors", self.validation_errors.len());
                         for error in &self.validation_errors {
-                            warn!("Validation error: {}", error);
+                            warn!("Validation error: {error}");
                         }
                         self.orders.clear();
                     }
@@ -293,7 +292,7 @@ impl InvoiceApp {
                     self.processing_state = ProcessingState::Idle;
                 }
                 Err(e) => {
-                    error!("Failed to load CSV file: {}", e);
+                    error!("Failed to load CSV file: {e}");
                     self.validation_errors = vec![format!("Failed to load CSV file: {}", e)];
                     self.orders.clear();
                     self.processing_state = ProcessingState::Idle;
@@ -377,10 +376,7 @@ impl InvoiceApp {
 
         let success_count = self.results.iter().filter(|r| r.error.is_none()).count();
         let error_count = self.results.len() - success_count;
-        info!(
-            "Invoice processing completed: {} successful, {} errors",
-            success_count, error_count
-        );
+        info!("Invoice processing completed: {success_count} successful, {error_count} errors");
 
         self.processing_state = ProcessingState::Completed;
     }
