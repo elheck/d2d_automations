@@ -231,8 +231,8 @@ impl CsvProcessor {
 
         // Look for patterns like "2x", "10x", etc. at the beginning of the description
         if let Some(first_part) = description.split_whitespace().next() {
-            if first_part.ends_with('x') {
-                if let Ok(quantity) = first_part[..first_part.len() - 1].parse::<u32>() {
+            if let Some(stripped) = first_part.strip_suffix('x') {
+                if let Ok(quantity) = stripped.parse::<u32>() {
                     debug!("Found quantity: {quantity}");
                     return quantity;
                 }

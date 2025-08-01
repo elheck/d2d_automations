@@ -447,10 +447,7 @@ impl InvoiceApp {
         } else {
             "processing"
         };
-        info!(
-            "Invoice {} completed: {success_count} successful, {error_count} errors",
-            action
-        );
+        info!("Invoice {action} completed: {success_count} successful, {error_count} errors");
 
         self.processing_state = ProcessingState::Completed;
     }

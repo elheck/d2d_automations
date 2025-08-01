@@ -390,8 +390,7 @@ impl SevDeskApi {
         let shipment_costs = self.parse_price(&order.shipment_costs)?;
         let total_value = self.parse_price(&order.total_value)?;
         debug!(
-            "Prices would be - merchandise: {:.2}, shipping: {:.2}, total: {:.2}",
-            merchandise_value, shipment_costs, total_value
+            "Prices would be - merchandise: {merchandise_value:.2}, shipping: {shipment_costs:.2}, total: {total_value:.2}"
         );
 
         // Validate items and quantities
@@ -414,12 +413,12 @@ impl SevDeskApi {
         }
 
         if shipment_costs > 0.0 {
-            debug!("Would add shipping position: {:.2} EUR", shipment_costs);
+            debug!("Would add shipping position: {shipment_costs:.2} EUR");
         }
 
         // Generate a simulated invoice number
         let simulated_invoice_number = format!("DRY-{}", order.order_id);
-        debug!("Simulated invoice number: {}", simulated_invoice_number);
+        debug!("Simulated invoice number: {simulated_invoice_number}");
 
         Ok(simulated_invoice_number)
     }
