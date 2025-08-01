@@ -1,0 +1,449 @@
+use anyhow::{Context, Result};
+use reqwest::Client;
+use log::{debug, info, warn, error};
+use serde_json;
+
+use crate::models::{
+    ContactResponse, InvoiceResponse, OrderRecord, SevDeskAddress, SevDeskContact,
+    SevDeskContactRef, SevDeskCountry, SevDeskInvoice, SevDeskInvoicePos, SevDeskInvoiceRef,
+    SevDeskObjectResponse, SevDeskSingleObjectResponse, SevDeskResponse, SevDeskUnity, SevDeskUser, AddressCategory,
+    ContactCategory, InvoiceCreationResult, UserResponse, SevDeskTaxRule,
+};
+
+pub struct SevDeskApi {
+    client: Client,
+    api_token: String,
+    base_url: String,
+}
+
+impl SevDeskApi {
+    pub fn new(api_token: String) -> Self {
+        info!("Creating SevDesk API client");
+        debug!("API token length: {}", api_token.len());
+        Self {
+            client: Client::new(),
+            api_token,
+            base_url: "https://my.sevdesk.de/api/v1".to_string(),
+        }
+    }
+
+    async fn get_or_create_contact(&self, order: &OrderRecord) -> Result<u32> {
+        debug!("Getting or creating contact for: {}", order.name);
+        // First, try to find existing contact by name
+        let search_url = format!("{}/Contact", self.base_url);
+        debug!("Searching for existing contact at: {}", search_url);
+        
+        let response = self
+            .client
+            .get(&search_url)
+            .header("Authorization", &self.api_token)
+            .query(&[("name", &order.name)])
+            .send()
+            .await
+            .context("Failed to search for contact")?;
+
+        debug!("Contact search response status: {}", response.status());
+        
+        // Get the response text first to debug the structure
+        let response_text = response.text().await.context("Failed to read response text")?;
+        debug!("Contact search response body: {}", response_text);
+        
+        // Try to parse the response
+        let contacts: SevDeskResponse<ContactResponse> = serde_json::from_str(&response_text)
+            .context("Failed to parse contact search response")?;
+
+        if let Some(existing_contacts) = contacts.objects {
+            if !existing_contacts.is_empty() {
+                if let Some(contact) = existing_contacts.first() {
+                    let contact_id = contact.id.parse::<u32>()
+                        .context("Failed to parse contact ID from string")?;
+                    info!("Found existing contact: {} (ID: {})", order.name, contact_id);
+                    return Ok(contact_id);
+                }
+            }
+        }
+
+        debug!("No existing contact found, creating new contact");
+        // Create new contact if not found
+        let country_id = self.get_country_id(&order.country).await?;
+        
+        let new_contact = SevDeskContact {
+            name: order.name.clone(),
+            category: ContactCategory { 
+                id: 3, 
+                object_name: "Category".to_string() 
+            }, // Customer category
+            addresses: vec![SevDeskAddress {
+                street: order.street.clone(),
+                zip: order.zip.clone(),
+                city: order.city.clone(),
+                country: SevDeskCountry { 
+                    id: country_id,
+                    object_name: "StaticCountry".to_string(),
+                },
+                category: AddressCategory { 
+                    id: 47, 
+                    object_name: "Category".to_string() 
+                }, // Billing address
+            }],
+        };
+
+        let create_url = format!("{}/Contact", self.base_url);
+        debug!("Creating new contact at: {}", create_url);
+        debug!("Contact payload: {}", serde_json::to_string_pretty(&new_contact).unwrap_or_else(|_| "Failed to serialize".to_string()));
+        
+        let response = self
+            .client
+            .post(&create_url)
+            .header("Authorization", &self.api_token)
+            .header("Content-Type", "application/json")
+            .json(&new_contact)
+            .send()
+            .await
+            .context("Failed to create contact")?;
+
+        debug!("Create contact response status: {}", response.status());
+        
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.context("Failed to read error response")?;
+            error!("Contact creation failed with status {}: {}", status, error_text);
+            return Err(anyhow::anyhow!("Failed to create contact: {} - {}", status, error_text));
+        }
+        
+        let response_text = response.text().await.context("Failed to read response text")?;
+        debug!("Create contact response body: {}", response_text);
+        
+        let created_contact: SevDeskSingleObjectResponse<ContactResponse> = serde_json::from_str(&response_text)
+            .context("Failed to parse create contact response")?;
+
+        let contact_id = created_contact.objects.id.parse::<u32>()
+            .context("Failed to parse created contact ID from string")?;
+        
+        info!("Created new contact: {} (ID: {})", order.name, contact_id);
+        Ok(contact_id)
+    }
+
+    async fn get_country_id(&self, country_name: &str) -> Result<u32> {
+        debug!("Getting country ID for: {}", country_name);
+        // Common country mappings for SevDesk
+        let country_id = match country_name {
+            "Germany" | "Deutschland" => 1,
+            "Austria" | "Österreich" => 2,
+            "Switzerland" | "Schweiz" => 3,
+            "United States" | "USA" => 4,
+            "United Kingdom" | "UK" => 5,
+            "France" | "Frankreich" => 6,
+            "Italy" | "Italien" => 7,
+            "Spain" | "Spanien" => 8,
+            "Netherlands" | "Niederlande" => 9,
+            "Belgium" | "Belgien" => 10,
+            _ => {
+                warn!("Unknown country '{}', defaulting to Germany (ID: 1)", country_name);
+                1 // Default to Germany
+            }
+        };
+        debug!("Country '{}' mapped to ID: {}", country_name, country_id);
+        Ok(country_id)
+    }
+
+    fn parse_price(&self, price_str: &str) -> Result<f64> {
+        debug!("Parsing price: '{}'", price_str);
+        let clean_price = price_str.replace(',', ".");
+        let result = clean_price
+            .parse::<f64>()
+            .context("Failed to parse price");
+        
+        match &result {
+            Ok(price) => debug!("Parsed price '{}' as {}", price_str, price),
+            Err(e) => error!("Failed to parse price '{}': {}", price_str, e),
+        }
+        
+        result
+    }
+
+    pub async fn create_invoice(&self, order: &OrderRecord) -> Result<InvoiceCreationResult> {
+        info!("Creating invoice for order: {} ({})", order.order_id, order.name);
+        let order_id = order.order_id.clone();
+        let customer_name = order.name.clone();
+
+        match self.create_invoice_internal(order).await {
+            Ok((invoice_id, invoice_number)) => {
+                info!("Successfully created invoice: {} for order {}", invoice_number, order_id);
+                Ok(InvoiceCreationResult {
+                    order_id,
+                    customer_name,
+                    invoice_id: Some(invoice_id.parse().unwrap_or(0)),
+                    invoice_number: Some(invoice_number),
+                    error: None,
+                })
+            },
+            Err(e) => {
+                error!("Failed to create invoice for order {}: {}", order_id, e);
+                Ok(InvoiceCreationResult {
+                    order_id,
+                    customer_name,
+                    invoice_id: None,
+                    invoice_number: None,
+                    error: Some(e.to_string()),
+                })
+            }
+        }
+    }
+
+    async fn get_current_user(&self) -> Result<u32> {
+        debug!("Getting current user information");
+        let url = format!("{}/SevUser", self.base_url);
+        
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", &self.api_token)
+            .send()
+            .await
+            .context("Failed to get current user")?;
+
+        debug!("Get user response status: {}", response.status());
+        
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.context("Failed to read error response")?;
+            error!("Get user failed with status {}: {}", status, error_text);
+            return Err(anyhow::anyhow!("Failed to get current user: {} - {}", status, error_text));
+        }
+        
+        let response_text = response.text().await.context("Failed to read response text")?;
+        debug!("Get user response body: {}", response_text);
+        
+        let users: SevDeskResponse<UserResponse> = serde_json::from_str(&response_text)
+            .context("Failed to parse get user response")?;
+
+        if let Some(user_list) = users.objects {
+            if !user_list.is_empty() {
+                if let Some(user) = user_list.first() {
+                    let user_id = user.id.parse::<u32>()
+                        .context("Failed to parse user ID from string")?;
+                    info!("Found current user: {} (ID: {})", user.username, user_id);
+                    return Ok(user_id);
+                }
+            }
+        }
+
+        // Fallback: try to get the user from the sevClient info
+        warn!("No user found in SevUser endpoint, using default user ID 1");
+        Ok(1)
+    }
+
+    async fn create_invoice_internal(&self, order: &OrderRecord) -> Result<(String, String)> {
+        debug!("Starting internal invoice creation for order: {}", order.order_id);
+        
+        // Get or create contact
+        let contact_id = self.get_or_create_contact(order).await?;
+
+        // Get current user ID
+        let user_id = self.get_current_user().await?;
+
+        // Parse prices
+        let merchandise_value = self.parse_price(&order.merchandise_value)?;
+        let shipment_costs = self.parse_price(&order.shipment_costs)?;
+        let _total_value = self.parse_price(&order.total_value)?;
+
+        debug!("Parsed prices - merchandise: {}, shipping: {}", merchandise_value, shipment_costs);
+
+        // Create invoice
+        let country_id = self.get_country_id(&order.country).await?;
+        
+        // Format the complete address
+        let formatted_address = format!("{}\n{}\n{} {}", 
+            order.name,
+            order.street,
+            order.zip,
+            order.city
+        );
+        
+        let invoice = SevDeskInvoice {
+            invoice_number: None, // Let SevDesk auto-generate
+            contact: SevDeskContactRef { 
+                id: contact_id,
+                object_name: "Contact".to_string(),
+            },
+            invoice_date: chrono::Utc::now().format("%Y-%m-%d").to_string(),
+            header: format!("Invoice for Order {}", order.order_id),
+            head_text: Some("Thank you for your order.".to_string()),
+            foot_text: Some("Please pay within 14 days.".to_string()),
+            address: Some(formatted_address),
+            address_country: SevDeskCountry { 
+                id: country_id,
+                object_name: "StaticCountry".to_string(),
+            },
+            delivery_date: order.date_of_purchase.split(' ').next().unwrap_or("").to_string(),
+            status: 100, // Draft status
+            small_settlement: false,
+            contact_person: SevDeskUser { 
+                id: user_id,
+                object_name: "SevUser".to_string(),
+            },
+            tax_rate: 0.0, // No VAT for Kleingewerbe
+            tax_text: "Kleinunternehmerregelung §19 UStG".to_string(),
+            tax_rule: SevDeskTaxRule {
+                id: 11, // Tax rule 11 for Kleingewerbe
+                object_name: "TaxRule".to_string(),
+            },
+            dunning_level: None,
+            invoice_type: "RE".to_string(), // Regular invoice
+            currency: order.currency.clone(),
+        };
+
+        let create_invoice_url = format!("{}/Invoice", self.base_url);
+        debug!("Creating invoice at: {}", create_invoice_url);
+        
+        let response = self
+            .client
+            .post(&create_invoice_url)
+            .header("Authorization", &self.api_token)
+            .header("Content-Type", "application/json")
+            .json(&invoice)
+            .send()
+            .await
+            .context("Failed to create invoice")?;
+
+        debug!("Create invoice response status: {}", response.status());
+        
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.context("Failed to read error response")?;
+            error!("Invoice creation failed with status {}: {}", status, error_text);
+            return Err(anyhow::anyhow!("Failed to create invoice: {} - {}", status, error_text));
+        }
+        
+        let response_text = response.text().await.context("Failed to read response text")?;
+        debug!("Create invoice response body: {}", response_text);
+        
+        let created_invoice: SevDeskSingleObjectResponse<InvoiceResponse> = serde_json::from_str(&response_text)
+            .context("Failed to parse create invoice response")?;
+
+        let invoice_id = created_invoice.objects.id.clone();
+        let invoice_number = created_invoice.objects.invoice_number;
+        debug!("Created invoice with ID: {} and number: {}", invoice_id, invoice_number);
+
+        // Add merchandise as invoice position
+        if merchandise_value > 0.0 {
+            debug!("Adding merchandise position: {} x {} = {}", 
+                order.article_count, merchandise_value, order.article_count as f64 * merchandise_value);
+            self.add_invoice_position(
+                &invoice_id,
+                1,
+                &order.localized_product_name,
+                &order.description,
+                order.article_count as f64,
+                merchandise_value,
+            ).await?;
+        }
+
+        // Add shipping costs as separate position if any
+        if shipment_costs > 0.0 {
+            debug!("Adding shipping position: {}", shipment_costs);
+            self.add_invoice_position(
+                &invoice_id,
+                2,
+                "Shipping",
+                "Shipping costs",
+                1.0,
+                shipment_costs,
+            ).await?;
+        }
+
+        Ok((invoice_id, invoice_number))
+    }
+
+    async fn add_invoice_position(
+        &self,
+        invoice_id: &str,
+        position_number: u32,
+        name: &str,
+        description: &str,
+        quantity: f64,
+        price_gross: f64,
+    ) -> Result<()> {
+        debug!("Adding invoice position {}: {} x {} @ {}", 
+            position_number, quantity, name, price_gross);
+            
+        let tax_rate = 19.0; // 19% VAT
+        let price_net = price_gross / (1.0 + tax_rate / 100.0);
+        let price_tax = price_gross - price_net;
+
+        debug!("Calculated prices - net: {:.2}, tax: {:.2}, gross: {:.2}", 
+            price_net, price_tax, price_gross);
+
+        let position = SevDeskInvoicePos {
+            invoice: SevDeskInvoiceRef { 
+                id: invoice_id.to_string(),
+                object_name: "Invoice".to_string(),
+            },
+            part: None,
+            quantity,
+            price: price_net,
+            name: name.to_string(),
+            unity: SevDeskUnity { 
+                id: 1, 
+                object_name: "Unity".to_string() 
+            }, // Piece
+            position_number,
+            text: description.to_string(),
+            discount: None,
+            tax_rate,
+            price_net,
+            price_tax,
+            price_gross,
+        };
+
+        let create_position_url = format!("{}/InvoicePos", self.base_url);
+        debug!("Creating invoice position at: {}", create_position_url);
+        
+        let response = self
+            .client
+            .post(&create_position_url)
+            .header("Authorization", &self.api_token)
+            .header("Content-Type", "application/json")
+            .json(&position)
+            .send()
+            .await
+            .context("Failed to create invoice position")?;
+
+        debug!("Create position response status: {}", response.status());
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            error!("Failed to create invoice position: {}", error_text);
+        }
+
+        Ok(())
+    }
+
+    pub async fn test_connection(&self) -> Result<bool> {
+        info!("Testing SevDesk API connection");
+        let test_url = format!("{}/Tools/bookkeepingSystemVersion", self.base_url);
+        debug!("Testing connection at: {}", test_url);
+        
+        let response = self
+            .client
+            .get(&test_url)
+            .header("Authorization", &self.api_token)
+            .send()
+            .await
+            .context("Failed to test API connection")?;
+
+        let success = response.status().is_success();
+        debug!("API connection test result: {} (status: {})", success, response.status());
+        
+        if !success {
+            let error_text = response.text().await.unwrap_or_default();
+            warn!("API connection test failed: {}", error_text);
+            error!("Response body: {}", error_text);
+        } else {
+            let response_text = response.text().await.unwrap_or_default();
+            info!("API connection successful. Response: {}", response_text);
+        }
+
+        Ok(success)
+    }
+}
