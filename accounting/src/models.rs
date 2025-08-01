@@ -7,6 +7,7 @@ pub struct OrderItem {
     pub product_id: String,
     pub localized_product_name: String,
     pub price: f64,
+    pub quantity: u32, // Quantity extracted from description (e.g., "2x" = 2)
 }
 
 #[derive(Debug, Clone, Deserialize)]

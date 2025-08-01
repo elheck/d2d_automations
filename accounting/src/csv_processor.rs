@@ -195,11 +195,13 @@ impl CsvProcessor {
 
             for ((desc, id), name) in descriptions.iter().zip(ids.iter()).zip(names.iter()) {
                 let price = self.extract_price_from_description(desc)?;
+                let quantity = self.extract_quantity_from_description(desc);
                 items.push(OrderItem {
                     description: desc.trim().to_string(),
                     product_id: id.trim().to_string(),
                     localized_product_name: name.trim().to_string(),
                     price,
+                    quantity,
                 });
             }
 
@@ -210,16 +212,35 @@ impl CsvProcessor {
             let price = self
                 .extract_price_from_description(description)
                 .unwrap_or(0.0);
+            let quantity = self.extract_quantity_from_description(description);
             let item = OrderItem {
                 description: description.to_string(),
                 product_id: product_ids.to_string(),
                 localized_product_name: product_names.to_string(),
                 price,
+                quantity,
             };
 
-            debug!("Single item order, price: {price:.2}");
+            debug!("Single item order, price: {price:.2}, quantity: {quantity}");
             Ok(vec![item])
         }
+    }
+
+    fn extract_quantity_from_description(&self, description: &str) -> u32 {
+        debug!("Extracting quantity from description: {description}");
+        
+        // Look for patterns like "2x", "10x", etc. at the beginning of the description
+        if let Some(first_part) = description.split_whitespace().next() {
+            if first_part.ends_with('x') {
+                if let Ok(quantity) = first_part[..first_part.len()-1].parse::<u32>() {
+                    debug!("Found quantity: {quantity}");
+                    return quantity;
+                }
+            }
+        }
+        
+        debug!("No quantity found, defaulting to 1");
+        1 // Default to 1 if no quantity is found
     }
 
     fn extract_price_from_description(&self, description: &str) -> Result<f64> {
@@ -386,6 +407,7 @@ impl CsvProcessor {
             product_id: card.product_id.clone(),
             localized_product_name: card.card_name.clone(),
             price: self.parse_price(&card.price).unwrap_or(0.0),
+            quantity: 1, // Default to 1 for card-based orders
         };
 
         OrderRecord {

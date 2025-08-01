@@ -508,15 +508,15 @@ impl SevDeskApi {
             info!("Adding {} individual items to invoice", order.items.len());
             for item in &order.items {
                 debug!(
-                    "Adding item position {}: {} @ {:.2} EUR",
-                    position_number, item.localized_product_name, item.price
+                    "Adding item position {}: {} x {} @ {:.2} EUR",
+                    position_number, item.quantity, item.localized_product_name, item.price
                 );
                 self.add_invoice_position(
                     &invoice_id,
                     position_number,
                     &item.localized_product_name,
                     &item.description,
-                    1.0, // Each item has quantity 1
+                    item.quantity as f64, // Use the extracted quantity from description
                     item.price,
                 )
                 .await?;
@@ -527,14 +527,14 @@ impl SevDeskApi {
             let item = &order.items[0];
             debug!(
                 "Adding single item position: {} x {} @ {:.2} EUR",
-                order.article_count, item.localized_product_name, item.price
+                item.quantity, item.localized_product_name, item.price
             );
             self.add_invoice_position(
                 &invoice_id,
                 position_number,
                 &item.localized_product_name,
                 &item.description,
-                order.article_count as f64,
+                item.quantity as f64, // Use the extracted quantity from description
                 item.price,
             )
             .await?;
