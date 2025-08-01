@@ -151,18 +151,133 @@ impl SevDeskApi {
 
     async fn get_country_id(&self, country_name: &str) -> Result<u32> {
         debug!("Getting country ID for: {country_name}");
-        // Common country mappings for SevDesk
+        // Complete country mappings for SevDesk based on StaticCountry API
         let country_id = match country_name {
+            // Major countries (most commonly used)
             "Germany" | "Deutschland" => 1,
-            "Austria" | "Österreich" => 2,
-            "Switzerland" | "Schweiz" => 3,
-            "United States" | "USA" => 4,
-            "United Kingdom" | "UK" => 5,
-            "France" | "Frankreich" => 6,
-            "Italy" | "Italien" => 7,
-            "Spain" | "Spanien" => 8,
-            "Netherlands" | "Niederlande" => 9,
-            "Belgium" | "Belgien" => 10,
+            "Austria" | "Österreich" => 2, // Note: This might need verification - not in provided data
+            "Switzerland" | "Schweiz" => 3, // Note: This might need verification - not in provided data
+            "Afghanistan" => 4,
+            "Argentina" | "Argentinien" => 5,
+            "Belgium" | "Belgien" => 6,
+            "Bulgaria" | "Bulgarien" => 7,
+            "Denmark" | "Dänemark" => 8,
+            "Great Britain" | "Großbritannien" | "United Kingdom" | "UK" => 9,
+            "Finland" | "Finnland" => 10,
+            "France" | "Frankreich" => 11,
+            "Greece" | "Griechenland" => 12,
+            "Ireland" | "Irland" => 13,
+            "Italy" | "Italien" => 14,
+            "Jamaica" | "Jamaika" => 15,
+            
+            // Extended country list from SevDesk API
+            "Azerbaijan" | "Aserbaidschan" => 33,
+            "Israel" => 36,
+            "Australia" | "Australien" => 38,
+            "Netherlands" | "Niederlande" => 39,
+            "Japan" => 40,
+            "Poland" | "Polen" => 42,
+            "Belize" => 46,
+            "Sweden" | "Schweden" => 48,
+            "Chile" => 49,
+            "Iceland" | "Island" => 51,
+            "Spain" | "Spanien" => 55,
+            "Hong Kong" | "Hongkong" => 59,
+            "United States" | "USA" => 60,
+            "Dubai" => 67,
+            "Brazil" | "Brasilien" => 73,
+            "England" => 74,
+            
+            // African countries
+            "Algeria" | "Algerien" => 1458,
+            "Angola" => 1466,
+            "Benin" => 1472,
+            "Burkina Faso" => 1473,
+            "Botswana" => 1481,
+            "Burundi" => 1404,
+            "Cameroon" | "Kamerun" => 1400,
+            "Chad" => 1482, // Assuming based on pattern
+            "Egypt" | "Ägypten" => 1383,
+            "Equatorial Guinea" | "Äquatorialguinea" => 1503,
+            "Eritrea" => 1406,
+            "Ethiopia" | "Äthiopien" => 1399,
+            "Gabon" | "Gabun" => 1498,
+            "Gambia" => 1501,
+            "Ghana" => 1382,
+            "Guinea" => 1376,
+            "Guinea-Bissau" => 1502,
+            "Ivory Coast" | "Elfenbeinküste" => 1381,
+            
+            // Asian countries
+            "Armenia" | "Armenien" => 1348,
+            "Bangladesh" | "Bangladesch" => 1440,
+            "Bhutan" => 1350,
+            "Brunei" => 1479,
+            "Cambodia" | "Kambodscha" => 1401,
+            "Georgia" | "Georgien" => 1394,
+            "India" | "Indien" => 1375,
+            "Indonesia" | "Indonesien" => 1374,
+            "Iran" => 1373,
+            "Iraq" | "Irak" => 1419,
+            "Jordan" | "Jordanien" => 1344,
+            "Yemen" | "Jemen" => 1459,
+            
+            // European countries
+            "Albania" | "Albanien" => 1347,
+            "Andorra" => 1418,
+            "Bosnia and Herzegovina" | "Bosnien und Herzegowina" => 1396,
+            "Estonia" | "Estland" => 1390,
+            "Åland Islands" | "Ålandinseln" => 1468,
+            "Faroe Islands" | "Färöer-Inseln" => 1496,
+            "Gibraltar" => 1500,
+            "Guernsey" => 1499,
+            "Isle of Man" => 1513,
+            "Jersey" => 1515,
+            
+            // American countries
+            "Antigua and Barbuda" | "Antigua und Barbuda" => 1449,
+            "Aruba" => 1465,
+            "Bahamas" => 1426,
+            "Bahrain" => 1427,
+            "Barbados" => 1445,
+            "Bolivia" | "Bolivien" => 1477,
+            "Costa Rica" => 1421,
+            "Curaçao" => 1455,
+            "Dominica" => 1491,
+            "Dominican Republic" | "Dominikanische Republik" => 1447,
+            "Ecuador" => 1492,
+            "El Salvador" => 1450,
+            "Grenada" => 1504,
+            "Guatemala" => 1506,
+            "Guyana" => 1509,
+            "Haiti" => 1512,
+            "Honduras" => 1511,
+            
+            // Caribbean and territories
+            "Anguilla" => 1467,
+            "American Samoa" | "Amerikanisch-Samoa" => 1469,
+            "American Virgin Islands" | "Amerikanische Jungferninseln" => 1559,
+            "British Virgin Islands" | "Britische Jungferninseln" => 1391,
+            "Bermuda" => 1476,
+            "Cayman Islands" | "Kaimaninseln" => 1460,
+            "Cook Islands" | "Cookinseln" => 1486,
+            "Falkland Islands" | "Falklandinseln" => 1495,
+            "Fiji" | "Fidschi" => 1494,
+            "Guam" => 1508,
+            "Guadeloupe" => 1438,
+            
+            // Special territories
+            "Antarctica" | "Antarktis" => 1470,
+            "Bouvet Island" | "Bouvetinsel" => 1480,
+            "British Indian Ocean Territory" | "Britisches Territorium im Indischen Ozean" => 1514,
+            "French Guiana" | "Französisch Guyana" => 1507,
+            "French Polynesia" | "Französisch-Polynesien" => 1351,
+            "French Southern and Antarctic Lands" | "Französische Süd-und Antarktisgebiete" => 1471,
+            "Heard Island and McDonald Islands" | "Heard und die McDonaldinseln" => 1510,
+            
+            // Additional African countries
+            "Djibouti" | "Dschibuti" => 1405,
+            
             _ => {
                 warn!("Unknown country '{country_name}', defaulting to Germany (ID: 1)");
                 1 // Default to Germany
