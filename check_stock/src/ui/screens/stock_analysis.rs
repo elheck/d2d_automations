@@ -4,7 +4,7 @@ use crate::{
         state::{Screen, StockAnalysisState},
         components::FilePicker,
     },
-    stock_analysis::{StockAnalysis, format_stock_analysis},
+    stock_analysis::{StockAnalysis, format_stock_analysis_with_sort, SortOrder},
     io::read_csv,
 };
 
@@ -33,6 +33,21 @@ impl StockAnalysisScreen {
                 ui.label("Minimum Free Slots:");
                 ui.add(egui::Slider::new(&mut state.free_slots, 1..=30)
                     .text("slots"));
+            });
+
+            ui.add_space(5.0);
+
+            ui.horizontal(|ui| {
+                ui.label("Sort by:");
+                egui::ComboBox::from_label("")
+                    .selected_text(match state.sort_order {
+                        SortOrder::ByFreeSlots => "Free Slots (Descending)",
+                        SortOrder::ByLocation => "Location (Ascending)",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut state.sort_order, SortOrder::ByFreeSlots, "Free Slots (Descending)");
+                        ui.selectable_value(&mut state.sort_order, SortOrder::ByLocation, "Location (Ascending)");
+                    });
             });
 
             ui.add_space(10.0);
@@ -79,7 +94,7 @@ impl StockAnalysisScreen {
         let inventory = read_csv(&state.inventory_path)?;
         let analyzer = StockAnalysis::new(inventory);
         let stats = analyzer.analyze_with_free_slots(state.free_slots);
-        state.output = format_stock_analysis(&stats);
+        state.output = format_stock_analysis_with_sort(&stats, state.sort_order);
         Ok(())
     }
 }

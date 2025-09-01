@@ -1,4 +1,5 @@
 use crate::models::Card;
+use crate::stock_analysis::SortOrder;
 use super::language::Language;
 
 type CardMatch = (Card, i32, String);
@@ -70,6 +71,7 @@ pub struct StockAnalysisState {
     pub inventory_path: String,
     pub output: String,
     pub free_slots: i32,
+    pub sort_order: SortOrder,
 }
 
 impl Default for StockAnalysisState {
@@ -78,6 +80,7 @@ impl Default for StockAnalysisState {
             inventory_path: String::new(),
             output: String::new(),
             free_slots: 5,
+            sort_order: SortOrder::ByFreeSlots,
         }
     }
 }
