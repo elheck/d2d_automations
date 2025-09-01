@@ -12,9 +12,72 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  test:
+    name: Run Tests Before Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libssl-dev \
+            libgtk-3-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libx11-dev \
+            libwayland-dev \
+            libxcb-randr0-dev \
+            libxcb-ewmh-dev \
+            libxcb-icccm4-dev \
+            libxcursor-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            check_stock/target
+            accounting/target
+          key: ${{ runner.os }}-test-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Test check_stock
+        run: |
+          cd check_stock
+          echo "Running check_stock tests..."
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --verbose --all-targets
+          cargo test --doc --verbose
+          echo "check_stock tests completed successfully"
+
+      - name: Test accounting
+        run: |
+          cd accounting
+          echo "Running accounting tests..."
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --verbose --all-targets
+          cargo test --doc --verbose
+          echo "accounting tests completed successfully"
+
   build:
     name: Build Release
     runs-on: ${{ matrix.os }}
+    needs: test
     strategy:
       matrix:
         include:
@@ -81,6 +144,14 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.project }}-cargo-${{ hashFiles(format('{0}/Cargo.lock', matrix.project)) }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.project }}-cargo-
+
+      - name: Run tests before build
+        timeout-minutes: 15
+        run: |
+          cd ${{ matrix.project }}
+          echo "Running tests for ${{ matrix.project }} on ${{ matrix.os }}..."
+          cargo test --verbose --all-targets --target ${{ matrix.target }}
+          echo "All tests passed for ${{ matrix.project }}"
 
       - name: Build
         timeout-minutes: 30

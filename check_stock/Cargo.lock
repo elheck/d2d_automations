@@ -644,6 +644,7 @@ dependencies = [
  "regex",
  "rfd",
  "serde",
+ "tempfile",
  "winit",
 ]
 

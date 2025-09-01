@@ -1,5 +1,8 @@
 # d2d_automations
 
+[![Rust CI](https://github.com/elheck/d2d_automations/workflows/Rust%20CI/badge.svg)](https://github.com/elheck/d2d_automations/actions/workflows/rust.yml)
+[![Release](https://github.com/elheck/d2d_automations/workflows/Release/badge.svg)](https://github.com/elheck/d2d_automations/actions/workflows/release.yml)
+
 ## Overview
 
 d2d_automations is a Rust-based desktop application for Magic: The Gathering stock checking and analysis, featuring a GUI built with egui.

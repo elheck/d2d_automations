@@ -4,6 +4,7 @@ pub mod formatters;
 pub mod io;
 pub mod ui;
 pub mod stock_analysis;
+pub mod utils;
 
 // Re-export commonly used items
 pub use models::{Card, WantsEntry};
