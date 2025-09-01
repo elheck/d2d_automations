@@ -28,11 +28,11 @@ impl<'a> FilePicker<'a> {
             ui.label(self.label);
             if ui.button("Browse").clicked() {
                 let mut dialog = rfd::FileDialog::new();
-                
+
                 if let Some(name) = self.filter_name {
                     dialog = dialog.add_filter(name, self.extensions);
                 }
-                
+
                 if let Some(path) = dialog.pick_file() {
                     *self.path = path.display().to_string();
                 }

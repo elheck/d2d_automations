@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::models::Card;
+use std::collections::HashMap;
 
 pub fn get_card_name<'a>(card: &'a Card, language: Option<&str>) -> &'a str {
     match language {
@@ -7,7 +7,7 @@ pub fn get_card_name<'a>(card: &'a Card, language: Option<&str>) -> &'a str {
         Some("es") if !card.name_es.is_empty() => &card.name_es,
         Some("fr") if !card.name_fr.is_empty() => &card.name_fr,
         Some("it") if !card.name_it.is_empty() => &card.name_it,
-        _ => &card.name
+        _ => &card.name,
     }
 }
 
@@ -19,16 +19,15 @@ pub struct MatchedCard<'a> {
 }
 
 pub fn find_matching_cards<'a>(
-
     card_name: &str,
     needed_quantity: i32,
     inventory: &'a [Card],
     preferred_language: Option<&str>,
     preferred_language_only: bool,
 ) -> Vec<MatchedCard<'a>> {
-
     let trimmed_card_name = card_name.trim();
-    let matching_cards: Vec<_> = inventory.iter()
+    let matching_cards: Vec<_> = inventory
+        .iter()
         .filter(|card| {
             if preferred_language_only {
                 if let Some(lang_code) = preferred_language {
@@ -41,20 +40,34 @@ pub fn find_matching_cards<'a>(
                         "it" => "Italian",
                         _ => lang_code,
                     };
-                    get_card_name(card, Some(lang_code)).trim().eq_ignore_ascii_case(trimmed_card_name)
+                    get_card_name(card, Some(lang_code))
+                        .trim()
+                        .eq_ignore_ascii_case(trimmed_card_name)
                         && card.language.eq_ignore_ascii_case(lang_full)
                 } else {
                     // If no preferred language is set, fallback to English
-                    get_card_name(card, None).trim().eq_ignore_ascii_case(trimmed_card_name)
+                    get_card_name(card, None)
+                        .trim()
+                        .eq_ignore_ascii_case(trimmed_card_name)
                         && card.language.eq_ignore_ascii_case("English")
                 }
             } else {
                 // Match any language
-                get_card_name(card, None).trim().eq_ignore_ascii_case(trimmed_card_name)
-                    || get_card_name(card, Some("de")).trim().eq_ignore_ascii_case(trimmed_card_name)
-                    || get_card_name(card, Some("es")).trim().eq_ignore_ascii_case(trimmed_card_name)
-                    || get_card_name(card, Some("fr")).trim().eq_ignore_ascii_case(trimmed_card_name)
-                    || get_card_name(card, Some("it")).trim().eq_ignore_ascii_case(trimmed_card_name)
+                get_card_name(card, None)
+                    .trim()
+                    .eq_ignore_ascii_case(trimmed_card_name)
+                    || get_card_name(card, Some("de"))
+                        .trim()
+                        .eq_ignore_ascii_case(trimmed_card_name)
+                    || get_card_name(card, Some("es"))
+                        .trim()
+                        .eq_ignore_ascii_case(trimmed_card_name)
+                    || get_card_name(card, Some("fr"))
+                        .trim()
+                        .eq_ignore_ascii_case(trimmed_card_name)
+                    || get_card_name(card, Some("it"))
+                        .trim()
+                        .eq_ignore_ascii_case(trimmed_card_name)
             }
         })
         .collect();
@@ -84,7 +97,8 @@ pub fn find_matching_cards<'a>(
                     false
                 }
             };
-            lang_pref(b).cmp(&lang_pref(a)) // true first
+            lang_pref(b)
+                .cmp(&lang_pref(a)) // true first
                 .then_with(|| {
                     let pa = a.price.parse::<f64>().unwrap_or(f64::MAX);
                     let pb = b.price.parse::<f64>().unwrap_or(f64::MAX);
@@ -103,7 +117,9 @@ pub fn find_matching_cards<'a>(
     sets.sort_by(|a, b| {
         let price_a = a.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
         let price_b = b.1[0].price.parse::<f64>().unwrap_or(f64::MAX);
-        price_a.partial_cmp(&price_b).unwrap()
+        price_a
+            .partial_cmp(&price_b)
+            .unwrap()
             .then_with(|| b.0.cmp(a.0))
     });
 
@@ -119,12 +135,12 @@ pub fn find_matching_cards<'a>(
             }
             if let Ok(quantity) = card.quantity.parse::<i32>() {
                 if quantity > 0 {
-                    let is_playset = card.is_playset.as_deref().map(|s| s == "1" || s.eq_ignore_ascii_case("true")).unwrap_or(false);
-                    let effective_quantity = if is_playset {
-                        quantity * 4
-                    } else {
-                        quantity
-                    };
+                    let is_playset = card
+                        .is_playset
+                        .as_deref()
+                        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+                        .unwrap_or(false);
+                    let effective_quantity = if is_playset { quantity * 4 } else { quantity };
                     let copies = remaining_needed.min(effective_quantity);
                     result.push(MatchedCard {
                         card,
@@ -142,8 +158,9 @@ pub fn find_matching_cards<'a>(
 
 pub fn parse_location_code(loc: &str) -> Vec<i32> {
     let main_part = loc.split("-L0").next().unwrap_or(loc);
-    
-    main_part.split('-')
+
+    main_part
+        .split('-')
         .enumerate()
         .map(|(i, part)| {
             if i == 0 {

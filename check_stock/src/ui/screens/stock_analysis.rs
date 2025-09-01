@@ -1,12 +1,12 @@
-use eframe::egui;
 use crate::{
-    ui::{
-        state::{Screen, StockAnalysisState},
-        components::FilePicker,
-    },
-    stock_analysis::{StockAnalysis, format_stock_analysis_with_sort, SortOrder},
     io::read_csv,
+    stock_analysis::{format_stock_analysis_with_sort, SortOrder, StockAnalysis},
+    ui::{
+        components::FilePicker,
+        state::{Screen, StockAnalysisState},
+    },
 };
+use eframe::egui;
 
 pub struct StockAnalysisScreen;
 
@@ -19,7 +19,7 @@ impl StockAnalysisScreen {
                 }
             });
             ui.add_space(10.0);
-            
+
             ui.heading("Stock Analysis");
             ui.add_space(10.0);
 
@@ -28,11 +28,10 @@ impl StockAnalysisScreen {
                 .show(ui);
 
             ui.add_space(10.0);
-            
+
             ui.horizontal(|ui| {
                 ui.label("Minimum Free Slots:");
-                ui.add(egui::Slider::new(&mut state.free_slots, 1..=30)
-                    .text("slots"));
+                ui.add(egui::Slider::new(&mut state.free_slots, 1..=30).text("slots"));
             });
 
             ui.add_space(5.0);
@@ -45,8 +44,16 @@ impl StockAnalysisScreen {
                         SortOrder::ByLocation => "Location (Ascending)",
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut state.sort_order, SortOrder::ByFreeSlots, "Free Slots (Descending)");
-                        ui.selectable_value(&mut state.sort_order, SortOrder::ByLocation, "Location (Ascending)");
+                        ui.selectable_value(
+                            &mut state.sort_order,
+                            SortOrder::ByFreeSlots,
+                            "Free Slots (Descending)",
+                        );
+                        ui.selectable_value(
+                            &mut state.sort_order,
+                            SortOrder::ByLocation,
+                            "Location (Ascending)",
+                        );
                     });
             });
 
@@ -64,10 +71,12 @@ impl StockAnalysisScreen {
                 egui::ScrollArea::vertical()
                     .max_height(ui.available_height())
                     .show(ui, |ui| {
-                        ui.add(egui::TextEdit::multiline(&mut state.output)
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(20)
-                            .font(egui::TextStyle::Monospace));
+                        ui.add(
+                            egui::TextEdit::multiline(&mut state.output)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(20)
+                                .font(egui::TextStyle::Monospace),
+                        );
                     });
 
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
@@ -75,10 +84,11 @@ impl StockAnalysisScreen {
                         if let Some(path) = rfd::FileDialog::new()
                             .set_file_name("stock_analysis.txt")
                             .add_filter("Text Files", &["txt"])
-                            .save_file() {
-                                if let Err(e) = std::fs::write(&path, &state.output) {
-                            state.output = format!("Error saving file: {e}");
-                                }
+                            .save_file()
+                        {
+                            if let Err(e) = std::fs::write(&path, &state.output) {
+                                state.output = format!("Error saving file: {e}");
+                            }
                         }
                     }
                 });

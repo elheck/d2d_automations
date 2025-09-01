@@ -2,8 +2,8 @@ mod card_matching;
 mod formatters;
 mod io;
 mod models;
-mod ui;
 mod stock_analysis;
+mod ui;
 
 fn main() {
     if let Err(e) = ui::launch_gui() {

@@ -1,6 +1,6 @@
+use super::language::Language;
 use crate::models::Card;
 use crate::stock_analysis::SortOrder;
-use super::language::Language;
 
 type CardMatch = (Card, i32, String);
 type CardMatchGroup = (String, Vec<CardMatch>);

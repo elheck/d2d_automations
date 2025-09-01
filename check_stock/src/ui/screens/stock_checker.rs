@@ -1,14 +1,16 @@
-use eframe::egui;
 use crate::{
+    card_matching::{find_matching_cards, MatchedCard},
+    formatters::{
+        format_invoice_list, format_picking_list, format_regular_output, format_update_stock_csv,
+    },
+    io::{read_csv, read_wantslist},
     ui::{
-        state::{AppState, Screen, OutputFormat},
         components::{FilePicker, OutputWindow},
         language::Language,
+        state::{AppState, OutputFormat, Screen},
     },
-    formatters::{format_regular_output, format_picking_list, format_invoice_list, format_update_stock_csv},
-    io::{read_csv, read_wantslist},
-    card_matching::{find_matching_cards, MatchedCard},
 };
+use eframe::egui;
 
 pub struct StockCheckerScreen;
 
@@ -21,7 +23,7 @@ impl StockCheckerScreen {
                 }
             });
             ui.add_space(10.0);
-            
+
             ui.heading("MTG Stock Checker");
             ui.add_space(10.0);
 
@@ -30,8 +32,7 @@ impl StockCheckerScreen {
                 .with_filter("CSV", &["csv"])
                 .show(ui);
 
-            FilePicker::new("Wantslist:", &mut state.wantslist_path)
-                .show(ui);
+            FilePicker::new("Wantslist:", &mut state.wantslist_path).show(ui);
 
             // Language selection and discount
             ui.horizontal(|ui| {
@@ -39,18 +40,48 @@ impl StockCheckerScreen {
                 egui::ComboBox::new("language_selector", "")
                     .selected_text(state.preferred_language.as_str())
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut state.preferred_language, Language::English, "English");
-                        ui.selectable_value(&mut state.preferred_language, Language::German, "German");
-                        ui.selectable_value(&mut state.preferred_language, Language::Spanish, "Spanish");
-                        ui.selectable_value(&mut state.preferred_language, Language::French, "French");
-                        ui.selectable_value(&mut state.preferred_language, Language::Italian, "Italian");
+                        ui.selectable_value(
+                            &mut state.preferred_language,
+                            Language::English,
+                            "English",
+                        );
+                        ui.selectable_value(
+                            &mut state.preferred_language,
+                            Language::German,
+                            "German",
+                        );
+                        ui.selectable_value(
+                            &mut state.preferred_language,
+                            Language::Spanish,
+                            "Spanish",
+                        );
+                        ui.selectable_value(
+                            &mut state.preferred_language,
+                            Language::French,
+                            "French",
+                        );
+                        ui.selectable_value(
+                            &mut state.preferred_language,
+                            Language::Italian,
+                            "Italian",
+                        );
                     });
-                ui.checkbox(&mut state.preferred_language_only, "Only show cards in preferred language");
+                ui.checkbox(
+                    &mut state.preferred_language_only,
+                    "Only show cards in preferred language",
+                );
             });
             ui.horizontal(|ui| {
                 ui.label("Discount (%):");
                 let mut discount = state.discount_percent;
-                if ui.add(egui::DragValue::new(&mut discount).range(0.0..=100.0).speed(0.1)).changed() {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut discount)
+                            .range(0.0..=100.0)
+                            .speed(0.1),
+                    )
+                    .changed()
+                {
                     state.discount_percent = discount;
                 }
             });
@@ -123,11 +154,13 @@ impl StockCheckerScreen {
                         ui.label(format!("{card_name}:"));
                         for (card, quantity, set_name) in cards {
                             let mut checked = state.selected[idx];
-                            let location_info = card.location.as_ref()
+                            let location_info = card
+                                .location
+                                .as_ref()
                                 .filter(|loc| !loc.trim().is_empty())
                                 .map(|loc| format!(" [Location: {loc}]"))
                                 .unwrap_or_default();
-                                
+
                             let label = format!(
                                 "{} {} [{}] from {} - {} condition - {:.2} €{}",
                                 quantity,
@@ -173,10 +206,12 @@ impl StockCheckerScreen {
         egui::ScrollArea::vertical()
             .max_height(ui.available_height() - 50.0)
             .show(ui, |ui| {
-                ui.add(egui::TextEdit::multiline(&mut state.output)
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(20)
-                    .font(egui::TextStyle::Monospace));
+                ui.add(
+                    egui::TextEdit::multiline(&mut state.output)
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(20)
+                        .font(egui::TextStyle::Monospace),
+                );
             });
 
         if !state.all_matches.is_empty() {
@@ -192,27 +227,39 @@ impl StockCheckerScreen {
     }
 
     fn show_output_window(ctx: &egui::Context, state: &mut AppState) {
-        let extension = if state.output_window_title == "Stock Update" { "csv" } else { "txt" };
+        let extension = if state.output_window_title == "Stock Update" {
+            "csv"
+        } else {
+            "txt"
+        };
         OutputWindow::new(
             &state.output_window_title,
             &mut state.output_window_content,
             &mut state.show_output_window,
             extension,
-        ).show(ctx);
+        )
+        .show(ctx);
     }
 
     fn start_selection(state: &mut AppState) {
-        if state.selected.is_empty() {              state.selected = std::iter::repeat_n(true, state.all_matches.iter().map(|(_, cards)| cards.len()).sum())
-                .collect();
+        if state.selected.is_empty() {
+            state.selected = std::iter::repeat_n(
+                true,
+                state.all_matches.iter().map(|(_, cards)| cards.len()).sum(),
+            )
+            .collect();
         }
         state.show_selection = true;
         state.selection_mode = true;
     }
 
     fn generate_regular_output(state: &mut AppState) {
-        let selected_matches: Vec<_> = state.all_matches.iter()
+        let selected_matches: Vec<_> = state
+            .all_matches
+            .iter()
             .map(|(name, cards)| {
-                let group_cards: Vec<_> = cards.iter()
+                let group_cards: Vec<_> = cards
+                    .iter()
                     .map(|(card, quantity, set_name)| MatchedCard {
                         card,
                         quantity: *quantity,
@@ -222,14 +269,14 @@ impl StockCheckerScreen {
                 (name.clone(), group_cards)
             })
             .collect();
-        
+
         state.output = format_regular_output(&selected_matches, state.discount_percent);
     }
 
     fn generate_selected_output(state: &mut AppState, format: OutputFormat) {
         let mut selected_matches = Vec::new();
         let mut idx = 0;
-        
+
         for (name, cards) in &state.all_matches {
             let mut group_cards = Vec::new();
             for (card, quantity, set_name) in cards {
@@ -250,31 +297,44 @@ impl StockCheckerScreen {
         let discount_percent = state.discount_percent;
         state.output_window_content = match format {
             OutputFormat::PickingList => {
-                let all_cards: Vec<_> = selected_matches.iter()
+                let all_cards: Vec<_> = selected_matches
+                    .iter()
                     .flat_map(|(_, cards)| cards.iter().cloned())
                     .collect();
                 let mut output = format_picking_list(&all_cards);
                 if discount_percent > 0.0 {
-                    let total_price: f64 = all_cards.iter().map(|mc| mc.card.price.parse::<f64>().unwrap_or(0.0) * mc.quantity as f64).sum();
+                    let total_price: f64 = all_cards
+                        .iter()
+                        .map(|mc| mc.card.price.parse::<f64>().unwrap_or(0.0) * mc.quantity as f64)
+                        .sum();
                     let discounted = total_price * (1.0 - discount_percent as f64 / 100.0);
-                    output.push_str(&format!("Total price after {discount_percent:.1}% discount: {discounted:.2} €\n"));
+                    output.push_str(&format!(
+                        "Total price after {discount_percent:.1}% discount: {discounted:.2} €\n"
+                    ));
                 }
                 output
-            },
+            }
             OutputFormat::InvoiceList => {
-                let all_cards: Vec<_> = selected_matches.iter()
+                let all_cards: Vec<_> = selected_matches
+                    .iter()
                     .flat_map(|(_, cards)| cards.iter().cloned())
                     .collect();
                 let mut output = format_invoice_list(&all_cards);
                 if discount_percent > 0.0 {
-                    let total_price: f64 = all_cards.iter().map(|mc| mc.card.price.parse::<f64>().unwrap_or(0.0) * mc.quantity as f64).sum();
+                    let total_price: f64 = all_cards
+                        .iter()
+                        .map(|mc| mc.card.price.parse::<f64>().unwrap_or(0.0) * mc.quantity as f64)
+                        .sum();
                     let discounted = total_price * (1.0 - discount_percent as f64 / 100.0);
-                    output.push_str(&format!("Total price after {discount_percent:.1}% discount: {discounted:.2} €\n"));
+                    output.push_str(&format!(
+                        "Total price after {discount_percent:.1}% discount: {discounted:.2} €\n"
+                    ));
                 }
                 output
-            },
+            }
             OutputFormat::UpdateStock => {
-                let all_cards: Vec<_> = selected_matches.iter()
+                let all_cards: Vec<_> = selected_matches
+                    .iter()
                     .flat_map(|(_, cards)| cards.iter().cloned())
                     .collect();
                 format_update_stock_csv(&all_cards)

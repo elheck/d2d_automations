@@ -1,6 +1,9 @@
-use crate::card_matching::{MatchedCard, parse_location_code};
+use crate::card_matching::{parse_location_code, MatchedCard};
 
-pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)], discount_percent: f32) -> String {
+pub fn format_regular_output(
+    matches: &[(String, Vec<MatchedCard>)],
+    discount_percent: f32,
+) -> String {
     let mut output = String::new();
     let mut total_price = 0.0;
     let discount_factor = 1.0 - (discount_percent as f64 / 100.0);
@@ -10,7 +13,8 @@ pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)], discount_pe
             continue;
         }
 
-        let card_total_cost: f64 = matched_cards.iter()
+        let card_total_cost: f64 = matched_cards
+            .iter()
             .map(|mc| mc.card.price.parse::<f64>().unwrap_or(0.0) * mc.quantity as f64)
             .sum();
         let discounted_card_total_cost = card_total_cost * discount_factor;
@@ -21,22 +25,31 @@ pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)], discount_pe
         if discount_percent > 0.0 {
             output.push_str(&format!("{needed_quantity} x {card_name} (total: {discounted_card_total_cost:.2} € after {discount_percent:.1}% discount)\n"));
         } else {
-            output.push_str(&format!("{needed_quantity} x {card_name} (total: {card_total_cost:.2} €)\n"));
+            output.push_str(&format!(
+                "{needed_quantity} x {card_name} (total: {card_total_cost:.2} €)\n"
+            ));
         }
 
         // Show copies from each set with their individual prices
         for matched_card in matched_cards {
-            let location_info = matched_card.card.location.as_ref()
+            let location_info = matched_card
+                .card
+                .location
+                .as_ref()
                 .filter(|loc| !loc.trim().is_empty())
                 .map(|loc| format!(" [Location: {loc}]"))
                 .unwrap_or_default();
 
             // Add special conditions
             let mut special_conditions = Vec::new();
-            if matched_card.card.is_foil == "1" || matched_card.card.is_foil.to_lowercase() == "true" {
+            if matched_card.card.is_foil == "1"
+                || matched_card.card.is_foil.to_lowercase() == "true"
+            {
                 special_conditions.push("Foil");
             }
-            if matched_card.card.is_signed == "1" || matched_card.card.is_signed.to_lowercase() == "true" {
+            if matched_card.card.is_signed == "1"
+                || matched_card.card.is_signed.to_lowercase() == "true"
+            {
                 special_conditions.push("Signed");
             }
             let special_info = if !special_conditions.is_empty() {
@@ -52,9 +65,14 @@ pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)], discount_pe
                 String::new()
             };
 
-            output.push_str(&format!("    {} {} [{}]{} from {}, {} condition - {:.2} €{}{}\n",
+            output.push_str(&format!(
+                "    {} {} [{}]{} from {}, {} condition - {:.2} €{}{}\n",
                 matched_card.quantity,
-                if matched_card.quantity == 1 { "copy" } else { "copies" },
+                if matched_card.quantity == 1 {
+                    "copy"
+                } else {
+                    "copies"
+                },
                 matched_card.card.language,
                 special_info,
                 matched_card.set_name,
@@ -66,7 +84,9 @@ pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)], discount_pe
         }
 
         if total_found < needed_quantity {
-              output.push_str(&format!("    WARNING: Only {total_found} of {needed_quantity} copies available!\n"));
+            output.push_str(&format!(
+                "    WARNING: Only {total_found} of {needed_quantity} copies available!\n"
+            ));
         }
 
         output.push('\n');
@@ -74,7 +94,8 @@ pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)], discount_pe
     }
 
     if !matches.is_empty() {
-        let total_cards: i32 = matches.iter()
+        let total_cards: i32 = matches
+            .iter()
             .flat_map(|(_, cards)| cards.iter())
             .map(|mc| mc.quantity)
             .sum();
@@ -83,7 +104,9 @@ pub fn format_regular_output(matches: &[(String, Vec<MatchedCard>)], discount_pe
         if discount_percent > 0.0 {
             output.push_str(&format!("Total price for available cards after {discount_percent:.1}% discount: {total_price:.2} €\n"));
         } else {
-            output.push_str(&format!("Total price for available cards: {total_price:.2} €\n"));
+            output.push_str(&format!(
+                "Total price for available cards: {total_price:.2} €\n"
+            ));
         }
         output.push_str(&format!("Total cards picked: {total_cards}\n"));
     } else {
@@ -124,7 +147,7 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
             "Spanish" | "es" => card.name_es.clone(),
             "French" | "fr" => card.name_fr.clone(),
             "Italian" | "it" => card.name_it.clone(),
-            _ => card.name.clone()
+            _ => card.name.clone(),
         };
 
         // If localized name is empty, fall back to English name
@@ -145,7 +168,11 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
         }
 
         // Handle playsets
-        let is_playset = card.is_playset.as_deref().map(|s| s == "1" || s.eq_ignore_ascii_case("true")).unwrap_or(false);
+        let is_playset = card
+            .is_playset
+            .as_deref()
+            .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
         if is_playset {
             name = format!("{name} [Playset]");
         }
@@ -232,7 +259,10 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
 
     // Add total cards count and price
     let total_cards: i32 = matched_cards.iter().map(|mc| mc.quantity).sum();
-    let total_price: f64 = matched_cards.iter().map(|mc| mc.card.price.parse::<f64>().unwrap_or(0.0) * mc.quantity as f64).sum();
+    let total_price: f64 = matched_cards
+        .iter()
+        .map(|mc| mc.card.price.parse::<f64>().unwrap_or(0.0) * mc.quantity as f64)
+        .sum();
     output.push_str(&separator);
     output.push_str(&format!("Total cards picked: {total_cards}\n"));
     output.push_str(&format!("Total price: {total_price:.2} €\n"));
@@ -328,20 +358,39 @@ pub fn format_invoice_list(matched_cards: &[MatchedCard]) -> String {
     }
     output.push_str(&separator);
     let total_width = max_name_len + max_lang_len + max_cond_len + 7;
-    output.push_str(&format!("{:<total_width$} {:>7.2} €\n", "Total:", total_price));
+    output.push_str(&format!(
+        "{:<total_width$} {:>7.2} €\n",
+        "Total:", total_price
+    ));
     output
 }
 
 pub fn format_update_stock_csv(matched_cards: &[MatchedCard]) -> String {
     use csv::WriterBuilder;
 
-    let mut wtr = WriterBuilder::new()
-        .has_headers(true)
-        .from_writer(vec![]);
+    let mut wtr = WriterBuilder::new().has_headers(true).from_writer(vec![]);
 
     // Write header
     let _ = wtr.write_record([
-        "cardmarketId","quantity","name","set","setCode","cn","condition","language","isFoil","isPlayset","isSigned","price","comment","location","nameDE","nameES","nameFR","nameIT","rarity"
+        "cardmarketId",
+        "quantity",
+        "name",
+        "set",
+        "setCode",
+        "cn",
+        "condition",
+        "language",
+        "isFoil",
+        "isPlayset",
+        "isSigned",
+        "price",
+        "comment",
+        "location",
+        "nameDE",
+        "nameES",
+        "nameFR",
+        "nameIT",
+        "rarity",
     ]);
 
     for matched_card in matched_cards {

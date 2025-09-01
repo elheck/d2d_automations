@@ -17,7 +17,8 @@ fn create_sample_csv_content() -> String {
 fn create_invalid_csv_content() -> String {
     r#"invalid,csv,format
 missing,required,fields
-not,enough,columns"#.to_string()
+not,enough,columns"#
+        .to_string()
 }
 
 fn create_sample_wantslist_content() -> String {
@@ -27,14 +28,16 @@ fn create_sample_wantslist_content() -> String {
 3 Counterspell
 
 Deck
-1 Sol Ring"#.to_string()
+1 Sol Ring"#
+        .to_string()
 }
 
 fn create_invalid_wantslist_content() -> String {
     r#"invalid_format_line
 not_a_number Force of Will
 abc Lightning Bolt
-just_one_word"#.to_string()
+just_one_word"#
+        .to_string()
 }
 
 // Tests for read_csv function
@@ -43,12 +46,12 @@ just_one_word"#.to_string()
 fn test_read_csv_valid_file() {
     let mut temp_file = NamedTempFile::new().unwrap();
     write!(temp_file, "{}", create_sample_csv_content()).unwrap();
-    
+
     let cards = read_csv(temp_file.path().to_str().unwrap()).unwrap();
-    
+
     // Should have 3 cards (excluding empty quantity and empty price ones)
     assert_eq!(cards.len(), 3);
-    
+
     // Test first card
     assert_eq!(cards[0].cardmarket_id, "12345");
     assert_eq!(cards[0].quantity, "4");
@@ -73,12 +76,12 @@ fn test_read_csv_valid_file() {
 fn test_read_csv_filters_empty_price_and_quantity() {
     let mut temp_file = NamedTempFile::new().unwrap();
     write!(temp_file, "{}", create_sample_csv_content()).unwrap();
-    
+
     let cards = read_csv(temp_file.path().to_str().unwrap()).unwrap();
-    
+
     // Should filter out cards with empty quantity (Force of Will) and empty price (Counterspell)
     assert_eq!(cards.len(), 3);
-    
+
     // Verify the filtered cards are the ones with both price and quantity
     let card_names: Vec<&str> = cards.iter().map(|c| c.name.as_str()).collect();
     assert!(card_names.contains(&"Lightning Bolt"));
@@ -96,7 +99,7 @@ fn test_read_csv_nonexistent_file() {
 fn test_read_csv_invalid_csv_format() {
     let mut temp_file = NamedTempFile::new().unwrap();
     write!(temp_file, "{}", create_invalid_csv_content()).unwrap();
-    
+
     let result = read_csv(temp_file.path().to_str().unwrap());
     assert!(result.is_err());
 }
@@ -105,7 +108,7 @@ fn test_read_csv_invalid_csv_format() {
 fn test_read_csv_empty_file() {
     let temp_file = NamedTempFile::new().unwrap();
     // File is empty, no content written
-    
+
     let cards = read_csv(temp_file.path().to_str().unwrap()).unwrap();
     assert_eq!(cards.len(), 0);
 }
@@ -114,7 +117,7 @@ fn test_read_csv_empty_file() {
 fn test_read_csv_only_headers() {
     let mut temp_file = NamedTempFile::new().unwrap();
     write!(temp_file, "cardmarketId,quantity,name,set,setCode,cn,condition,language,isFoil,isPlayset,isSigned,price,comment,location,nameDE,nameES,nameFR,nameIT,rarity,listedAt").unwrap();
-    
+
     let cards = read_csv(temp_file.path().to_str().unwrap()).unwrap();
     assert_eq!(cards.len(), 0);
 }
@@ -125,10 +128,10 @@ fn test_read_csv_with_whitespace() {
     let content = r#"cardmarketId,quantity,name,set,setCode,cn,condition,language,isFoil,isPlayset,isSigned,price,comment,location,nameDE,nameES,nameFR,nameIT,rarity,listedAt
   12345  ,  4  ,  Lightning Bolt  ,  LEA  ,LEA,123,NM,EN,false,,false,  25.00  ,,A1_S1_R1_C1,,,,,common,2024-01-01"#;
     write!(temp_file, "{}", content).unwrap();
-    
+
     let cards = read_csv(temp_file.path().to_str().unwrap()).unwrap();
     assert_eq!(cards.len(), 1);
-    
+
     // CSV reader should trim whitespace
     assert_eq!(cards[0].cardmarket_id, "12345");
     assert_eq!(cards[0].quantity, "4");
@@ -142,23 +145,23 @@ fn test_read_csv_with_whitespace() {
 fn test_read_wantslist_valid_file() {
     let mut temp_file = NamedTempFile::new().unwrap();
     write!(temp_file, "{}", create_sample_wantslist_content()).unwrap();
-    
+
     let wants = read_wantslist(temp_file.path().to_str().unwrap()).unwrap();
-    
+
     assert_eq!(wants.len(), 5);
-    
+
     assert_eq!(wants[0].quantity, 4);
     assert_eq!(wants[0].name, "Lightning Bolt");
-    
+
     assert_eq!(wants[1].quantity, 1);
     assert_eq!(wants[1].name, "Black Lotus");
-    
+
     assert_eq!(wants[2].quantity, 2);
     assert_eq!(wants[2].name, "Force of Will");
-    
+
     assert_eq!(wants[3].quantity, 3);
     assert_eq!(wants[3].name, "Counterspell");
-    
+
     // Should also parse the line after "Deck"
     assert_eq!(wants[4].quantity, 1);
     assert_eq!(wants[4].name, "Sol Ring");
@@ -174,7 +177,7 @@ fn test_read_wantslist_nonexistent_file() {
 fn test_read_wantslist_empty_file() {
     let temp_file = NamedTempFile::new().unwrap();
     // Empty file
-    
+
     let wants = read_wantslist(temp_file.path().to_str().unwrap()).unwrap();
     assert_eq!(wants.len(), 0);
 }
@@ -191,10 +194,10 @@ fn test_read_wantslist_with_empty_lines() {
 
 "#;
     write!(temp_file, "{}", content).unwrap();
-    
+
     let wants = read_wantslist(temp_file.path().to_str().unwrap()).unwrap();
     assert_eq!(wants.len(), 3);
-    
+
     assert_eq!(wants[0].name, "Lightning Bolt");
     assert_eq!(wants[1].name, "Force of Will");
     assert_eq!(wants[2].name, "Black Lotus");
@@ -207,10 +210,10 @@ fn test_read_wantslist_skips_deck_line() {
 Deck
 2 Force of Will"#;
     write!(temp_file, "{}", content).unwrap();
-    
+
     let wants = read_wantslist(temp_file.path().to_str().unwrap()).unwrap();
     assert_eq!(wants.len(), 2);
-    
+
     assert_eq!(wants[0].name, "Lightning Bolt");
     assert_eq!(wants[1].name, "Force of Will");
 }
@@ -219,7 +222,7 @@ Deck
 fn test_read_wantslist_ignores_invalid_lines() {
     let mut temp_file = NamedTempFile::new().unwrap();
     write!(temp_file, "{}", create_invalid_wantslist_content()).unwrap();
-    
+
     let wants = read_wantslist(temp_file.path().to_str().unwrap()).unwrap();
     // All lines are invalid format, so should be empty
     assert_eq!(wants.len(), 0);
@@ -234,10 +237,10 @@ invalid_line
 not_a_number Card Name
 1 Black Lotus"#;
     write!(temp_file, "{}", content).unwrap();
-    
+
     let wants = read_wantslist(temp_file.path().to_str().unwrap()).unwrap();
     assert_eq!(wants.len(), 3); // Only valid lines
-    
+
     assert_eq!(wants[0].name, "Lightning Bolt");
     assert_eq!(wants[1].name, "Force of Will");
     assert_eq!(wants[2].name, "Black Lotus");
@@ -250,10 +253,10 @@ fn test_read_wantslist_with_whitespace() {
 2 Force of Will   
    1    Black Lotus"#;
     write!(temp_file, "{}", content).unwrap();
-    
+
     let wants = read_wantslist(temp_file.path().to_str().unwrap()).unwrap();
     assert_eq!(wants.len(), 3);
-    
+
     assert_eq!(wants[0].quantity, 4);
     assert_eq!(wants[0].name, "  Lightning Bolt"); // Leading spaces preserved in name
     assert_eq!(wants[1].quantity, 2);
@@ -269,10 +272,10 @@ fn test_read_wantslist_card_names_with_spaces() {
 2 Black Lotus Petal
 3 Time Walk Through The Planes"#;
     write!(temp_file, "{}", content).unwrap();
-    
+
     let wants = read_wantslist(temp_file.path().to_str().unwrap()).unwrap();
     assert_eq!(wants.len(), 3);
-    
+
     assert_eq!(wants[0].name, "Lightning Bolt");
     assert_eq!(wants[1].name, "Black Lotus Petal");
     assert_eq!(wants[2].name, "Time Walk Through The Planes");
@@ -285,10 +288,10 @@ fn test_read_wantslist_large_quantities() {
 1000000 Common Card
 1 Expensive Card"#;
     write!(temp_file, "{}", content).unwrap();
-    
+
     let wants = read_wantslist(temp_file.path().to_str().unwrap()).unwrap();
     assert_eq!(wants.len(), 3);
-    
+
     assert_eq!(wants[0].quantity, 999);
     assert_eq!(wants[1].quantity, 1000000);
     assert_eq!(wants[2].quantity, 1);
@@ -300,10 +303,10 @@ fn test_read_wantslist_zero_quantity() {
     let content = r#"0 Zero Quantity Card
 4 Normal Card"#;
     write!(temp_file, "{}", content).unwrap();
-    
+
     let wants = read_wantslist(temp_file.path().to_str().unwrap()).unwrap();
     assert_eq!(wants.len(), 2);
-    
+
     assert_eq!(wants[0].quantity, 0);
     assert_eq!(wants[0].name, "Zero Quantity Card");
     assert_eq!(wants[1].quantity, 4);
@@ -317,24 +320,25 @@ fn test_csv_and_wantslist_integration() {
     // Create CSV file
     let mut csv_file = NamedTempFile::new().unwrap();
     write!(csv_file, "{}", create_sample_csv_content()).unwrap();
-    
+
     // Create wantslist file
     let mut wants_file = NamedTempFile::new().unwrap();
     write!(wants_file, "{}", create_sample_wantslist_content()).unwrap();
-    
+
     // Read both files
     let cards = read_csv(csv_file.path().to_str().unwrap()).unwrap();
     let wants = read_wantslist(wants_file.path().to_str().unwrap()).unwrap();
-    
+
     assert!(!cards.is_empty());
     assert!(!wants.is_empty());
-    
+
     // Test that we can find matching cards
     let wanted_card = &wants[0]; // Lightning Bolt
-    let matching_cards: Vec<&Card> = cards.iter()
+    let matching_cards: Vec<&Card> = cards
+        .iter()
         .filter(|card| card.name == wanted_card.name)
         .collect();
-    
+
     assert_eq!(matching_cards.len(), 1);
     assert_eq!(matching_cards[0].name, "Lightning Bolt");
 }
@@ -342,39 +346,39 @@ fn test_csv_and_wantslist_integration() {
 #[cfg(test)]
 mod edge_cases {
     use super::*;
-    
+
     #[test]
     fn test_read_csv_with_special_characters() {
         let mut temp_file = NamedTempFile::new().unwrap();
         let content = r#"cardmarketId,quantity,name,set,setCode,cn,condition,language,isFoil,isPlayset,isSigned,price,comment,location,nameDE,nameES,nameFR,nameIT,rarity,listedAt
 12345,1,"Card with ""quotes""",Set,SET,123,NM,EN,false,,false,10.00,"Comment with, comma",A1_S1_R1_C1,,,,,common,2024-01-01"#;
         write!(temp_file, "{}", content).unwrap();
-        
+
         let cards = read_csv(temp_file.path().to_str().unwrap()).unwrap();
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].name, r#"Card with "quotes""#);
         assert_eq!(cards[0].comment, "Comment with, comma");
     }
-    
+
     #[test]
     fn test_read_wantslist_with_negative_quantity() {
         let mut temp_file = NamedTempFile::new().unwrap();
         let content = "-1 Negative Card\n4 Normal Card";
         write!(temp_file, "{}", content).unwrap();
-        
+
         let wants = read_wantslist(temp_file.path().to_str().unwrap()).unwrap();
         assert_eq!(wants.len(), 2);
         assert_eq!(wants[0].quantity, -1); // Negative quantities are parsed
         assert_eq!(wants[1].quantity, 4);
     }
-    
+
     #[test]
     fn test_read_csv_with_unicode_characters() {
         let mut temp_file = NamedTempFile::new().unwrap();
         let content = r#"cardmarketId,quantity,name,set,setCode,cn,condition,language,isFoil,isPlayset,isSigned,price,comment,location,nameDE,nameES,nameFR,nameIT,rarity,listedAt
 12345,1,Überkarte,Sét Spéciał,ŞET,123,NM,EN,false,,false,10.00,Çomment with ñ,A1_S1_R1_C1,,,,,common,2024-01-01"#;
         write!(temp_file, "{}", content).unwrap();
-        
+
         let cards = read_csv(temp_file.path().to_str().unwrap()).unwrap();
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].name, "Überkarte");

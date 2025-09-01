@@ -2,8 +2,8 @@ use eframe::{self, egui};
 use egui::ViewportBuilder;
 
 use super::{
+    screens::{StockAnalysisScreen, StockCheckerScreen, WelcomeScreen},
     state::{AppState, Screen, StockAnalysisState},
-    screens::{WelcomeScreen, StockCheckerScreen, StockAnalysisScreen},
 };
 
 #[derive(Default)]
@@ -19,12 +19,16 @@ impl eframe::App for StockCheckerApp {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     WelcomeScreen::show(ui, &mut self.app_state.current_screen);
                 });
-            },
+            }
             Screen::StockChecker => {
                 StockCheckerScreen::show(ctx, &mut self.app_state);
-            },
+            }
             Screen::StockAnalysis => {
-                StockAnalysisScreen::show(ctx, &mut self.app_state.current_screen, &mut self.analysis_state);
+                StockAnalysisScreen::show(
+                    ctx,
+                    &mut self.app_state.current_screen,
+                    &mut self.analysis_state,
+                );
             }
         }
     }
@@ -32,11 +36,10 @@ impl eframe::App for StockCheckerApp {
 
 pub fn launch_gui() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
-        viewport: ViewportBuilder::default()
-            .with_inner_size([800.0, 600.0]),
+        viewport: ViewportBuilder::default().with_inner_size([800.0, 600.0]),
         ..Default::default()
     };
-    
+
     eframe::run_native(
         "MTG Stock Checker",
         options,

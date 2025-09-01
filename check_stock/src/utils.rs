@@ -7,7 +7,7 @@ pub fn path_exists<P: AsRef<Path>>(path: P) -> bool {
 
 pub mod time {
     use chrono::Utc;
-    
+
     pub fn get_current_time() -> String {
         Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
     }
