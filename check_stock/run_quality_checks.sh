@@ -69,12 +69,12 @@ echo
 
 # 2. Clippy Linting
 print_header "2. Clippy Linting"
-run_check "clippy (working files only)" "cargo clippy --test io_tests --test utils_tests -- -D warnings"
+run_check "clippy (entire project)" "cargo clippy --all-targets --all-features -- -D warnings"
 echo
 
 # 3. Run Tests
 print_header "3. Running Tests"
-run_check "unit and integration tests" "cargo test --test io_tests --test utils_tests"
+run_check "all tests (unit, integration, doc)" "cargo test"
 echo
 
 # 4. Documentation Tests
@@ -124,7 +124,7 @@ else
     echo "Quick fixes:"
     echo "  📝 Format code: cargo fmt"
     echo "  🔧 Fix clippy issues: ./run_clippy.sh --fix"
-    echo "  🧪 Run tests: cargo test --test io_tests --test utils_tests"
+    echo "  🧪 Run tests: cargo test"
     echo
     exit 1
 fi
