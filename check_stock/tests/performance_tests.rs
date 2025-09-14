@@ -131,7 +131,10 @@ impl PerformanceResult {
 #[test]
 fn test_search_performance_with_varying_inventory_sizes() {
     println!("\n=== Performance Test: Search with Varying Inventory Sizes ===");
-    println!("{:<40} | {:>15} | {:>13} | {:>10}", "Operation", "Inventory Size", "Time (ms)", "Matches");
+    println!(
+        "{:<40} | {:>15} | {:>13} | {:>10}",
+        "Operation", "Inventory Size", "Time (ms)", "Matches"
+    );
     println!("{:-<85}", "");
 
     let inventory_sizes = [10, 100, 500, 1000, 5000, 10000];
@@ -143,13 +146,8 @@ fn test_search_performance_with_varying_inventory_sizes() {
         let needed_quantity = 4;
 
         let start = Instant::now();
-        let matches = find_matching_cards(
-            search_term,
-            needed_quantity,
-            &inventory,
-            Some("en"),
-            false,
-        );
+        let matches =
+            find_matching_cards(search_term, needed_quantity, &inventory, Some("en"), false);
         let duration = start.elapsed();
 
         let result = PerformanceResult::new(
@@ -162,7 +160,10 @@ fn test_search_performance_with_varying_inventory_sizes() {
         results.push(result);
 
         // Assert that the function still works correctly
-        assert!(!matches.is_empty() || size < 10, "Should find matches for Lightning Bolt in reasonable inventory sizes");
+        assert!(
+            !matches.is_empty() || size < 10,
+            "Should find matches for Lightning Bolt in reasonable inventory sizes"
+        );
     }
 
     // Performance regression check - larger inventories should not be exponentially slower
@@ -190,7 +191,10 @@ fn test_search_performance_with_varying_inventory_sizes() {
 #[test]
 fn test_search_performance_with_different_languages() {
     println!("\n=== Performance Test: Search with Different Language Preferences ===");
-    println!("{:<40} | {:>15} | {:>13} | {:>10}", "Operation", "Inventory Size", "Time (ms)", "Matches");
+    println!(
+        "{:<40} | {:>15} | {:>13} | {:>10}",
+        "Operation", "Inventory Size", "Time (ms)", "Matches"
+    );
     println!("{:-<85}", "");
 
     let inventory = generate_test_inventory(1000);
@@ -207,13 +211,8 @@ fn test_search_performance_with_different_languages() {
 
     for (lang_code, lang_desc) in &languages {
         let start = Instant::now();
-        let matches = find_matching_cards(
-            search_term,
-            needed_quantity,
-            &inventory,
-            *lang_code,
-            false,
-        );
+        let matches =
+            find_matching_cards(search_term, needed_quantity, &inventory, *lang_code, false);
         let duration = start.elapsed();
 
         let result = PerformanceResult::new(
@@ -237,7 +236,10 @@ fn test_search_performance_with_different_languages() {
 #[test]
 fn test_search_performance_with_language_only_mode() {
     println!("\n=== Performance Test: Search with Language-Only Mode ===");
-    println!("{:<40} | {:>15} | {:>13} | {:>10}", "Operation", "Inventory Size", "Time (ms)", "Matches");
+    println!(
+        "{:<40} | {:>15} | {:>13} | {:>10}",
+        "Operation", "Inventory Size", "Time (ms)", "Matches"
+    );
     println!("{:-<85}", "");
 
     let inventory = generate_test_inventory(1000);
@@ -291,20 +293,17 @@ fn test_search_performance_with_language_only_mode() {
 #[test]
 fn test_search_performance_edge_cases() {
     println!("\n=== Performance Test: Edge Cases ===");
-    println!("{:<40} | {:>15} | {:>13} | {:>10}", "Operation", "Inventory Size", "Time (ms)", "Matches");
+    println!(
+        "{:<40} | {:>15} | {:>13} | {:>10}",
+        "Operation", "Inventory Size", "Time (ms)", "Matches"
+    );
     println!("{:-<85}", "");
 
     let inventory = generate_test_inventory(1000);
 
     // Test 1: Search for non-existent card
     let start = Instant::now();
-    let matches = find_matching_cards(
-        "Nonexistent Card Name",
-        4,
-        &inventory,
-        Some("en"),
-        false,
-    );
+    let matches = find_matching_cards("Nonexistent Card Name", 4, &inventory, Some("en"), false);
     let duration = start.elapsed();
 
     let result = PerformanceResult::new(
@@ -316,7 +315,10 @@ fn test_search_performance_edge_cases() {
     result.print();
 
     assert_eq!(matches.len(), 0);
-    assert!(duration.as_millis() < 50, "Non-existent card search should be fast");
+    assert!(
+        duration.as_millis() < 50,
+        "Non-existent card search should be fast"
+    );
 
     // Test 2: Search with very large quantity
     let start = Instant::now();
@@ -337,17 +339,14 @@ fn test_search_performance_edge_cases() {
     );
     result.print();
 
-    assert!(duration.as_millis() < 100, "Large quantity search should be reasonably fast");
+    assert!(
+        duration.as_millis() < 100,
+        "Large quantity search should be reasonably fast"
+    );
 
     // Test 3: Search with empty string
     let start = Instant::now();
-    let matches = find_matching_cards(
-        "",
-        4,
-        &inventory,
-        Some("en"),
-        false,
-    );
+    let matches = find_matching_cards("", 4, &inventory, Some("en"), false);
     let duration = start.elapsed();
 
     let result = PerformanceResult::new(
@@ -359,7 +358,10 @@ fn test_search_performance_edge_cases() {
     result.print();
 
     assert_eq!(matches.len(), 0);
-    assert!(duration.as_millis() < 50, "Empty string search should be fast");
+    assert!(
+        duration.as_millis() < 50,
+        "Empty string search should be fast"
+    );
 }
 
 #[test]
@@ -383,13 +385,7 @@ fn test_search_performance_memory_usage() {
 
         // Perform search and ensure it doesn't panic or hang
         let start = Instant::now();
-        let matches = find_matching_cards(
-            "Lightning Bolt",
-            4,
-            &inventory,
-            Some("en"),
-            false,
-        );
+        let matches = find_matching_cards("Lightning Bolt", 4, &inventory, Some("en"), false);
         let duration = start.elapsed();
 
         println!(
@@ -399,7 +395,10 @@ fn test_search_performance_memory_usage() {
         );
 
         // Memory should not grow exponentially with inventory size
-        assert!(duration.as_millis() < 200, "Search should complete within reasonable time");
+        assert!(
+            duration.as_millis() < 200,
+            "Search should complete within reasonable time"
+        );
     }
 }
 
@@ -408,18 +407,17 @@ fn test_search_performance_concurrent_safety() {
     println!("\n=== Performance Test: Concurrent Safety ===");
 
     let inventory = generate_test_inventory(1000);
-    let search_terms = ["Lightning Bolt", "Black Lotus", "Force of Will", "Counterspell"];
+    let search_terms = [
+        "Lightning Bolt",
+        "Black Lotus",
+        "Force of Will",
+        "Counterspell",
+    ];
 
     // Test multiple searches in sequence to ensure no state corruption
     for (i, &search_term) in search_terms.iter().enumerate() {
         let start = Instant::now();
-        let matches = find_matching_cards(
-            search_term,
-            4,
-            &inventory,
-            Some("en"),
-            false,
-        );
+        let matches = find_matching_cards(search_term, 4, &inventory, Some("en"), false);
         let duration = start.elapsed();
 
         println!(
@@ -453,21 +451,14 @@ mod benchmark_helpers {
             .collect();
         assert!(languages.len() > 1, "Should have multiple languages");
 
-        let names: std::collections::HashSet<_> = large_inventory
-            .iter()
-            .map(|c| c.name.as_str())
-            .collect();
+        let names: std::collections::HashSet<_> =
+            large_inventory.iter().map(|c| c.name.as_str()).collect();
         assert!(names.len() > 1, "Should have multiple card names");
     }
 
     #[test]
     fn test_performance_result_creation() {
-        let result = PerformanceResult::new(
-            "Test operation".to_string(),
-            1000,
-            15.5,
-            42,
-        );
+        let result = PerformanceResult::new("Test operation".to_string(), 1000, 15.5, 42);
 
         assert_eq!(result.operation, "Test operation");
         assert_eq!(result.inventory_size, 1000);
