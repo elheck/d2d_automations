@@ -30,6 +30,34 @@ d2d_automations is a Rust-based desktop application for Magic: The Gathering sto
    cargo fmt
    ```
 
+5. **Run tests**
+   ```sh
+   cargo test
+   ```
+
+6. **Run performance tests**
+   ```sh
+   cargo test test_search_performance -- --nocapture
+   ```
+
+## Testing
+
+The project includes comprehensive test suites:
+
+- **Unit tests**: Basic functionality testing for I/O operations and utilities
+- **Integration tests**: Testing the interaction between components
+- **Performance tests**: Comprehensive performance testing for the search function
+
+### Performance Testing
+
+The search function performance is tested with various scenarios:
+- Different inventory sizes (10 to 10,000+ cards)
+- Various language preferences and filtering modes
+- Edge cases and concurrent safety
+- Memory usage estimation
+
+For detailed information about performance testing, see [`check_stock/PERFORMANCE_TESTING.md`](check_stock/PERFORMANCE_TESTING.md).
+
 ## Building a Release Binary
 
 To build an optimized release binary:
