@@ -1,5 +1,5 @@
 //! SevDesk Invoicing Application
-//! 
+//!
 //! This library provides functionality for processing CSV data and integrating
 //! with the SevDesk API for invoice management.
 
