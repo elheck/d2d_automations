@@ -19,6 +19,12 @@ impl WelcomeScreen {
             if ui.button("Stock Analysis").clicked() {
                 *current_screen = Screen::StockAnalysis;
             }
+
+            ui.add_space(10.0);
+
+            if ui.button("Search Cards").clicked() {
+                *current_screen = Screen::Search;
+            }
         });
     }
 }
