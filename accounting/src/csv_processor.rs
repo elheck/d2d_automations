@@ -7,6 +7,12 @@ use crate::models::{CardRecord, OrderRecord};
 
 pub struct CsvProcessor;
 
+impl Default for CsvProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CsvProcessor {
     pub fn new() -> Self {
         debug!("Creating new CSV processor");
