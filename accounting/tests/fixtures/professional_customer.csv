@@ -1,0 +1,2 @@
+OrderID;Username;Name;Street;City;Country;IsProfessional;VATNumber;DateOfPurchase;ArticleCount;MerchandiseValue;ShipmentCosts;TotalValue;Commission;Currency;Description;ProductID;LocalizedProductName
+1218804754;testuser5;Pro Business GmbH;Corporate Park 1;40213 Düsseldorf;Germany;yes;DE123456789;2025-07-05 11:30:00;1;50,00;0,00;50,00;1,00;EUR;1x Expensive Card - 50,00 EUR;795563;Expensive Card

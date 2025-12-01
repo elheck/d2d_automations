@@ -13,21 +13,12 @@ use crate::models::{
 };
 
 /// Cached country data with both name variants mapped to ID
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct CountryCache {
     /// Maps lowercase country name (both local and English) to SevDesk ID
     name_to_id: HashMap<String, u32>,
     /// Whether the cache has been populated
     loaded: bool,
-}
-
-impl Default for CountryCache {
-    fn default() -> Self {
-        Self {
-            name_to_id: HashMap::new(),
-            loaded: false,
-        }
-    }
 }
 
 pub struct SevDeskApi {
@@ -178,7 +169,10 @@ impl SevDeskApi {
         {
             let cache = self.country_cache.read().await;
             if cache.loaded {
-                debug!("Country cache already loaded with {} entries", cache.name_to_id.len());
+                debug!(
+                    "Country cache already loaded with {} entries",
+                    cache.name_to_id.len()
+                );
                 return Ok(());
             }
         }
@@ -215,11 +209,13 @@ impl SevDeskApi {
             .text()
             .await
             .context("Failed to read response text")?;
-        debug!("Fetch countries response length: {} bytes", response_text.len());
+        debug!(
+            "Fetch countries response length: {} bytes",
+            response_text.len()
+        );
 
         let countries: SevDeskResponse<StaticCountryResponse> =
-            serde_json::from_str(&response_text)
-                .context("Failed to parse countries response")?;
+            serde_json::from_str(&response_text).context("Failed to parse countries response")?;
 
         let mut cache = self.country_cache.write().await;
 
@@ -227,10 +223,7 @@ impl SevDeskApi {
             info!("Loaded {} countries from SevDesk API", country_list.len());
 
             for country in country_list {
-                let country_id: u32 = country
-                    .id
-                    .parse()
-                    .context("Failed to parse country ID")?;
+                let country_id: u32 = country.id.parse().context("Failed to parse country ID")?;
 
                 // Add the local name (lowercase for case-insensitive matching)
                 let name_lower = country.name.to_lowercase();
@@ -253,15 +246,22 @@ impl SevDeskApi {
                     }
                     9 => {
                         cache.name_to_id.insert("uk".to_string(), country_id);
-                        cache.name_to_id.insert("great britain".to_string(), country_id);
-                        cache.name_to_id.insert("großbritannien".to_string(), country_id);
+                        cache
+                            .name_to_id
+                            .insert("great britain".to_string(), country_id);
+                        cache
+                            .name_to_id
+                            .insert("großbritannien".to_string(), country_id);
                     }
                     _ => {}
                 }
             }
 
             cache.loaded = true;
-            info!("Country cache populated with {} name mappings", cache.name_to_id.len());
+            info!(
+                "Country cache populated with {} name mappings",
+                cache.name_to_id.len()
+            );
         } else {
             warn!("No countries returned from SevDesk API");
         }
@@ -287,7 +287,8 @@ impl SevDeskApi {
 
         // Try partial matching for common variations
         for (cached_name, &cached_id) in &cache.name_to_id {
-            if cached_name.contains(&country_name_lower) || country_name_lower.contains(cached_name) {
+            if cached_name.contains(&country_name_lower) || country_name_lower.contains(cached_name)
+            {
                 info!("Country '{country_name}' matched to '{cached_name}' with ID: {cached_id}");
                 return Ok(cached_id);
             }

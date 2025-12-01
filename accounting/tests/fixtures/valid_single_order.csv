@@ -1,0 +1,2 @@
+OrderID;Username;Name;Street;City;Country;IsProfessional;VATNumber;DateOfPurchase;ArticleCount;MerchandiseValue;ShipmentCosts;TotalValue;Commission;Currency;Description;ProductID;LocalizedProductName
+1218804750;testuser;Lucas Cordeiro;Hedwig-Porschütz-Straße 28;10557 Berlin;Germany;;;2025-07-01 22:42:27;1;1,87;1,25;3,12;0,10;EUR;1x High Fae Trickster (Magic: The Gathering Foundations) - 40 - Rare - NM - English - 1,87 EUR;795560;High Fae Trickster

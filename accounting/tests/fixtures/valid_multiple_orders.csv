@@ -1,0 +1,4 @@
+OrderID;Username;Name;Street;City;Country;IsProfessional;VATNumber;DateOfPurchase;ArticleCount;MerchandiseValue;ShipmentCosts;TotalValue;Commission;Currency;Description;ProductID;LocalizedProductName
+1218804750;testuser1;John Doe;Main Street 1;10557 Berlin;Germany;;;2025-07-01 22:42:27;1;1,87;1,25;3,12;0,10;EUR;1x High Fae Trickster - 1,87 EUR;795560;High Fae Trickster
+1218804751;testuser2;Jane Smith;Oak Avenue 42;20095 Hamburg;Germany;;;2025-07-02 10:15:00;2;5,50;1,50;7,00;0,15;EUR;2x Lightning Bolt - 2,75 EUR;795561;Lightning Bolt
+1218804752;testuser3;Max Mustermann;Berliner Straße 100;80331 München;Germany;;;2025-07-03 14:30:45;1;12,99;1,25;14,24;0,25;EUR;1x Counterspell - 12,99 EUR;795562;Counterspell

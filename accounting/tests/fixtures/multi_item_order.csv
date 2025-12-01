@@ -1,0 +1,2 @@
+OrderID;Username;Name;Street;City;Country;IsProfessional;VATNumber;DateOfPurchase;ArticleCount;MerchandiseValue;ShipmentCosts;TotalValue;Commission;Currency;Description;ProductID;LocalizedProductName
+1218804753;testuser4;Multi Buyer;Sample Street 5;12345 Frankfurt;Germany;;;2025-07-04 09:00:00;3;8,50;1,50;10,00;0,20;EUR;1x Card One - 2,50 EUR | 1x Card Two - 3,00 EUR | 1x Card Three - 3,00 EUR;111 | 222 | 333;Card One | Card Two | Card Three

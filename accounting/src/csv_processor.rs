@@ -528,3 +528,7 @@ impl CsvProcessor {
         result
     }
 }
+
+#[cfg(test)]
+#[path = "csv_processor_tests.rs"]
+mod tests;

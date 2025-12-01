@@ -1,0 +1,3 @@
+OrderID;Username;Name;Street;City;Country;IsProfessional;VATNumber;DateOfPurchase;ArticleCount;MerchandiseValue;ShipmentCosts;TotalValue;Commission;Currency;Description;ProductID;LocalizedProductName
+1218804758;testuser9;;Main Street;10557 Berlin;Germany;;;2025-07-09;1;5,00;1,00;6,00;0,10;EUR;1x Card - 5,00 EUR;795567;Card
+1218804759;testuser10;Valid Name;Other Street;20095 Hamburg;;;;2025-07-10;1;5,00;1,00;;0,10;EUR;1x Card - 5,00 EUR;795568;Card
