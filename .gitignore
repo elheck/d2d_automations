@@ -19,3 +19,6 @@ target/
 # Added by cargo
 
 /target
+
+# OpenAPI specification (contains sensitive API details)
+accounting/openapi.yaml

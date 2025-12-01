@@ -177,7 +177,7 @@ mod result_counting_tests {
 
     #[test]
     fn counts_successes_correctly() {
-        let results = vec![
+        let results = [
             create_success_result("Alice", "INV-001"),
             create_success_result("Bob", "INV-002"),
             create_error_result("Charlie", "API error"),
@@ -192,7 +192,7 @@ mod result_counting_tests {
 
     #[test]
     fn counts_all_successes() {
-        let results = vec![
+        let results = [
             create_success_result("Alice", "INV-001"),
             create_success_result("Bob", "INV-002"),
             create_success_result("Charlie", "INV-003"),
@@ -207,7 +207,7 @@ mod result_counting_tests {
 
     #[test]
     fn counts_all_errors() {
-        let results = vec![
+        let results = [
             create_error_result("Alice", "Error 1"),
             create_error_result("Bob", "Error 2"),
         ];
