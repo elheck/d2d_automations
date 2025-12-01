@@ -452,3 +452,7 @@ impl InvoiceApp {
         self.processing_state = ProcessingState::Completed;
     }
 }
+
+#[cfg(test)]
+#[path = "app_tests.rs"]
+mod tests;
