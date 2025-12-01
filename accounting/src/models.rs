@@ -200,10 +200,9 @@ pub struct SevDeskResponse<T> {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct SevDeskObjectResponse<T> {
-    #[allow(dead_code)]
     pub success: bool,
-    #[allow(dead_code)]
     pub objects: T,
 }
 
