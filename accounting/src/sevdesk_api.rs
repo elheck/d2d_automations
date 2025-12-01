@@ -1,18 +1,40 @@
 use anyhow::{Context, Result};
 use log::{debug, error, info, warn};
 use reqwest::Client;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use crate::models::{
     AddressCategory, ContactCategory, ContactResponse, InvoiceCreationResult, InvoiceResponse,
     OrderRecord, SevDeskAddress, SevDeskContact, SevDeskContactRef, SevDeskCountry, SevDeskInvoice,
     SevDeskInvoicePos, SevDeskInvoiceRef, SevDeskResponse, SevDeskSingleObjectResponse,
-    SevDeskTaxRule, SevDeskUnity, SevDeskUser, UserResponse,
+    SevDeskTaxRule, SevDeskUnity, SevDeskUser, StaticCountryResponse, UserResponse,
 };
+
+/// Cached country data with both name variants mapped to ID
+#[derive(Debug, Clone)]
+struct CountryCache {
+    /// Maps lowercase country name (both local and English) to SevDesk ID
+    name_to_id: HashMap<String, u32>,
+    /// Whether the cache has been populated
+    loaded: bool,
+}
+
+impl Default for CountryCache {
+    fn default() -> Self {
+        Self {
+            name_to_id: HashMap::new(),
+            loaded: false,
+        }
+    }
+}
 
 pub struct SevDeskApi {
     client: Client,
     api_token: String,
     base_url: String,
+    country_cache: Arc<RwLock<CountryCache>>,
 }
 
 impl SevDeskApi {
@@ -23,6 +45,7 @@ impl SevDeskApi {
             client: Client::new(),
             api_token,
             base_url: "https://my.sevdesk.de/api/v1".to_string(),
+            country_cache: Arc::new(RwLock::new(CountryCache::default())),
         }
     }
 
@@ -149,146 +172,130 @@ impl SevDeskApi {
         Ok(contact_id)
     }
 
+    /// Fetches all countries from SevDesk API and populates the cache
+    async fn fetch_countries(&self) -> Result<()> {
+        // Check if already loaded
+        {
+            let cache = self.country_cache.read().await;
+            if cache.loaded {
+                debug!("Country cache already loaded with {} entries", cache.name_to_id.len());
+                return Ok(());
+            }
+        }
+
+        info!("Fetching countries from SevDesk API");
+        let url = format!("{}/StaticCountry", self.base_url);
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", &self.api_token)
+            .query(&[("limit", "500")]) // Fetch all countries
+            .send()
+            .await
+            .context("Failed to fetch countries")?;
+
+        debug!("Fetch countries response status: {}", response.status());
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .context("Failed to read error response")?;
+            error!("Failed to fetch countries with status {status}: {error_text}");
+            return Err(anyhow::anyhow!(
+                "Failed to fetch countries: {} - {}",
+                status,
+                error_text
+            ));
+        }
+
+        let response_text = response
+            .text()
+            .await
+            .context("Failed to read response text")?;
+        debug!("Fetch countries response length: {} bytes", response_text.len());
+
+        let countries: SevDeskResponse<StaticCountryResponse> =
+            serde_json::from_str(&response_text)
+                .context("Failed to parse countries response")?;
+
+        let mut cache = self.country_cache.write().await;
+
+        if let Some(country_list) = countries.objects {
+            info!("Loaded {} countries from SevDesk API", country_list.len());
+
+            for country in country_list {
+                let country_id: u32 = country
+                    .id
+                    .parse()
+                    .context("Failed to parse country ID")?;
+
+                // Add the local name (lowercase for case-insensitive matching)
+                let name_lower = country.name.to_lowercase();
+                cache.name_to_id.insert(name_lower.clone(), country_id);
+                debug!("Cached country: {} -> {}", country.name, country_id);
+
+                // Add the English name if available and different
+                if let Some(name_en) = &country.name_en {
+                    let name_en_lower = name_en.to_lowercase();
+                    if name_en_lower != name_lower {
+                        cache.name_to_id.insert(name_en_lower, country_id);
+                        debug!("Cached country (EN): {} -> {}", name_en, country_id);
+                    }
+                }
+
+                // Add common aliases for frequently used countries
+                match country_id {
+                    1 => {
+                        cache.name_to_id.insert("de".to_string(), country_id);
+                    }
+                    9 => {
+                        cache.name_to_id.insert("uk".to_string(), country_id);
+                        cache.name_to_id.insert("great britain".to_string(), country_id);
+                        cache.name_to_id.insert("großbritannien".to_string(), country_id);
+                    }
+                    _ => {}
+                }
+            }
+
+            cache.loaded = true;
+            info!("Country cache populated with {} name mappings", cache.name_to_id.len());
+        } else {
+            warn!("No countries returned from SevDesk API");
+        }
+
+        Ok(())
+    }
+
+    /// Gets country ID by name, fetching from API if not cached
     async fn get_country_id(&self, country_name: &str) -> Result<u32> {
         debug!("Getting country ID for: {country_name}");
-        // Complete country mappings for SevDesk based on StaticCountry API
-        let country_id = match country_name {
-            // Major countries (most commonly used)
-            "Germany" | "Deutschland" => 1,
-            "Austria" | "Österreich" => 2, // Note: This might need verification - not in provided data
-            "Switzerland" | "Schweiz" => 3, // Note: This might need verification - not in provided data
-            "Afghanistan" => 4,
-            "Argentina" | "Argentinien" => 5,
-            "Belgium" | "Belgien" => 6,
-            "Bulgaria" | "Bulgarien" => 7,
-            "Denmark" | "Dänemark" => 8,
-            "Great Britain" | "Großbritannien" | "United Kingdom" | "UK" => 9,
-            "Finland" | "Finnland" => 10,
-            "France" | "Frankreich" => 11,
-            "Greece" | "Griechenland" => 12,
-            "Ireland" | "Irland" => 13,
-            "Italy" | "Italien" => 14,
-            "Jamaica" | "Jamaika" => 15,
 
-            // Extended country list from SevDesk API
-            "Azerbaijan" | "Aserbaidschan" => 33,
-            "Israel" => 36,
-            "Australia" | "Australien" => 38,
-            "Japan" => 40,
-            "Belize" => 46,
-            "Chile" => 49,
-            "Iceland" | "Island" => 51,
-            "Hong Kong" | "Hongkong" => 59,
-            "Dubai" => 67,
-            "Brazil" | "Brasilien" => 73,
-            "England" => 74,
+        // Ensure countries are loaded
+        self.fetch_countries().await?;
 
-            // Corrected country IDs based on actual SevDesk API data
-            "Netherlands" | "Niederlande" => 18,
-            "Poland" | "Polen" => 21,
-            "Sweden" | "Schweden" => 25,
-            "Spain" | "Spanien" => 29,
-            "United States" | "USA" => 1353,
+        // Look up in cache (case-insensitive)
+        let country_name_lower = country_name.to_lowercase().trim().to_string();
 
-            // African countries
-            "Algeria" | "Algerien" => 1458,
-            "Angola" => 1466,
-            "Benin" => 1472,
-            "Burkina Faso" => 1473,
-            "Botswana" => 1481,
-            "Burundi" => 1404,
-            "Cameroon" | "Kamerun" => 1400,
-            "Chad" => 1482, // Assuming based on pattern
-            "Egypt" | "Ägypten" => 1383,
-            "Equatorial Guinea" | "Äquatorialguinea" => 1503,
-            "Eritrea" => 1406,
-            "Ethiopia" | "Äthiopien" => 1399,
-            "Gabon" | "Gabun" => 1498,
-            "Gambia" => 1501,
-            "Ghana" => 1382,
-            "Guinea" => 1376,
-            "Guinea-Bissau" => 1502,
-            "Ivory Coast" | "Elfenbeinküste" => 1381,
+        let cache = self.country_cache.read().await;
+        if let Some(&country_id) = cache.name_to_id.get(&country_name_lower) {
+            debug!("Country '{country_name}' found in cache with ID: {country_id}");
+            return Ok(country_id);
+        }
 
-            // Asian countries
-            "Armenia" | "Armenien" => 1348,
-            "Bangladesh" | "Bangladesch" => 1440,
-            "Bhutan" => 1350,
-            "Brunei" => 1479,
-            "Cambodia" | "Kambodscha" => 1401,
-            "Georgia" | "Georgien" => 1394,
-            "India" | "Indien" => 1375,
-            "Indonesia" | "Indonesien" => 1374,
-            "Iran" => 1373,
-            "Iraq" | "Irak" => 1419,
-            "Jordan" | "Jordanien" => 1344,
-            "Yemen" | "Jemen" => 1459,
-
-            // European countries
-            "Albania" | "Albanien" => 1347,
-            "Andorra" => 1418,
-            "Bosnia and Herzegovina" | "Bosnien und Herzegowina" => 1396,
-            "Estonia" | "Estland" => 1390,
-            "Åland Islands" | "Ålandinseln" => 1468,
-            "Faroe Islands" | "Färöer-Inseln" => 1496,
-            "Gibraltar" => 1500,
-            "Guernsey" => 1499,
-            "Isle of Man" => 1513,
-            "Jersey" => 1515,
-
-            // American countries
-            "Antigua and Barbuda" | "Antigua und Barbuda" => 1449,
-            "Aruba" => 1465,
-            "Bahamas" => 1426,
-            "Bahrain" => 1427,
-            "Barbados" => 1445,
-            "Bolivia" | "Bolivien" => 1477,
-            "Costa Rica" => 1421,
-            "Curaçao" => 1455,
-            "Dominica" => 1491,
-            "Dominican Republic" | "Dominikanische Republik" => 1447,
-            "Ecuador" => 1492,
-            "El Salvador" => 1450,
-            "Grenada" => 1504,
-            "Guatemala" => 1506,
-            "Guyana" => 1509,
-            "Haiti" => 1512,
-            "Honduras" => 1511,
-
-            // Caribbean and territories
-            "Anguilla" => 1467,
-            "American Samoa" | "Amerikanisch-Samoa" => 1469,
-            "American Virgin Islands" | "Amerikanische Jungferninseln" => 1559,
-            "British Virgin Islands" | "Britische Jungferninseln" => 1391,
-            "Bermuda" => 1476,
-            "Cayman Islands" | "Kaimaninseln" => 1460,
-            "Cook Islands" | "Cookinseln" => 1486,
-            "Falkland Islands" | "Falklandinseln" => 1495,
-            "Fiji" | "Fidschi" => 1494,
-            "Guam" => 1508,
-            "Guadeloupe" => 1438,
-
-            // Special territories
-            "Antarctica" | "Antarktis" => 1470,
-            "Bouvet Island" | "Bouvetinsel" => 1480,
-            "British Indian Ocean Territory" | "Britisches Territorium im Indischen Ozean" => 1514,
-            "French Guiana" | "Französisch Guyana" => 1507,
-            "French Polynesia" | "Französisch-Polynesien" => 1351,
-            "French Southern and Antarctic Lands" | "Französische Süd-und Antarktisgebiete" => {
-                1471
+        // Try partial matching for common variations
+        for (cached_name, &cached_id) in &cache.name_to_id {
+            if cached_name.contains(&country_name_lower) || country_name_lower.contains(cached_name) {
+                info!("Country '{country_name}' matched to '{cached_name}' with ID: {cached_id}");
+                return Ok(cached_id);
             }
-            "Heard Island and McDonald Islands" | "Heard und die McDonaldinseln" => 1510,
+        }
 
-            // Additional African countries
-            "Djibouti" | "Dschibuti" => 1405,
-
-            _ => {
-                warn!("Unknown country '{country_name}', defaulting to Germany (ID: 1)");
-                1 // Default to Germany
-            }
-        };
-        debug!("Country '{country_name}' mapped to ID: {country_id}");
-        Ok(country_id)
+        // Default to Germany if not found
+        warn!("Unknown country '{country_name}', defaulting to Germany (ID: 1)");
+        Ok(1)
     }
 
     fn parse_price(&self, price_str: &str) -> Result<f64> {

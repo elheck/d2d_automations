@@ -254,3 +254,19 @@ pub struct InvoiceCreationResult {
     pub invoice_number: Option<String>,
     pub error: Option<String>,
 }
+
+/// Response from /StaticCountry endpoint
+#[derive(Debug, Clone, Deserialize)]
+pub struct StaticCountryResponse {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "nameEn")]
+    pub name_en: Option<String>,
+    #[serde(rename = "translationCode")]
+    #[allow(dead_code)]
+    pub translation_code: Option<String>,
+    #[allow(dead_code)]
+    pub locale: Option<String>,
+    #[allow(dead_code)]
+    pub priority: Option<String>,
+}
