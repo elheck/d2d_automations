@@ -299,7 +299,9 @@ impl SevDeskApi {
         Ok(1)
     }
 
-    fn parse_price(&self, price_str: &str) -> Result<f64> {
+    /// Parse price string to f64, handling comma as decimal separator
+    /// Made pub(crate) for testing
+    pub(crate) fn parse_price(&self, price_str: &str) -> Result<f64> {
         debug!("Parsing price: '{price_str}'");
         let clean_price = price_str.replace(',', ".");
         let result = clean_price.parse::<f64>().context("Failed to parse price");
@@ -769,3 +771,7 @@ impl SevDeskApi {
         Ok(success)
     }
 }
+
+#[cfg(test)]
+#[path = "sevdesk_api_tests.rs"]
+mod tests;

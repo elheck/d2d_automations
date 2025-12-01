@@ -224,8 +224,8 @@ async fn main() -> anyhow::Result<()> {
 
 Each module has a corresponding `*_tests.rs` file with unit tests:
 
-- **63 unit tests** covering all parsing and validation logic
-- **19 integration tests** in `tests/csv_processor_tests.rs` testing end-to-end with fixture files
+- **Unit tests** in each `*_tests.rs` file covering parsing and validation logic
+- **Integration tests** in `tests/csv_processor_tests.rs` testing end-to-end with fixture files
 
 Run tests:
 ```bash
