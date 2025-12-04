@@ -1,5 +1,5 @@
 use crate::scryfall::{fetch_card_cached, fetch_image_cached, PriceGuide};
-use crate::ui::state::{Screen, StockListingState};
+use crate::ui::state::{FocusRequest, Screen, StockListingState};
 use eframe::egui;
 use log::{error, info};
 
@@ -87,39 +87,127 @@ impl StockListingScreen {
             ui.separator();
             ui.add_space(10.0);
 
-            // Card lookup input - combined field
+            // Default fields row
             ui.horizontal(|ui| {
+                ui.label("Default Set:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.default_set)
+                        .desired_width(60.0)
+                        .hint_text("e.g. hou"),
+                );
+
+                ui.add_space(20.0);
+
+                ui.label("Language:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.default_language)
+                        .desired_width(40.0)
+                        .hint_text("EN"),
+                );
+            });
+
+            ui.add_space(5.0);
+
+            // Card lookup input and quantity - workflow fields
+            let mut advance_to_quantity = false;
+            let mut complete_entry = false;
+            let mut fetched_set: Option<String> = None;
+
+            ui.horizontal(|ui| {
+                // Card input field
                 ui.label("Card:");
-                let response = ui.add(
+                let hint = if state.default_set.is_empty() {
+                    "e.g. hou120".to_string()
+                } else {
+                    "e.g. 120".to_string()
+                };
+                let card_response = ui.add(
                     egui::TextEdit::singleline(&mut state.card_input)
                         .desired_width(100.0)
-                        .hint_text("e.g. hou120"),
+                        .hint_text(hint),
                 );
+
+                // Request focus on card input if requested (consume the request)
+                if state.focus_request == FocusRequest::Card {
+                    card_response.request_focus();
+                    state.focus_request = FocusRequest::None;
+                }
 
                 ui.add_space(10.0);
 
-                let parsed = parse_card_input(&state.card_input);
+                // Quantity input field
+                ui.label("Qty:");
+                let qty_response = ui.add(
+                    egui::TextEdit::singleline(&mut state.quantity_input)
+                        .desired_width(40.0)
+                        .hint_text("1"),
+                );
+
+                // Request focus on quantity input if requested (consume the request)
+                if state.focus_request == FocusRequest::Quantity {
+                    qty_response.request_focus();
+                    state.focus_request = FocusRequest::None;
+                }
+
+                ui.add_space(10.0);
+
+                // Try to parse card input
+                let parsed = Self::resolve_card_input(&state.card_input, &state.default_set);
                 let can_fetch = parsed.is_some() && !state.image_loading;
 
-                // Fetch on Enter key or button click
-                let enter_pressed =
-                    response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                // Handle Enter key in card field -> move to quantity field
+                let card_enter_pressed =
+                    card_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
-                if ui
-                    .add_enabled(can_fetch, egui::Button::new("Fetch"))
-                    .clicked()
-                    || (enter_pressed && can_fetch)
+                // Handle Enter key in quantity field -> fetch and go back to card
+                let qty_enter_pressed =
+                    qty_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+
+                // Enter in card field -> advance to quantity
+                if card_enter_pressed && parsed.is_some() {
+                    advance_to_quantity = true;
+                    if let Some((ref set_code, _)) = parsed {
+                        fetched_set = Some(set_code.clone());
+                    }
+                }
+
+                // Enter in quantity field OR Fetch button -> fetch and complete
+                if (qty_enter_pressed && can_fetch)
+                    || ui
+                        .add_enabled(can_fetch, egui::Button::new("Fetch"))
+                        .clicked()
                 {
-                    if let Some((set_code, collector_number)) = parsed {
-                        Self::fetch_card_data(ctx, state, &set_code, &collector_number);
+                    if let Some((ref set_code, ref collector_number)) = parsed {
+                        Self::fetch_card_data(ctx, state, set_code, collector_number);
+                        complete_entry = true;
+                        fetched_set = Some(set_code.clone());
                     }
                 }
 
                 // Show parsed result as hint
-                if let Some((set, num)) = parse_card_input(&state.card_input) {
+                if let Some((set, num)) = parsed {
                     ui.label(format!("→ {} #{}", set.to_uppercase(), num));
                 }
             });
+
+            // Handle state transitions after the horizontal block
+            // Update default set if needed
+            if let Some(set) = fetched_set {
+                if state.default_set.to_lowercase() != set.to_lowercase() {
+                    state.default_set = set;
+                }
+            }
+
+            if advance_to_quantity {
+                state.focus_request = FocusRequest::Quantity;
+            }
+
+            if complete_entry {
+                // Reset for next card entry
+                state.card_input.clear();
+                state.quantity_input = String::from("1");
+                state.focus_request = FocusRequest::Card;
+            }
 
             // Error display
             if let Some(ref err) = state.error {
@@ -135,6 +223,31 @@ impl StockListingScreen {
                 Self::show_card_details(ui, state, card.clone());
             }
         });
+    }
+
+    /// Resolve card input to (set_code, collector_number)
+    /// If input is just digits (3 chars), use the default set
+    /// Otherwise parse as set+number
+    fn resolve_card_input(input: &str, default_set: &str) -> Option<(String, String)> {
+        let input = input.trim();
+        if input.is_empty() {
+            return None;
+        }
+
+        // If input is exactly 3 digits and we have a default set, use it
+        if input.len() == 3 && input.chars().all(|c| c.is_ascii_digit()) && !default_set.is_empty()
+        {
+            let collector_number = input.trim_start_matches('0');
+            let collector_number = if collector_number.is_empty() {
+                "0"
+            } else {
+                collector_number
+            };
+            return Some((default_set.to_lowercase(), collector_number.to_string()));
+        }
+
+        // Otherwise try to parse as set+number
+        parse_card_input(input)
     }
 
     fn fetch_card_data(

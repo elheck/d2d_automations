@@ -91,8 +91,21 @@ impl Default for StockAnalysisState {
 
 use crate::scryfall::{CardCache, ImageCache, PriceGuide, ScryfallCard};
 
+/// Which input field to focus next (consumed after use)
+#[derive(Default, PartialEq, Clone, Copy)]
+pub enum FocusRequest {
+    #[default]
+    None,
+    Card,
+    Quantity,
+}
+
 pub struct StockListingState {
-    pub card_input: String, // Combined set code + collector number, e.g. "hou120"
+    pub default_set: String,      // Default set code, e.g. "hou"
+    pub default_language: String, // Default language, e.g. "EN"
+    pub card_input: String,       // Collector number or set+number, e.g. "120" or "hou120"
+    pub quantity_input: String,   // Quantity of cards (defaults to "1")
+    pub focus_request: FocusRequest, // Request focus on next frame (consumed after use)
     pub card: Option<ScryfallCard>,
     pub card_image: Option<egui::TextureHandle>,
     pub image_loading: bool,
@@ -106,7 +119,11 @@ pub struct StockListingState {
 impl Default for StockListingState {
     fn default() -> Self {
         Self {
+            default_set: String::new(),
+            default_language: String::from("EN"),
             card_input: String::new(),
+            quantity_input: String::from("1"),
+            focus_request: FocusRequest::Card, // Start with focus on card input
             card: None,
             card_image: None,
             image_loading: false,
