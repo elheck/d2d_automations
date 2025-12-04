@@ -89,9 +89,8 @@ impl Default for StockAnalysisState {
     }
 }
 
-use crate::scryfall::{PriceGuide, ScryfallCard};
+use crate::scryfall::{CardCache, PriceGuide, ScryfallCard};
 
-#[derive(Default)]
 pub struct StockListingState {
     pub card_input: String, // Combined set code + collector number, e.g. "hou120"
     pub card: Option<ScryfallCard>,
@@ -100,6 +99,22 @@ pub struct StockListingState {
     pub error: Option<String>,
     pub price_guide: Option<PriceGuide>,
     pub price_guide_loading: bool,
+    pub card_cache: CardCache,
+}
+
+impl Default for StockListingState {
+    fn default() -> Self {
+        Self {
+            card_input: String::new(),
+            card: None,
+            card_image: None,
+            image_loading: false,
+            error: None,
+            price_guide: None,
+            price_guide_loading: false,
+            card_cache: CardCache::load(), // Load from disk on startup
+        }
+    }
 }
 
 pub struct SearchState {
