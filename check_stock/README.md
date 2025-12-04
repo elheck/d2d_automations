@@ -43,8 +43,9 @@ Look up any card by set code and collector number:
   - Low and trend prices
   - Both regular and foil variants
 - **Persistent caching**: Cards and images are cached locally for instant repeat lookups
-  - Card data: `~/.cache/d2d_automations/scryfall_cache.json`
-  - Images: `~/.cache/d2d_automations/images/`
+  - **Linux**: `~/.cache/d2d_automations/`
+  - **macOS**: `~/Library/Caches/d2d_automations/`
+  - **Windows**: `%LOCALAPPDATA%\d2d_automations\`
 - **Input format**: Last 3 digits are collector number, rest is set code
   - `hou120` → set `hou`, collector `120`
   - `mh2130` → set `mh2`, collector `130`
