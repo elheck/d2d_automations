@@ -138,7 +138,9 @@ impl StockCheckerScreen {
                 })
                 .collect();
 
-            state.all_matches.push((wants_entry.name, wants_entry.quantity, owned_cards));
+            state
+                .all_matches
+                .push((wants_entry.name, wants_entry.quantity, owned_cards));
         }
 
         Self::generate_regular_output(state);
@@ -247,7 +249,11 @@ impl StockCheckerScreen {
         if state.selected.is_empty() {
             state.selected = std::iter::repeat_n(
                 true,
-                state.all_matches.iter().map(|(_, _, cards)| cards.len()).sum(),
+                state
+                    .all_matches
+                    .iter()
+                    .map(|(_, _, cards)| cards.len())
+                    .sum(),
             )
             .collect();
         }

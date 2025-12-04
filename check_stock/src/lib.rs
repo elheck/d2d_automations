@@ -4,7 +4,6 @@ pub mod io;
 pub mod models;
 pub mod stock_analysis;
 pub mod ui;
-pub mod utils;
 
 // Re-export commonly used items
 pub use card_matching::{find_matching_cards, MatchedCard};
