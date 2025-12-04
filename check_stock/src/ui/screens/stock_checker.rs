@@ -118,6 +118,8 @@ impl StockCheckerScreen {
         state.all_matches.clear();
         // Reset selection to avoid mismatches when card count changes
         state.selected.clear();
+        state.show_selection = false;
+        state.selection_mode = false;
 
         for wants_entry in wantslist {
             let matched_cards = find_matching_cards(
