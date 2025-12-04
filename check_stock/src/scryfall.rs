@@ -455,11 +455,7 @@ pub fn fetch_card_cached(
 ) -> Result<ScryfallCard, String> {
     // Check cache first
     if let Some(card) = cache.get(set_code, collector_number) {
-        log::info!(
-            "Cache hit for {}/{}",
-            set_code,
-            collector_number
-        );
+        log::info!("Cache hit for {}/{}", set_code, collector_number);
         return Ok(card.clone());
     }
 

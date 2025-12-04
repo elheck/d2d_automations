@@ -28,6 +28,18 @@ Search your inventory interactively:
 - Filter by set, language, condition
 - View card details and locations
 
+### 🃏 Card Lookup
+Look up any card by set code and collector number:
+- **Quick input**: Type `hou120` to look up Hour of Devastation #120
+- **Card images**: Display card artwork fetched from Scryfall
+- **Cardmarket prices**: Load comprehensive price data (~50MB) with:
+  - Average, 7-day, and 30-day prices
+  - Low and trend prices
+  - Both regular and foil variants
+- **Persistent caching**: Cards and images are cached locally for instant repeat lookups
+  - Card data: `~/.cache/d2d_automations/scryfall_cache.json`
+  - Images: `~/.cache/d2d_automations/images/`
+
 ## Architecture
 
 ### High-Level Overview
@@ -40,6 +52,7 @@ flowchart TB
         StockChecker[StockCheckerScreen]
         Analysis[StockAnalysisScreen]
         Search[SearchScreen]
+        Listing[StockListingScreen]
     end
     
     subgraph Core["Core Business Logic"]
@@ -47,6 +60,7 @@ flowchart TB
         Matching[card_matching.rs]
         Formatters[formatters.rs]
         StockAnalysis[stock_analysis.rs]
+        Scryfall[scryfall.rs]
     end
     
     subgraph Data["Data Layer"]
@@ -56,10 +70,16 @@ flowchart TB
         WantsEntry[WantsEntry]
     end
     
+    subgraph External["External APIs"]
+        ScryfallAPI[Scryfall API]
+        CardmarketCDN[Cardmarket CDN]
+    end
+    
     App --> Welcome
     App --> StockChecker
     App --> Analysis
     App --> Search
+    App --> Listing
     
     StockChecker --> IO
     StockChecker --> Matching
@@ -68,6 +88,10 @@ flowchart TB
     Analysis --> StockAnalysis
     Search --> IO
     Search --> Matching
+    Listing --> Scryfall
+    
+    Scryfall --> ScryfallAPI
+    Scryfall --> CardmarketCDN
     
     IO --> Models
     Matching --> Models
@@ -86,6 +110,7 @@ graph LR
         io
         models
         stock_analysis
+        scryfall
         ui
     end
     
@@ -103,6 +128,7 @@ graph LR
         stock_checker.rs
         stock_analysis.rs
         search.rs
+        stock_listing.rs
     end
     
     ui --> ui_mod
@@ -138,6 +164,53 @@ sequenceDiagram
     Format-->>GUI: Formatted String
     
     GUI->>User: Display results
+```
+
+### Data Flow - Card Lookup
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant GUI as StockListingScreen
+    participant Cache as CardCache/ImageCache
+    participant Scryfall as scryfall.rs
+    participant API as Scryfall API
+    participant CDN as Cardmarket CDN
+    
+    User->>GUI: Enter "mh2130"
+    GUI->>GUI: Parse → set: mh2, num: 130
+    
+    GUI->>Cache: Check card cache
+    alt Cache hit
+        Cache-->>GUI: ScryfallCard
+    else Cache miss
+        GUI->>Scryfall: fetch_card_cached()
+        Scryfall->>API: GET /cards/mh2/130
+        API-->>Scryfall: Card JSON
+        Scryfall->>Cache: Store card
+        Scryfall-->>GUI: ScryfallCard
+    end
+    
+    GUI->>Cache: Check image cache
+    alt Cache hit
+        Cache-->>GUI: Image bytes
+    else Cache miss
+        GUI->>Scryfall: fetch_image_cached()
+        Scryfall->>API: GET image URL
+        API-->>Scryfall: Image bytes
+        Scryfall->>Cache: Store image file
+        Scryfall-->>GUI: Image bytes
+    end
+    
+    opt Load prices
+        User->>GUI: Click "Load Cardmarket Prices"
+        GUI->>Scryfall: PriceGuide::fetch()
+        Scryfall->>CDN: GET price_guide_1.json
+        CDN-->>Scryfall: ~50MB price data
+        Scryfall-->>GUI: PriceGuide
+    end
+    
+    GUI->>User: Display card image + prices
 ```
 
 ### Core Components
@@ -176,6 +249,22 @@ Inventory bin analysis:
 - Free slot calculation
 - Location-based sorting
 
+#### `scryfall.rs`
+External API integration and caching:
+
+| Type | Purpose |
+|------|---------|
+| `ScryfallCard` | Card data from Scryfall API (name, set, images, prices) |
+| `CardCache` | Persistent JSON cache for card lookups |
+| `ImageCache` | File-based cache for card images |
+| `PriceGuide` | Cardmarket price data lookup by product ID |
+| `PriceGuideEntry` | Individual price entry with avg, trend, low prices |
+
+Key functions:
+- `fetch_card()` / `fetch_card_cached()`: Get card data from Scryfall
+- `fetch_image()` / `fetch_image_cached()`: Get card images
+- `PriceGuide::fetch()`: Download Cardmarket price guide (~50MB)
+
 ### UI Architecture
 
 ```mermaid
@@ -184,16 +273,19 @@ stateDiagram-v2
     Welcome --> StockChecker: "Stock Checker" button
     Welcome --> StockAnalysis: "Stock Analysis" button
     Welcome --> Search: "Search Cards" button
+    Welcome --> StockListing: "Card Lookup" button
     
     StockChecker --> Welcome: "← Back"
     StockAnalysis --> Welcome: "← Back"
     Search --> Welcome: "← Back"
+    StockListing --> Welcome: "← Back"
 ```
 
 The UI follows a simple screen-based navigation pattern:
 - **AppState**: Shared state for the stock checker screen
 - **StockAnalysisState**: Isolated state for bin analysis
 - **SearchState**: Isolated state for card search
+- **StockListingState**: Isolated state for card lookup (includes caches)
 
 ## Usage
 
@@ -273,6 +365,7 @@ check_stock/
 │   ├── card_matching.rs     # Matching logic
 │   ├── formatters.rs        # Output formatters
 │   ├── stock_analysis.rs    # Bin analysis
+│   ├── scryfall.rs          # Scryfall API + caching
 │   └── ui/
 │       ├── mod.rs
 │       ├── app.rs           # Main app, screen routing
@@ -284,7 +377,8 @@ check_stock/
 │           ├── welcome.rs
 │           ├── stock_checker.rs
 │           ├── stock_analysis.rs
-│           └── search.rs
+│           ├── search.rs
+│           └── stock_listing.rs
 └── tests/
     ├── io_tests.rs
     ├── performance_tests.rs
@@ -311,12 +405,28 @@ cargo fmt --check
 | Crate | Purpose |
 |-------|---------|
 | `eframe` | Native GUI framework (egui backend) |
+| `egui_extras` | Additional egui widgets and image support |
 | `csv` | CSV parsing |
-| `serde` | Serialization/deserialization |
+| `serde` + `serde_json` | Serialization/deserialization |
 | `chrono` | Date/time handling |
 | `rfd` | Native file dialogs |
 | `regex` | Pattern matching |
 | `log` + `env_logger` | Logging infrastructure |
+| `reqwest` | HTTP client for API requests |
+| `image` | Image decoding for card artwork |
+| `dirs` | Cross-platform cache directory detection |
+
+## External APIs
+
+### Scryfall API
+- **Endpoint**: `GET https://api.scryfall.com/cards/{set}/{number}`
+- **Purpose**: Fetch card data and image URLs
+- **Rate limiting**: Respect Scryfall's fair use guidelines
+
+### Cardmarket Price Guide
+- **URL**: `https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_1.json`
+- **Purpose**: Comprehensive pricing data for all cards
+- **Size**: ~50MB (contains all price points for all products)
 
 ## License
 
