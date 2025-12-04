@@ -15,7 +15,7 @@ pub fn format_regular_output(
 
         let card_total_cost: f64 = matched_cards
             .iter()
-            .map(|mc| mc.card.price.parse::<f64>().unwrap_or(0.0) * mc.quantity as f64)
+            .map(|mc| mc.card.price_f64() * mc.quantity as f64)
             .sum();
         let discounted_card_total_cost = card_total_cost * discount_factor;
 
@@ -40,17 +40,7 @@ pub fn format_regular_output(
                 .unwrap_or_default();
 
             // Add special conditions
-            let mut special_conditions = Vec::new();
-            if matched_card.card.is_foil == "1"
-                || matched_card.card.is_foil.to_lowercase() == "true"
-            {
-                special_conditions.push("Foil");
-            }
-            if matched_card.card.is_signed == "1"
-                || matched_card.card.is_signed.to_lowercase() == "true"
-            {
-                special_conditions.push("Signed");
-            }
+            let special_conditions = matched_card.card.special_conditions();
             let special_info = if !special_conditions.is_empty() {
                 format!(" ({})", special_conditions.join(", "))
             } else {
@@ -76,7 +66,7 @@ pub fn format_regular_output(
                 special_info,
                 matched_card.set_name,
                 matched_card.card.condition,
-                matched_card.card.price.parse::<f64>().unwrap_or(0.0),
+                matched_card.card.price_f64(),
                 location_info,
                 comment_info
             ));
@@ -157,24 +147,13 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
         }
 
         // Add special conditions to name
-        let mut special_conditions = Vec::new();
-        if card.is_foil == "1" || card.is_foil.to_lowercase() == "true" {
-            special_conditions.push("Foil");
-        }
-        if card.is_signed == "1" || card.is_signed.to_lowercase() == "true" {
-            special_conditions.push("Signed");
-        }
+        let special_conditions = card.special_conditions();
         if !special_conditions.is_empty() {
             name = format!("{} ({})", name, special_conditions.join(", "));
         }
 
         // Handle playsets
-        let is_playset = card
-            .is_playset
-            .as_deref()
-            .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        if is_playset {
+        if card.is_playset_card() {
             name = format!("{name} [Playset]");
         }
 
@@ -268,7 +247,7 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
     let total_cards: i32 = matched_cards.iter().map(|mc| mc.quantity).sum();
     let total_price: f64 = matched_cards
         .iter()
-        .map(|mc| mc.card.price.parse::<f64>().unwrap_or(0.0) * mc.quantity as f64)
+        .map(|mc| mc.card.price_f64() * mc.quantity as f64)
         .sum();
     output.push_str(&separator);
     output.push_str(&format!("Total cards picked: {total_cards}\n"));
@@ -295,20 +274,14 @@ pub fn format_invoice_list(matched_cards: &[MatchedCard]) -> String {
     // Create entries for each card
     for matched_card in matched_cards {
         let card = matched_card.card;
-        let price = card.price.parse::<f64>().unwrap_or(0.0);
+        let price = card.price_f64();
         let line_total = price * matched_card.quantity as f64;
         total_price += line_total;
         // Discount will be applied in the wrapper function
 
         // Add special conditions to name
         let mut name = card.name.to_string();
-        let mut special_conditions = Vec::new();
-        if card.is_foil == "1" || card.is_foil.to_lowercase() == "true" {
-            special_conditions.push("Foil");
-        }
-        if card.is_signed == "1" || card.is_signed.to_lowercase() == "true" {
-            special_conditions.push("Signed");
-        }
+        let special_conditions = card.special_conditions();
         if !special_conditions.is_empty() {
             name = format!("{} ({})", name, special_conditions.join(", "));
         }
