@@ -22,11 +22,18 @@ pub fn format_regular_output(
 
         let total_found: i32 = matched_cards.iter().map(|mc| mc.quantity).sum();
 
+        // Show "X of Y" if not all copies are available, otherwise just show X
+        let quantity_display = if total_found < *needed_quantity {
+            format!("{total_found} of {needed_quantity}")
+        } else {
+            format!("{total_found}")
+        };
+
         if discount_percent > 0.0 {
-            output.push_str(&format!("{needed_quantity} x {card_name} (total: {discounted_card_total_cost:.2} € after {discount_percent:.1}% discount)\n"));
+            output.push_str(&format!("{quantity_display} x {card_name} (total: {discounted_card_total_cost:.2} € after {discount_percent:.1}% discount)\n"));
         } else {
             output.push_str(&format!(
-                "{needed_quantity} x {card_name} (total: {card_total_cost:.2} €)\n"
+                "{quantity_display} x {card_name} (total: {card_total_cost:.2} €)\n"
             ));
         }
 
