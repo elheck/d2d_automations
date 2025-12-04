@@ -1,4 +1,4 @@
-use crate::scryfall::{fetch_card_cached, fetch_image, PriceGuide};
+use crate::scryfall::{fetch_card_cached, fetch_image_cached, PriceGuide};
 use crate::ui::state::{Screen, StockListingState};
 use eframe::egui;
 use log::{error, info};
@@ -153,9 +153,14 @@ impl StockListingScreen {
             Ok(card) => {
                 info!("Fetched card: {} ({})", card.name, card.set_name);
 
-                // Fetch image if available
+                // Fetch image if available (uses cache if available)
                 if let Some(image_url) = card.image_url() {
-                    match fetch_image(image_url) {
+                    match fetch_image_cached(
+                        &state.image_cache,
+                        set_code,
+                        collector_number,
+                        image_url,
+                    ) {
                         Ok(bytes) => {
                             if let Ok(image) = image::load_from_memory(&bytes) {
                                 let rgba = image.to_rgba8();
