@@ -9,5 +9,5 @@ pub mod ui;
 pub use card_matching::{find_matching_cards, MatchedCard};
 pub use formatters::{format_picking_list, format_regular_output};
 pub use io::{read_csv, read_wantslist};
-pub use models::{Card, WantsEntry};
+pub use models::{Card, Language, WantsEntry};
 pub use stock_analysis::{format_stock_analysis_with_sort, SortOrder, StockAnalysis, StockStats};

@@ -1,12 +1,12 @@
-use crate::models::Card;
+use crate::models::{Card, Language};
 use std::collections::HashMap;
 
-pub fn get_card_name<'a>(card: &'a Card, language: Option<&str>) -> &'a str {
+pub fn get_card_name(card: &Card, language: Option<Language>) -> &str {
     match language {
-        Some("de") if !card.name_de.is_empty() => &card.name_de,
-        Some("es") if !card.name_es.is_empty() => &card.name_es,
-        Some("fr") if !card.name_fr.is_empty() => &card.name_fr,
-        Some("it") if !card.name_it.is_empty() => &card.name_it,
+        Some(Language::German) if !card.name_de.is_empty() => &card.name_de,
+        Some(Language::Spanish) if !card.name_es.is_empty() => &card.name_es,
+        Some(Language::French) if !card.name_fr.is_empty() => &card.name_fr,
+        Some(Language::Italian) if !card.name_it.is_empty() => &card.name_it,
         _ => &card.name,
     }
 }
@@ -22,7 +22,7 @@ pub fn find_matching_cards<'a>(
     card_name: &str,
     needed_quantity: i32,
     inventory: &'a [Card],
-    preferred_language: Option<&str>,
+    preferred_language: Option<Language>,
     preferred_language_only: bool,
 ) -> Vec<MatchedCard<'a>> {
     let trimmed_card_name = card_name.trim();
@@ -30,44 +30,27 @@ pub fn find_matching_cards<'a>(
         .iter()
         .filter(|card| {
             if preferred_language_only {
-                if let Some(lang_code) = preferred_language {
-                    // Map language code to full language name
-                    let lang_full = match lang_code {
-                        "en" => "English",
-                        "de" => "German",
-                        "fr" => "French",
-                        "es" => "Spanish",
-                        "it" => "Italian",
-                        _ => lang_code,
-                    };
-                    get_card_name(card, Some(lang_code))
+                if let Some(lang) = preferred_language {
+                    get_card_name(card, Some(lang))
                         .trim()
                         .eq_ignore_ascii_case(trimmed_card_name)
-                        && card.language.eq_ignore_ascii_case(lang_full)
+                        && card.language.eq_ignore_ascii_case(lang.as_str())
                 } else {
                     // If no preferred language is set, fallback to English
                     get_card_name(card, None)
                         .trim()
                         .eq_ignore_ascii_case(trimmed_card_name)
-                        && card.language.eq_ignore_ascii_case("English")
+                        && card
+                            .language
+                            .eq_ignore_ascii_case(Language::English.as_str())
                 }
             } else {
                 // Match any language
-                get_card_name(card, None)
-                    .trim()
-                    .eq_ignore_ascii_case(trimmed_card_name)
-                    || get_card_name(card, Some("de"))
+                Language::all().iter().any(|lang| {
+                    get_card_name(card, Some(*lang))
                         .trim()
                         .eq_ignore_ascii_case(trimmed_card_name)
-                    || get_card_name(card, Some("es"))
-                        .trim()
-                        .eq_ignore_ascii_case(trimmed_card_name)
-                    || get_card_name(card, Some("fr"))
-                        .trim()
-                        .eq_ignore_ascii_case(trimmed_card_name)
-                    || get_card_name(card, Some("it"))
-                        .trim()
-                        .eq_ignore_ascii_case(trimmed_card_name)
+                })
             }
         })
         .collect();
@@ -88,11 +71,9 @@ pub fn find_matching_cards<'a>(
         cards.sort_by(|a, b| {
             let lang_pref = |c: &Card| {
                 if let Some(lang) = preferred_language {
-                    c.language.eq_ignore_ascii_case(lang)
-                        || (lang == "de" && c.language == "German")
-                        || (lang == "fr" && c.language == "French")
-                        || (lang == "es" && c.language == "Spanish")
-                        || (lang == "it" && c.language == "Italian")
+                    Language::parse(&c.language)
+                        .map(|card_lang| card_lang == lang)
+                        .unwrap_or(false)
                 } else {
                     false
                 }

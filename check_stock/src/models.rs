@@ -1,5 +1,80 @@
 use serde::Deserialize;
 
+/// Represents the supported card languages
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Language {
+    English,
+    German,
+    Spanish,
+    French,
+    Italian,
+}
+
+impl Language {
+    /// Returns the full name of the language (e.g., "English", "German")
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Language::English => "English",
+            Language::German => "German",
+            Language::Spanish => "Spanish",
+            Language::French => "French",
+            Language::Italian => "Italian",
+        }
+    }
+
+    /// Returns the ISO 639-1 language code (e.g., "en", "de")
+    #[allow(dead_code)]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Language::English => "en",
+            Language::German => "de",
+            Language::Spanish => "es",
+            Language::French => "fr",
+            Language::Italian => "it",
+        }
+    }
+
+    /// Parse a language code (e.g., "en", "de") into a Language
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code.to_lowercase().as_str() {
+            "en" => Some(Language::English),
+            "de" => Some(Language::German),
+            "es" => Some(Language::Spanish),
+            "fr" => Some(Language::French),
+            "it" => Some(Language::Italian),
+            _ => None,
+        }
+    }
+
+    /// Parse a full language name (e.g., "English", "German") into a Language
+    pub fn from_full_name(name: &str) -> Option<Self> {
+        match name.to_lowercase().as_str() {
+            "english" => Some(Language::English),
+            "german" => Some(Language::German),
+            "spanish" => Some(Language::Spanish),
+            "french" => Some(Language::French),
+            "italian" => Some(Language::Italian),
+            _ => None,
+        }
+    }
+
+    /// Parse either a language code or full name into a Language
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::from_code(s).or_else(|| Self::from_full_name(s))
+    }
+
+    /// Returns all supported languages
+    pub fn all() -> &'static [Language] {
+        &[
+            Language::English,
+            Language::German,
+            Language::Spanish,
+            Language::French,
+            Language::Italian,
+        ]
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct Card {

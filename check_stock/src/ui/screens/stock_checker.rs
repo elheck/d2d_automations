@@ -126,7 +126,7 @@ impl StockCheckerScreen {
                 &wants_entry.name,
                 wants_entry.quantity,
                 &inventory,
-                Some(state.preferred_language.code()),
+                Some(state.preferred_language),
                 state.preferred_language_only,
             );
 

@@ -1,4 +1,5 @@
 use crate::card_matching::{parse_location_code, MatchedCard};
+use crate::models::Language;
 
 pub fn format_regular_output(
     matches: &[(String, i32, Vec<MatchedCard>)],
@@ -133,11 +134,11 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
         let sort_key = card.location.as_deref().unwrap_or("").to_string();
 
         // Get localized name based on language
-        let mut name = match card.language.as_str() {
-            "German" | "de" => card.name_de.clone(),
-            "Spanish" | "es" => card.name_es.clone(),
-            "French" | "fr" => card.name_fr.clone(),
-            "Italian" | "it" => card.name_it.clone(),
+        let mut name = match Language::parse(&card.language) {
+            Some(Language::German) => card.name_de.clone(),
+            Some(Language::Spanish) => card.name_es.clone(),
+            Some(Language::French) => card.name_fr.clone(),
+            Some(Language::Italian) => card.name_it.clone(),
             _ => card.name.clone(),
         };
 

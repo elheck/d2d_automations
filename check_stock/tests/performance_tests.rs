@@ -1,5 +1,5 @@
 use d2d_automations::card_matching::find_matching_cards;
-use d2d_automations::models::Card;
+use d2d_automations::models::{Card, Language};
 use std::time::Instant;
 
 // Helper function to create test card data
@@ -146,8 +146,13 @@ fn test_search_performance_with_varying_inventory_sizes() {
         let needed_quantity = 4;
 
         let start = Instant::now();
-        let matches =
-            find_matching_cards(search_term, needed_quantity, &inventory, Some("en"), false);
+        let matches = find_matching_cards(
+            search_term,
+            needed_quantity,
+            &inventory,
+            Some(Language::English),
+            false,
+        );
         let duration = start.elapsed();
 
         let result = PerformanceResult::new(
@@ -200,19 +205,18 @@ fn test_search_performance_with_different_languages() {
     let inventory = generate_test_inventory(1000);
     let search_term = "Lightning Bolt";
     let needed_quantity = 4;
-    let languages = [
+    let languages: [(Option<Language>, &str); 6] = [
         (None, "any language"),
-        (Some("en"), "English only"),
-        (Some("de"), "German only"),
-        (Some("fr"), "French only"),
-        (Some("es"), "Spanish only"),
-        (Some("it"), "Italian only"),
+        (Some(Language::English), "English only"),
+        (Some(Language::German), "German only"),
+        (Some(Language::French), "French only"),
+        (Some(Language::Spanish), "Spanish only"),
+        (Some(Language::Italian), "Italian only"),
     ];
 
-    for (lang_code, lang_desc) in &languages {
+    for (lang, lang_desc) in &languages {
         let start = Instant::now();
-        let matches =
-            find_matching_cards(search_term, needed_quantity, &inventory, *lang_code, false);
+        let matches = find_matching_cards(search_term, needed_quantity, &inventory, *lang, false);
         let duration = start.elapsed();
 
         let result = PerformanceResult::new(
@@ -252,7 +256,7 @@ fn test_search_performance_with_language_only_mode() {
         search_term,
         needed_quantity,
         &inventory,
-        Some("en"),
+        Some(Language::English),
         false, // Any language
     );
     let duration_any = start.elapsed();
@@ -271,7 +275,7 @@ fn test_search_performance_with_language_only_mode() {
         search_term,
         needed_quantity,
         &inventory,
-        Some("en"),
+        Some(Language::English),
         true, // English only
     );
     let duration_specific = start.elapsed();
@@ -303,7 +307,13 @@ fn test_search_performance_edge_cases() {
 
     // Test 1: Search for non-existent card
     let start = Instant::now();
-    let matches = find_matching_cards("Nonexistent Card Name", 4, &inventory, Some("en"), false);
+    let matches = find_matching_cards(
+        "Nonexistent Card Name",
+        4,
+        &inventory,
+        Some(Language::English),
+        false,
+    );
     let duration = start.elapsed();
 
     let result = PerformanceResult::new(
@@ -326,7 +336,7 @@ fn test_search_performance_edge_cases() {
         "Lightning Bolt",
         10000, // Very large quantity
         &inventory,
-        Some("en"),
+        Some(Language::English),
         false,
     );
     let duration = start.elapsed();
@@ -346,7 +356,7 @@ fn test_search_performance_edge_cases() {
 
     // Test 3: Search with empty string
     let start = Instant::now();
-    let matches = find_matching_cards("", 4, &inventory, Some("en"), false);
+    let matches = find_matching_cards("", 4, &inventory, Some(Language::English), false);
     let duration = start.elapsed();
 
     let result = PerformanceResult::new(
@@ -385,7 +395,13 @@ fn test_search_performance_memory_usage() {
 
         // Perform search and ensure it doesn't panic or hang
         let start = Instant::now();
-        let matches = find_matching_cards("Lightning Bolt", 4, &inventory, Some("en"), false);
+        let matches = find_matching_cards(
+            "Lightning Bolt",
+            4,
+            &inventory,
+            Some(Language::English),
+            false,
+        );
         let duration = start.elapsed();
 
         println!(
@@ -417,7 +433,8 @@ fn test_search_performance_concurrent_safety() {
     // Test multiple searches in sequence to ensure no state corruption
     for (i, &search_term) in search_terms.iter().enumerate() {
         let start = Instant::now();
-        let matches = find_matching_cards(search_term, 4, &inventory, Some("en"), false);
+        let matches =
+            find_matching_cards(search_term, 4, &inventory, Some(Language::English), false);
         let duration = start.elapsed();
 
         println!(
