@@ -6,6 +6,7 @@ use crate::{
     },
 };
 use eframe::egui;
+use log::{debug, info};
 use std::time::Instant;
 
 pub struct SearchScreen;
@@ -270,8 +271,10 @@ impl SearchScreen {
     }
 
     fn load_csv(state: &mut SearchState) {
+        info!("Loading CSV for search: {}", state.csv_path);
         match read_csv(&state.csv_path) {
             Ok(cards) => {
+                info!("Loaded {} cards for searching", cards.len());
                 state.cards = cards.clone();
                 state.filtered_cards = cards;
                 if !state.search_term.is_empty() {
@@ -279,6 +282,7 @@ impl SearchScreen {
                 }
             }
             Err(e) => {
+                log::error!("Error loading CSV: {}", e);
                 eprintln!("Error loading CSV: {}", e);
             }
         }
@@ -290,6 +294,8 @@ impl SearchScreen {
             state.current_page = 0; // Reset to first page
             return;
         }
+
+        debug!("Performing search for: '{}'", state.search_term);
 
         let search_term = if state.search_case_sensitive {
             state.search_term.clone()

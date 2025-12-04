@@ -1,4 +1,5 @@
 use crate::models::{Card, Language};
+use log::debug;
 use std::collections::HashMap;
 
 pub fn get_card_name(card: &Card, language: Option<Language>) -> &str {
@@ -56,8 +57,15 @@ pub fn find_matching_cards<'a>(
         .collect();
 
     if matching_cards.is_empty() {
+        debug!("No matches found for '{}'", trimmed_card_name);
         return Vec::new();
     }
+
+    debug!(
+        "Found {} potential matches for '{}'",
+        matching_cards.len(),
+        trimmed_card_name
+    );
 
     // Sort matched cards to prioritize preferred language
     let mut cards_by_set: HashMap<String, Vec<&Card>> = HashMap::new();

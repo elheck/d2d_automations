@@ -11,6 +11,7 @@ use crate::{
     },
 };
 use eframe::egui;
+use log::{debug, error, info};
 
 pub struct StockCheckerScreen;
 
@@ -110,8 +111,18 @@ impl StockCheckerScreen {
 
     fn check_stock(state: &mut AppState) -> Result<(), Box<dyn std::error::Error>> {
         if state.inventory_path.is_empty() || state.wantslist_path.is_empty() {
+            error!(
+                "Missing file paths - inventory: '{}', wantslist: '{}'",
+                state.inventory_path, state.wantslist_path
+            );
             return Err("Please select both inventory and wantslist files".into());
         }
+
+        info!("Starting stock check...");
+        info!(
+            "Language preference: {:?}, only preferred: {}",
+            state.preferred_language, state.preferred_language_only
+        );
 
         let inventory = read_csv(&state.inventory_path)?;
         let wantslist = read_wantslist(&state.wantslist_path)?;
@@ -121,6 +132,10 @@ impl StockCheckerScreen {
         state.show_selection = false;
         state.selection_mode = false;
 
+        let mut total_found = 0;
+        let mut total_wanted = 0;
+        let mut missing_cards = Vec::new();
+
         for wants_entry in wantslist {
             let matched_cards = find_matching_cards(
                 &wants_entry.name,
@@ -128,6 +143,19 @@ impl StockCheckerScreen {
                 &inventory,
                 Some(state.preferred_language),
                 state.preferred_language_only,
+            );
+
+            let found_qty: i32 = matched_cards.iter().map(|mc| mc.quantity).sum();
+            total_found += found_qty;
+            total_wanted += wants_entry.quantity;
+
+            if found_qty < wants_entry.quantity {
+                missing_cards.push((wants_entry.name.clone(), wants_entry.quantity - found_qty));
+            }
+
+            debug!(
+                "Card '{}': wanted {}, found {}",
+                wants_entry.name, wants_entry.quantity, found_qty
             );
 
             let owned_cards = matched_cards
@@ -141,6 +169,25 @@ impl StockCheckerScreen {
             state
                 .all_matches
                 .push((wants_entry.name, wants_entry.quantity, owned_cards));
+        }
+
+        info!(
+            "Stock check complete: found {} of {} cards ({} card types checked)",
+            total_found,
+            total_wanted,
+            state.all_matches.len()
+        );
+
+        if !missing_cards.is_empty() {
+            info!(
+                "Missing {} card types: {:?}",
+                missing_cards.len(),
+                missing_cards
+                    .iter()
+                    .take(5)
+                    .map(|(name, qty)| format!("{} ({})", name, qty))
+                    .collect::<Vec<_>>()
+            );
         }
 
         Self::generate_regular_output(state);

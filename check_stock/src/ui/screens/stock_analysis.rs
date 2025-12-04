@@ -7,6 +7,7 @@ use crate::{
     },
 };
 use eframe::egui;
+use log::info;
 
 pub struct StockAnalysisScreen;
 
@@ -101,9 +102,21 @@ impl StockAnalysisScreen {
             return Err("Please select an inventory file".into());
         }
 
+        info!(
+            "Starting stock analysis with {} free slots threshold",
+            state.free_slots
+        );
+
         let inventory = read_csv(&state.inventory_path)?;
         let analyzer = StockAnalysis::new(inventory);
         let stats = analyzer.analyze_with_free_slots(state.free_slots);
+
+        info!(
+            "Found {} bins with {} or more free slots",
+            stats.available_bins.len(),
+            state.free_slots
+        );
+
         state.output = format_stock_analysis_with_sort(&stats, state.sort_order);
         Ok(())
     }
