@@ -2,6 +2,7 @@ mod card_matching;
 mod formatters;
 mod io;
 mod models;
+mod scryfall;
 mod stock_analysis;
 mod ui;
 

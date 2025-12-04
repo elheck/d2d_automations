@@ -2,14 +2,17 @@ use eframe::{self, egui};
 use egui::ViewportBuilder;
 
 use super::{
-    screens::{SearchScreen, StockAnalysisScreen, StockCheckerScreen, WelcomeScreen},
-    state::{AppState, Screen, SearchState, StockAnalysisState},
+    screens::{
+        SearchScreen, StockAnalysisScreen, StockCheckerScreen, StockListingScreen, WelcomeScreen,
+    },
+    state::{AppState, Screen, SearchState, StockAnalysisState, StockListingState},
 };
 
 #[derive(Default)]
 pub struct StockCheckerApp {
     app_state: AppState,
     analysis_state: StockAnalysisState,
+    listing_state: StockListingState,
     search_state: SearchState,
 }
 
@@ -29,6 +32,13 @@ impl eframe::App for StockCheckerApp {
                     ctx,
                     &mut self.app_state.current_screen,
                     &mut self.analysis_state,
+                );
+            }
+            Screen::StockListing => {
+                StockListingScreen::show(
+                    ctx,
+                    &mut self.app_state.current_screen,
+                    &mut self.listing_state,
                 );
             }
             Screen::Search => {

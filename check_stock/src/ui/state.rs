@@ -1,6 +1,7 @@
 use super::language::Language;
 use crate::models::Card;
 use crate::stock_analysis::SortOrder;
+use eframe::egui;
 
 type CardMatch = (Card, i32, String);
 /// (card_name, needed_quantity, matched_cards)
@@ -11,6 +12,7 @@ pub enum Screen {
     Welcome,
     StockChecker,
     StockAnalysis,
+    StockListing,
     Search,
 }
 
@@ -85,6 +87,19 @@ impl Default for StockAnalysisState {
             sort_order: SortOrder::ByFreeSlots,
         }
     }
+}
+
+use crate::scryfall::{PriceGuide, ScryfallCard};
+
+#[derive(Default)]
+pub struct StockListingState {
+    pub card_input: String, // Combined set code + collector number, e.g. "hou120"
+    pub card: Option<ScryfallCard>,
+    pub card_image: Option<egui::TextureHandle>,
+    pub image_loading: bool,
+    pub error: Option<String>,
+    pub price_guide: Option<PriceGuide>,
+    pub price_guide_loading: bool,
 }
 
 pub struct SearchState {
