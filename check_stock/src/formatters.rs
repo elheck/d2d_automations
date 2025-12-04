@@ -1,14 +1,14 @@
 use crate::card_matching::{parse_location_code, MatchedCard};
 
 pub fn format_regular_output(
-    matches: &[(String, Vec<MatchedCard>)],
+    matches: &[(String, i32, Vec<MatchedCard>)],
     discount_percent: f32,
 ) -> String {
     let mut output = String::new();
     let mut total_price = 0.0;
     let discount_factor = 1.0 - (discount_percent as f64 / 100.0);
 
-    for (card_name, matched_cards) in matches {
+    for (card_name, needed_quantity, matched_cards) in matches {
         if matched_cards.is_empty() {
             continue;
         }
@@ -20,7 +20,6 @@ pub fn format_regular_output(
         let discounted_card_total_cost = card_total_cost * discount_factor;
 
         let total_found: i32 = matched_cards.iter().map(|mc| mc.quantity).sum();
-        let needed_quantity = matched_cards.first().map(|mc| mc.quantity).unwrap_or(0);
 
         if discount_percent > 0.0 {
             output.push_str(&format!("{needed_quantity} x {card_name} (total: {discounted_card_total_cost:.2} € after {discount_percent:.1}% discount)\n"));
@@ -83,7 +82,7 @@ pub fn format_regular_output(
             ));
         }
 
-        if total_found < needed_quantity {
+        if total_found < *needed_quantity {
             output.push_str(&format!(
                 "    WARNING: Only {total_found} of {needed_quantity} copies available!\n"
             ));
@@ -96,7 +95,7 @@ pub fn format_regular_output(
     if !matches.is_empty() {
         let total_cards: i32 = matches
             .iter()
-            .flat_map(|(_, cards)| cards.iter())
+            .flat_map(|(_, _, cards)| cards.iter())
             .map(|mc| mc.quantity)
             .sum();
 
@@ -118,6 +117,7 @@ pub fn format_regular_output(
 
 pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
     let mut output_entries = Vec::new();
+    let mut max_qty_len = 3; // Minimum width for "Qty"
     let mut max_loc_len = 0;
     let mut max_name_len = 0;
     let mut max_lang_len = 0;
@@ -128,6 +128,7 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
     // Calculate maximum lengths for alignment
     for matched_card in matched_cards {
         let card = matched_card.card;
+        max_qty_len = max_qty_len.max(matched_card.quantity.to_string().len());
         max_loc_len = max_loc_len.max(card.location.as_deref().unwrap_or("").len());
         max_name_len = max_name_len.max(card.name.len());
         max_lang_len = max_lang_len.max(card.language.len());
@@ -183,13 +184,15 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
         }
 
         let entry = format!(
-            "{:<width_loc$} | {:<width_name$} | {:<width_lang$} | {:<width_rarity$} | {:<width_cn$} | {:<width_set$}\n",
+            "{:>width_qty$} | {:<width_loc$} | {:<width_name$} | {:<width_lang$} | {:<width_rarity$} | {:<width_cn$} | {:<width_set$}\n",
+            matched_card.quantity,
             card.location.as_deref().unwrap_or(""),
             name,
             card.language,
             card.rarity,
             card.cn,
             matched_card.set_name,
+            width_qty = max_qty_len,
             width_loc = max_loc_len,
             width_name = max_name_len,
             width_lang = max_lang_len,
@@ -217,13 +220,15 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
 
     // Create header
     let header = format!(
-        "{:<width_loc$} | {:<width_name$} | {:<width_lang$} | {:<width_rarity$} | {:<width_cn$} | {:<width_set$}\n",
+        "{:>width_qty$} | {:<width_loc$} | {:<width_name$} | {:<width_lang$} | {:<width_rarity$} | {:<width_cn$} | {:<width_set$}\n",
+        "Qty",
         "Location",
         "Name",
         "Language",
         "Rarity",
         "Collector Number",
         "Set",
+        width_qty = max_qty_len,
         width_loc = max_loc_len,
         width_name = max_name_len,
         width_lang = max_lang_len,
@@ -234,13 +239,15 @@ pub fn format_picking_list(matched_cards: &[MatchedCard]) -> String {
 
     // Create separator line
     let separator = format!(
-        "{:-<width_loc$}-+-{:-<width_name$}-+-{:-<width_lang$}-+-{:-<width_rarity$}-+-{:-<width_cn$}-+-{:-<width_set$}\n",
+        "{:->width_qty$}-+-{:-<width_loc$}-+-{:-<width_name$}-+-{:-<width_lang$}-+-{:-<width_rarity$}-+-{:-<width_cn$}-+-{:-<width_set$}\n",
         "",
         "",
         "",
         "",
         "",
         "",
+        "",
+        width_qty = max_qty_len,
         width_loc = max_loc_len,
         width_name = max_name_len,
         width_lang = max_lang_len,

@@ -136,7 +136,7 @@ impl StockCheckerScreen {
                 })
                 .collect();
 
-            state.all_matches.push((wants_entry.name, owned_cards));
+            state.all_matches.push((wants_entry.name, wants_entry.quantity, owned_cards));
         }
 
         Self::generate_regular_output(state);
@@ -149,7 +149,7 @@ impl StockCheckerScreen {
             .max_height(ui.available_height() - 50.0)
             .show(ui, |ui| {
                 let mut idx = 0;
-                for (card_name, cards) in &state.all_matches {
+                for (card_name, _needed_qty, cards) in &state.all_matches {
                     if !cards.is_empty() {
                         ui.label(format!("{card_name}:"));
                         for (card, quantity, set_name) in cards {
@@ -245,7 +245,7 @@ impl StockCheckerScreen {
         if state.selected.is_empty() {
             state.selected = std::iter::repeat_n(
                 true,
-                state.all_matches.iter().map(|(_, cards)| cards.len()).sum(),
+                state.all_matches.iter().map(|(_, _, cards)| cards.len()).sum(),
             )
             .collect();
         }
@@ -257,7 +257,7 @@ impl StockCheckerScreen {
         let selected_matches: Vec<_> = state
             .all_matches
             .iter()
-            .map(|(name, cards)| {
+            .map(|(name, needed_qty, cards)| {
                 let group_cards: Vec<_> = cards
                     .iter()
                     .map(|(card, quantity, set_name)| MatchedCard {
@@ -266,7 +266,7 @@ impl StockCheckerScreen {
                         set_name: set_name.clone(),
                     })
                     .collect();
-                (name.clone(), group_cards)
+                (name.clone(), *needed_qty, group_cards)
             })
             .collect();
 
@@ -277,7 +277,7 @@ impl StockCheckerScreen {
         let mut selected_matches = Vec::new();
         let mut idx = 0;
 
-        for (name, cards) in &state.all_matches {
+        for (name, needed_qty, cards) in &state.all_matches {
             let mut group_cards = Vec::new();
             for (card, quantity, set_name) in cards {
                 if state.selected[idx] {
@@ -290,7 +290,7 @@ impl StockCheckerScreen {
                 idx += 1;
             }
             if !group_cards.is_empty() {
-                selected_matches.push((name.clone(), group_cards));
+                selected_matches.push((name.clone(), *needed_qty, group_cards));
             }
         }
 
@@ -299,7 +299,7 @@ impl StockCheckerScreen {
             OutputFormat::PickingList => {
                 let all_cards: Vec<_> = selected_matches
                     .iter()
-                    .flat_map(|(_, cards)| cards.iter().cloned())
+                    .flat_map(|(_, _, cards)| cards.iter().cloned())
                     .collect();
                 let mut output = format_picking_list(&all_cards);
                 if discount_percent > 0.0 {
@@ -317,7 +317,7 @@ impl StockCheckerScreen {
             OutputFormat::InvoiceList => {
                 let all_cards: Vec<_> = selected_matches
                     .iter()
-                    .flat_map(|(_, cards)| cards.iter().cloned())
+                    .flat_map(|(_, _, cards)| cards.iter().cloned())
                     .collect();
                 let mut output = format_invoice_list(&all_cards);
                 if discount_percent > 0.0 {
@@ -335,7 +335,7 @@ impl StockCheckerScreen {
             OutputFormat::UpdateStock => {
                 let all_cards: Vec<_> = selected_matches
                     .iter()
-                    .flat_map(|(_, cards)| cards.iter().cloned())
+                    .flat_map(|(_, _, cards)| cards.iter().cloned())
                     .collect();
                 format_update_stock_csv(&all_cards)
             }

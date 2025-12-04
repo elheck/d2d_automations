@@ -3,7 +3,8 @@ use crate::models::Card;
 use crate::stock_analysis::SortOrder;
 
 type CardMatch = (Card, i32, String);
-type CardMatchGroup = (String, Vec<CardMatch>);
+/// (card_name, needed_quantity, matched_cards)
+type CardMatchGroup = (String, i32, Vec<CardMatch>);
 
 #[derive(PartialEq)]
 pub enum Screen {
