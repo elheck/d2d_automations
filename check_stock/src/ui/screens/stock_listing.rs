@@ -5,27 +5,41 @@ use log::{error, info};
 
 pub struct StockListingScreen;
 
-/// Parse a combined set code + collector number input like "hou120" or "akh2"
+/// Parse a combined set code + collector number input like "hou120", "mh2130", or "2xm050"
 /// Returns (set_code, collector_number) or None if invalid
+///
+/// Strategy: The collector number is always the last 3 digits, everything before is the set code.
 fn parse_card_input(input: &str) -> Option<(String, String)> {
     let input = input.trim().to_lowercase();
-    if input.is_empty() {
+
+    // Need at least 4 chars: 1 for set + 3 for collector number
+    if input.len() < 4 {
         return None;
     }
 
-    // Find where the letters end and numbers begin
-    let first_digit_pos = input.find(|c: char| c.is_ascii_digit())?;
+    // Last 3 characters are the collector number
+    let split_pos = input.len() - 3;
+    let set_code = &input[..split_pos];
+    let collector_number = &input[split_pos..];
 
-    if first_digit_pos == 0 {
-        return None; // Must start with letters
-    }
-
-    let set_code = &input[..first_digit_pos];
-    let collector_number = &input[first_digit_pos..];
-
-    if set_code.is_empty() || collector_number.is_empty() {
+    // Validate: collector number must be all digits
+    if !collector_number.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
+
+    // Validate: set code must be non-empty
+    if set_code.is_empty() {
+        return None;
+    }
+
+    // Strip leading zeros from collector number (API requires e.g. "5" not "005")
+    let collector_number = collector_number.trim_start_matches('0');
+    // Handle edge case: if all zeros, keep one zero
+    let collector_number = if collector_number.is_empty() {
+        "0"
+    } else {
+        collector_number
+    };
 
     Some((set_code.to_string(), collector_number.to_string()))
 }
@@ -235,65 +249,54 @@ impl StockListingScreen {
                     if let Some(ref guide) = state.price_guide {
                         if let Some(prices) = guide.get(cardmarket_id) {
                             ui.add_space(5.0);
-                            ui.label("Cardmarket Price Guide:");
+                            ui.heading("Cardmarket Price Guide");
 
                             egui::Grid::new("price_grid")
-                                .num_columns(2)
-                                .spacing([20.0, 4.0])
+                                .num_columns(3)
+                                .spacing([30.0, 4.0])
+                                .striped(true)
                                 .show(ui, |ui| {
-                                    // Regular prices
-                                    ui.label("Regular:");
+                                    // Header row
+                                    ui.label("");
+                                    ui.strong("Regular");
+                                    ui.strong("Foil");
                                     ui.end_row();
 
-                                    if let Some(trend) = prices.trend {
-                                        ui.label("  Trend:");
-                                        ui.label(format!("{:.2} €", trend));
-                                        ui.end_row();
-                                    }
-                                    if let Some(avg) = prices.avg {
-                                        ui.label("  Average:");
-                                        ui.label(format!("{:.2} €", avg));
-                                        ui.end_row();
-                                    }
-                                    if let Some(low) = prices.low {
-                                        ui.label("  Low:");
-                                        ui.label(format!("{:.2} €", low));
-                                        ui.end_row();
-                                    }
-                                    if let Some(avg30) = prices.avg30 {
-                                        ui.label("  30-day Avg:");
-                                        ui.label(format!("{:.2} €", avg30));
-                                        ui.end_row();
-                                    }
+                                    // Trend
+                                    ui.label("Trend:");
+                                    ui.label(format_price(prices.trend));
+                                    ui.label(format_price(prices.trend_foil));
+                                    ui.end_row();
 
-                                    // Foil prices
-                                    if prices.trend_foil.is_some() || prices.low_foil.is_some() {
-                                        ui.label("");
-                                        ui.end_row();
-                                        ui.label("Foil:");
-                                        ui.end_row();
+                                    // Low
+                                    ui.label("Low:");
+                                    ui.label(format_price(prices.low));
+                                    ui.label(format_price(prices.low_foil));
+                                    ui.end_row();
 
-                                        if let Some(trend) = prices.trend_foil {
-                                            ui.label("  Trend:");
-                                            ui.label(format!("{:.2} €", trend));
-                                            ui.end_row();
-                                        }
-                                        if let Some(avg) = prices.avg_foil {
-                                            ui.label("  Average:");
-                                            ui.label(format!("{:.2} €", avg));
-                                            ui.end_row();
-                                        }
-                                        if let Some(low) = prices.low_foil {
-                                            ui.label("  Low:");
-                                            ui.label(format!("{:.2} €", low));
-                                            ui.end_row();
-                                        }
-                                        if let Some(avg30) = prices.avg30_foil {
-                                            ui.label("  30-day Avg:");
-                                            ui.label(format!("{:.2} €", avg30));
-                                            ui.end_row();
-                                        }
-                                    }
+                                    // Average
+                                    ui.label("Average:");
+                                    ui.label(format_price(prices.avg));
+                                    ui.label(format_price(prices.avg_foil));
+                                    ui.end_row();
+
+                                    // 1-day average
+                                    ui.label("Avg (1 day):");
+                                    ui.label(format_price(prices.avg1));
+                                    ui.label(format_price(prices.avg1_foil));
+                                    ui.end_row();
+
+                                    // 7-day average
+                                    ui.label("Avg (7 days):");
+                                    ui.label(format_price(prices.avg7));
+                                    ui.label(format_price(prices.avg7_foil));
+                                    ui.end_row();
+
+                                    // 30-day average
+                                    ui.label("Avg (30 days):");
+                                    ui.label(format_price(prices.avg30));
+                                    ui.label(format_price(prices.avg30_foil));
+                                    ui.end_row();
                                 });
                         } else {
                             ui.label("(Not found in price guide)");
@@ -302,5 +305,12 @@ impl StockListingScreen {
                 }
             });
         });
+    }
+}
+
+fn format_price(price: Option<f64>) -> String {
+    match price {
+        Some(p) => format!("{:.2} €", p),
+        None => "—".to_string(),
     }
 }
