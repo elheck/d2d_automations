@@ -101,10 +101,10 @@ pub enum FocusRequest {
 }
 
 pub struct StockListingState {
-    pub default_set: String,      // Default set code, e.g. "hou"
-    pub default_language: String, // Default language, e.g. "EN"
-    pub card_input: String,       // Collector number or set+number, e.g. "120" or "hou120"
-    pub quantity_input: String,   // Quantity of cards (defaults to "1")
+    pub default_set: String,         // Default set code, e.g. "hou"
+    pub default_language: String,    // Default language, e.g. "EN"
+    pub card_input: String,          // Collector number or set+number, e.g. "120" or "hou120"
+    pub quantity_input: String,      // Quantity of cards (defaults to "1")
     pub focus_request: FocusRequest, // Request focus on next frame (consumed after use)
     pub card: Option<ScryfallCard>,
     pub card_image: Option<egui::TextureHandle>,

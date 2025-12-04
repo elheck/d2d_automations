@@ -30,7 +30,13 @@ Search your inventory interactively:
 
 ### 🃏 Card Lookup
 Look up any card by set code and collector number:
-- **Quick input**: Type `hou120` to look up Hour of Devastation #120
+- **Quick input workflow**:
+  1. Type card (e.g., `hou120` or just `120` with default set) → **Enter**
+  2. Adjust quantity if needed (defaults to `1`) → **Enter**
+  3. Card is fetched and displayed, ready for next card
+- **Default fields**:
+  - **Default Set**: Set once (e.g., `hou`), then only type collector numbers
+  - **Default Language**: Pre-filled language code (e.g., `EN`) for future use
 - **Card images**: Display card artwork fetched from Scryfall
 - **Cardmarket prices**: Load comprehensive price data (~50MB) with:
   - Average, 7-day, and 30-day prices
@@ -39,6 +45,10 @@ Look up any card by set code and collector number:
 - **Persistent caching**: Cards and images are cached locally for instant repeat lookups
   - Card data: `~/.cache/d2d_automations/scryfall_cache.json`
   - Images: `~/.cache/d2d_automations/images/`
+- **Input format**: Last 3 digits are collector number, rest is set code
+  - `hou120` → set `hou`, collector `120`
+  - `mh2130` → set `mh2`, collector `130`
+  - Leading zeros stripped automatically (`005` → `5`)
 
 ## Architecture
 
@@ -177,8 +187,11 @@ sequenceDiagram
     participant API as Scryfall API
     participant CDN as Cardmarket CDN
     
-    User->>GUI: Enter "mh2130"
+    User->>GUI: Type "mh2130" + Enter
     GUI->>GUI: Parse → set: mh2, num: 130
+    GUI->>GUI: Focus moves to Qty field
+    
+    User->>GUI: Enter (confirm qty=1)
     
     GUI->>Cache: Check card cache
     alt Cache hit
@@ -201,6 +214,12 @@ sequenceDiagram
         Scryfall->>Cache: Store image file
         Scryfall-->>GUI: Image bytes
     end
+    
+    GUI->>GUI: Update default_set to "mh2"
+    GUI->>GUI: Clear inputs, focus back to Card
+    GUI->>User: Display card image + prices
+    
+    Note over User,GUI: Next card: just type "131" + Enter + Enter
     
     opt Load prices
         User->>GUI: Click "Load Cardmarket Prices"
@@ -285,7 +304,12 @@ The UI follows a simple screen-based navigation pattern:
 - **AppState**: Shared state for the stock checker screen
 - **StockAnalysisState**: Isolated state for bin analysis
 - **SearchState**: Isolated state for card search
-- **StockListingState**: Isolated state for card lookup (includes caches)
+- **StockListingState**: Isolated state for card lookup with:
+  - `default_set`: Remembered set code for quick entry
+  - `default_language`: Pre-filled language code
+  - `card_input` / `quantity_input`: Current entry fields
+  - `focus_request`: One-shot focus management for workflow
+  - `card_cache` / `image_cache`: Persistent caches
 
 ## Usage
 
