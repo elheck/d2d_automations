@@ -54,7 +54,7 @@ impl StockListingScreen {
             });
             ui.add_space(10.0);
 
-            ui.heading("Card Lookup");
+            ui.heading("Magic Singles Listing");
             ui.add_space(10.0);
 
             // Price guide - fetch from Cardmarket once
@@ -299,7 +299,7 @@ impl StockListingScreen {
             }
             Err(e) => {
                 error!("Failed to fetch card: {}", e);
-                state.error = Some(e);
+                state.error = Some(e.to_string());
             }
         }
 

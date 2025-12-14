@@ -22,7 +22,7 @@ impl WelcomeScreen {
 
             ui.add_space(10.0);
 
-            if ui.button("Stock Listing").clicked() {
+            if ui.button("Magic Singles Listing").clicked() {
                 *current_screen = Screen::StockListing;
             }
 

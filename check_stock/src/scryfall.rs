@@ -1,3 +1,4 @@
+use crate::error::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -92,7 +93,7 @@ pub struct ScryfallError {
 }
 
 /// Fetch a card from Scryfall by set code and collector number
-pub fn fetch_card(set_code: &str, collector_number: &str) -> Result<ScryfallCard, String> {
+pub fn fetch_card(set_code: &str, collector_number: &str) -> ApiResult<ScryfallCard> {
     let url = format!(
         "https://api.scryfall.com/cards/{}/{}",
         set_code.to_lowercase(),
@@ -104,38 +105,32 @@ pub fn fetch_card(set_code: &str, collector_number: &str) -> Result<ScryfallCard
     let response = reqwest::blocking::Client::new()
         .get(&url)
         .header("User-Agent", "D2D-Automations/1.0")
-        .send()
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .send()?;
 
     if response.status().is_success() {
-        response
-            .json::<ScryfallCard>()
-            .map_err(|e| format!("Failed to parse response: {}", e))
+        Ok(response.json::<ScryfallCard>()?)
     } else {
-        let error: ScryfallError = response
-            .json()
-            .map_err(|e| format!("Failed to parse error: {}", e))?;
-        Err(format!("{}: {}", error.code, error.details))
+        let error: ScryfallError = response.json()?;
+        Err(ApiError::ApiResponse {
+            code: error.code,
+            details: error.details,
+        })
     }
 }
 
 /// Fetch card image bytes
-pub fn fetch_image(url: &str) -> Result<Vec<u8>, String> {
+pub fn fetch_image(url: &str) -> ApiResult<Vec<u8>> {
     log::debug!("Fetching image: {}", url);
 
     let response = reqwest::blocking::Client::new()
         .get(url)
         .header("User-Agent", "D2D-Automations/1.0")
-        .send()
-        .map_err(|e| format!("Image request failed: {}", e))?;
+        .send()?;
 
     if response.status().is_success() {
-        response
-            .bytes()
-            .map(|b| b.to_vec())
-            .map_err(|e| format!("Failed to read image: {}", e))
+        Ok(response.bytes()?.to_vec())
     } else {
-        Err(format!("Image fetch failed: {}", response.status()))
+        Err(ApiError::HttpStatus(response.status()))
     }
 }
 
@@ -214,7 +209,7 @@ pub fn fetch_image_cached(
     set_code: &str,
     collector_number: &str,
     url: &str,
-) -> Result<Vec<u8>, String> {
+) -> ApiResult<Vec<u8>> {
     // Check cache first
     if let Some(bytes) = cache.get(set_code, collector_number) {
         return Ok(bytes);
@@ -279,14 +274,11 @@ pub struct PriceGuide {
 #[allow(dead_code)]
 impl PriceGuide {
     /// Load price guide from JSON file
-    pub fn load(path: &str) -> Result<Self, String> {
+    pub fn load(path: &str) -> ApiResult<Self> {
         log::info!("Loading price guide from: {}", path);
 
-        let content =
-            std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
-
-        let file: PriceGuideFile =
-            serde_json::from_str(&content).map_err(|e| format!("Failed to parse JSON: {}", e))?;
+        let content = std::fs::read_to_string(path)?;
+        let file: PriceGuideFile = serde_json::from_str(&content)?;
 
         let entries: HashMap<u64, PriceGuideEntry> = file
             .price_guides
@@ -301,7 +293,7 @@ impl PriceGuide {
 
     /// Fetch price guide from Cardmarket's CDN
     /// URL: https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_1.json
-    pub fn fetch() -> Result<Self, String> {
+    pub fn fetch() -> ApiResult<Self> {
         const PRICE_GUIDE_URL: &str =
             "https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_1.json";
 
@@ -310,19 +302,13 @@ impl PriceGuide {
         let response = reqwest::blocking::Client::new()
             .get(PRICE_GUIDE_URL)
             .header("User-Agent", "D2D-Automations/1.0")
-            .send()
-            .map_err(|e| format!("Request failed: {}", e))?;
+            .send()?;
 
         if !response.status().is_success() {
-            return Err(format!(
-                "Failed to fetch price guide: {}",
-                response.status()
-            ));
+            return Err(ApiError::HttpStatus(response.status()));
         }
 
-        let file: PriceGuideFile = response
-            .json()
-            .map_err(|e| format!("Failed to parse price guide JSON: {}", e))?;
+        let file: PriceGuideFile = response.json()?;
 
         let entries: HashMap<u64, PriceGuideEntry> = file
             .price_guides
@@ -400,19 +386,16 @@ impl CardCache {
     }
 
     /// Save cache to disk
-    pub fn save(&self) -> Result<(), String> {
+    pub fn save(&self) -> ApiResult<()> {
         let path = Self::cache_path();
 
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create cache directory: {}", e))?;
+            std::fs::create_dir_all(parent)?;
         }
 
-        let content = serde_json::to_string_pretty(self)
-            .map_err(|e| format!("Failed to serialize cache: {}", e))?;
-
-        std::fs::write(&path, content).map_err(|e| format!("Failed to write cache: {}", e))?;
+        let content = serde_json::to_string_pretty(self)?;
+        std::fs::write(&path, content)?;
 
         log::debug!("Saved card cache with {} entries", self.cards.len());
         Ok(())
@@ -452,7 +435,7 @@ pub fn fetch_card_cached(
     cache: &mut CardCache,
     set_code: &str,
     collector_number: &str,
-) -> Result<ScryfallCard, String> {
+) -> ApiResult<ScryfallCard> {
     // Check cache first
     if let Some(card) = cache.get(set_code, collector_number) {
         log::info!("Cache hit for {}/{}", set_code, collector_number);

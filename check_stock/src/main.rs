@@ -1,4 +1,5 @@
 mod card_matching;
+mod error;
 mod formatters;
 mod io;
 mod models;
