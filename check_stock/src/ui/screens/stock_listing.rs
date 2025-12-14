@@ -1,4 +1,5 @@
-use crate::scryfall::{fetch_card_cached, fetch_image_cached, PriceGuide};
+use crate::api::cardmarket::PriceGuide;
+use crate::cache::{fetch_card_cached, fetch_image_cached};
 use crate::ui::state::{FocusRequest, Screen, StockListingState};
 use eframe::egui;
 use log::{error, info};
@@ -309,7 +310,7 @@ impl StockListingScreen {
     fn show_card_details(
         ui: &mut egui::Ui,
         state: &StockListingState,
-        card: crate::scryfall::ScryfallCard,
+        card: crate::api::scryfall::ScryfallCard,
     ) {
         ui.add_space(10.0);
 

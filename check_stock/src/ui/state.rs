@@ -89,7 +89,9 @@ impl Default for StockAnalysisState {
     }
 }
 
-use crate::scryfall::{CardCache, ImageCache, PriceGuide, ScryfallCard};
+use crate::api::cardmarket::PriceGuide;
+use crate::api::scryfall::ScryfallCard;
+use crate::cache::{CardCache, ImageCache};
 
 /// Which input field to focus next (consumed after use)
 #[derive(Default, PartialEq, Clone, Copy)]

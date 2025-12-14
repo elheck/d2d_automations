@@ -1,9 +1,10 @@
+mod api;
+mod cache;
 mod card_matching;
 mod error;
 mod formatters;
 mod io;
 mod models;
-mod scryfall;
 mod stock_analysis;
 mod ui;
 
