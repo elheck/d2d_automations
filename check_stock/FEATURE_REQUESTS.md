@@ -14,12 +14,12 @@ This document contains feature requests for the Check Stock Application.
 ┌─────────────────────────────────────────────────────────────┐
 │                     Local Machine (On-Prem)                  │
 │  ┌─────────────┐    ┌──────────────┐    ┌────────────────┐  │
-│  │ Rust App    │───▶│ SQLite DB    │───▶│ rclone         │  │
-│  │ (check_stock)│    │ (cards.db)   │    │ (cron/manual)  │  │
+│  │ Rust App    │───▶│ SQLite DB    │───▶│ Litestream     │  │
+│  │ (check_stock)│    │ (cards.db)   │    │ (background)   │  │
 │  └─────────────┘    └──────────────┘    └───────┬────────┘  │
 └─────────────────────────────────────────────────┼───────────┘
                                                   │
-                                                  ▼ Sync on schedule
+                                                  ▼ Continuous real-time sync
                                     ┌─────────────────────────┐
                                     │  Cloudflare R2 (Free)    │
                                     │  - 10 GB storage         │
@@ -28,11 +28,11 @@ This document contains feature requests for the Check Stock Application.
                                     └─────────────────────────┘
 ```
 
-#### Why SQLite + Cloudflare R2 + rclone?
+#### Why SQLite + Cloudflare R2 + Litestream?
 
 - **SQLite**: Single-file database, zero config, handles millions of cards easily
 - **Cloudflare R2**: 10GB free tier, no egress fees, S3-compatible
-- **rclone**: Simple, reliable file sync to 70+ cloud providers
+- **Litestream**: Real-time streaming replication, point-in-time recovery, designed for SQLite
 
 #### Setup Requirements
 
@@ -43,90 +43,90 @@ This document contains feature requests for the Check Stock Application.
 4. Generate R2 API token with read/write permissions
 5. Note the Account ID, Access Key ID, and Secret Access Key
 
-##### 2. rclone Installation
+##### 2. Litestream Installation
 ```bash
-# Linux
-curl https://rclone.org/install.sh | sudo bash
+# Linux (Debian/Ubuntu)
+wget https://github.com/benbjohnson/litestream/releases/download/v0.3.13/litestream-v0.3.13-linux-amd64.deb
+sudo dpkg -i litestream-v0.3.13-linux-amd64.deb
+
+# Linux (other)
+wget https://github.com/benbjohnson/litestream/releases/download/v0.3.13/litestream-v0.3.13-linux-amd64.tar.gz
+tar -xzf litestream-v0.3.13-linux-amd64.tar.gz
+sudo mv litestream /usr/local/bin/
 
 # macOS
-brew install rclone
+brew install litestream
 
 # Verify
-rclone version
+litestream version
 ```
 
-##### 3. rclone Configuration
+##### 3. Litestream Configuration
+Create `/etc/litestream.yml`:
+```yaml
+dbs:
+  - path: /home/user/.local/share/d2d_automations/cards.db
+    replicas:
+      - type: s3
+        bucket: mtg-card-backup
+        path: cards
+        endpoint: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+        access-key-id: <R2_ACCESS_KEY_ID>
+        secret-access-key: <R2_SECRET_ACCESS_KEY>
+```
+
+Or use environment variables:
 ```bash
-rclone config
-
-# Follow prompts:
-# n) New remote
-# name> r2
-# Storage> s3
-# provider> Cloudflare
-# access_key_id> <R2_ACCESS_KEY_ID>
-# secret_access_key> <R2_SECRET_ACCESS_KEY>
-# endpoint> https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-# (accept defaults for rest)
+export LITESTREAM_ACCESS_KEY_ID=<R2_ACCESS_KEY_ID>
+export LITESTREAM_SECRET_ACCESS_KEY=<R2_SECRET_ACCESS_KEY>
 ```
 
-Or create `~/.config/rclone/rclone.conf` directly:
-```ini
-[r2]
-type = s3
-provider = Cloudflare
-access_key_id = <R2_ACCESS_KEY_ID>
-secret_access_key = <R2_SECRET_ACCESS_KEY>
-endpoint = https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-```
+##### 4. Run Litestream
 
-##### 4. Backup Script
-Create `~/scripts/backup-cards-db.sh`:
+**Option A: Run manually (foreground)**
 ```bash
-#!/bin/bash
-set -e
-
-DB_PATH="$HOME/.local/share/d2d_automations/cards.db"
-BACKUP_NAME="cards-$(date +%Y%m%d-%H%M%S).db"
-
-# Create safe backup copy (SQLite online backup)
-sqlite3 "$DB_PATH" ".backup /tmp/$BACKUP_NAME"
-
-# Upload to R2
-rclone copy "/tmp/$BACKUP_NAME" r2:mtg-card-backup/
-
-# Keep last 7 daily backups on R2
-rclone delete r2:mtg-card-backup/ --min-age 7d
-
-# Cleanup
-rm "/tmp/$BACKUP_NAME"
-
-echo "Backup complete: $BACKUP_NAME"
+litestream replicate -config /etc/litestream.yml
 ```
 
+**Option B: Run as systemd service (recommended)**
 ```bash
-chmod +x ~/scripts/backup-cards-db.sh
+# Create service file
+sudo tee /etc/systemd/system/litestream.service << EOF
+[Unit]
+Description=Litestream SQLite Replication
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/litestream replicate -config /etc/litestream.yml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start
+sudo systemctl daemon-reload
+sudo systemctl enable litestream
+sudo systemctl start litestream
+
+# Check status
+sudo systemctl status litestream
 ```
 
-##### 5. Automate with Cron
+##### 5. Restore from Backup
 ```bash
-# Edit crontab
-crontab -e
+# Restore to a new file (app should be stopped)
+litestream restore -config /etc/litestream.yml \
+  -o /home/user/.local/share/d2d_automations/cards.db \
+  /home/user/.local/share/d2d_automations/cards.db
 
-# Add daily backup at 2am
-0 2 * * * /home/user/scripts/backup-cards-db.sh >> /var/log/cards-backup.log 2>&1
-```
-
-##### 6. Restore from Backup
-```bash
-# List available backups
-rclone ls r2:mtg-card-backup/
-
-# Download specific backup
-rclone copy r2:mtg-card-backup/cards-20251214-020000.db /tmp/
-
-# Restore (stop app first)
-cp /tmp/cards-20251214-020000.db ~/.local/share/d2d_automations/cards.db
+# Or restore to specific point in time
+litestream restore -config /etc/litestream.yml \
+  -o /tmp/cards-restored.db \
+  -timestamp "2025-12-14T10:00:00Z" \
+  /home/user/.local/share/d2d_automations/cards.db
 ```
 
 #### Rust Implementation Tasks
@@ -160,14 +160,14 @@ cp /tmp/cards-20251214-020000.db ~/.local/share/d2d_automations/cards.db
 | Component | Monthly Cost |
 |-----------|--------------|
 | Cloudflare R2 (< 10GB) | **$0** |
-| rclone | **$0** (open source) |
+| Litestream | **$0** (open source) |
 | SQLite | **$0** (embedded) |
 | **Total** | **$0** |
 
 #### References
 
-- [rclone Documentation](https://rclone.org/docs/)
-- [rclone with Cloudflare R2](https://rclone.org/s3/#cloudflare-r2)
+- [Litestream Documentation](https://litestream.io/)
+- [Litestream with S3-compatible Storage](https://litestream.io/guides/s3/)
 - [Cloudflare R2 S3 Compatibility](https://developers.cloudflare.com/r2/api/s3/)
 - [rusqlite Crate](https://docs.rs/rusqlite/)
 
