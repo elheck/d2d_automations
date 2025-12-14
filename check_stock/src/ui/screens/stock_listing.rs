@@ -62,7 +62,6 @@ impl StockListingScreen {
             if state.price_guide.is_none() && !state.price_guide_loading {
                 ui.horizontal(|ui| {
                     if ui.button("Load Cardmarket Prices").clicked() {
-                        state.price_guide_loading = true;
                         state.error = None;
                         match PriceGuide::fetch() {
                             Ok(guide) => {
@@ -74,7 +73,6 @@ impl StockListingScreen {
                                 state.error = Some(format!("Price guide error: {}", e));
                             }
                         }
-                        state.price_guide_loading = false;
                     }
                     ui.label("(Downloads ~50MB price data from Cardmarket)");
                 });
