@@ -152,3 +152,244 @@ pub struct WantsEntry {
     pub quantity: i32,
     pub name: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper to create a test card with default values
+    fn create_test_card() -> Card {
+        Card {
+            cardmarket_id: "12345".to_string(),
+            quantity: "4".to_string(),
+            name: "Lightning Bolt".to_string(),
+            set: "Alpha".to_string(),
+            set_code: "LEA".to_string(),
+            cn: "123".to_string(),
+            condition: "NM".to_string(),
+            language: "English".to_string(),
+            is_foil: "false".to_string(),
+            is_playset: None,
+            is_signed: "false".to_string(),
+            price: "25.50".to_string(),
+            comment: "".to_string(),
+            location: Some("A-0-1-1".to_string()),
+            name_de: "Blitzschlag".to_string(),
+            name_es: "Rayo".to_string(),
+            name_fr: "Éclair".to_string(),
+            name_it: "Fulmine".to_string(),
+            rarity: "common".to_string(),
+            listed_at: "2024-01-01".to_string(),
+        }
+    }
+
+    // ==================== Language Tests ====================
+
+    #[test]
+    fn test_language_as_str() {
+        assert_eq!(Language::English.as_str(), "English");
+        assert_eq!(Language::German.as_str(), "German");
+        assert_eq!(Language::Spanish.as_str(), "Spanish");
+        assert_eq!(Language::French.as_str(), "French");
+        assert_eq!(Language::Italian.as_str(), "Italian");
+    }
+
+    #[test]
+    fn test_language_code() {
+        assert_eq!(Language::English.code(), "en");
+        assert_eq!(Language::German.code(), "de");
+        assert_eq!(Language::Spanish.code(), "es");
+        assert_eq!(Language::French.code(), "fr");
+        assert_eq!(Language::Italian.code(), "it");
+    }
+
+    #[test]
+    fn test_language_from_code_valid() {
+        assert_eq!(Language::from_code("en"), Some(Language::English));
+        assert_eq!(Language::from_code("de"), Some(Language::German));
+        assert_eq!(Language::from_code("es"), Some(Language::Spanish));
+        assert_eq!(Language::from_code("fr"), Some(Language::French));
+        assert_eq!(Language::from_code("it"), Some(Language::Italian));
+    }
+
+    #[test]
+    fn test_language_from_code_case_insensitive() {
+        assert_eq!(Language::from_code("EN"), Some(Language::English));
+        assert_eq!(Language::from_code("De"), Some(Language::German));
+        assert_eq!(Language::from_code("ES"), Some(Language::Spanish));
+    }
+
+    #[test]
+    fn test_language_from_code_invalid() {
+        assert_eq!(Language::from_code("xx"), None);
+        assert_eq!(Language::from_code(""), None);
+        assert_eq!(Language::from_code("english"), None); // full name, not code
+    }
+
+    #[test]
+    fn test_language_from_full_name_valid() {
+        assert_eq!(Language::from_full_name("English"), Some(Language::English));
+        assert_eq!(Language::from_full_name("German"), Some(Language::German));
+        assert_eq!(Language::from_full_name("Spanish"), Some(Language::Spanish));
+        assert_eq!(Language::from_full_name("French"), Some(Language::French));
+        assert_eq!(Language::from_full_name("Italian"), Some(Language::Italian));
+    }
+
+    #[test]
+    fn test_language_from_full_name_case_insensitive() {
+        assert_eq!(Language::from_full_name("ENGLISH"), Some(Language::English));
+        assert_eq!(Language::from_full_name("german"), Some(Language::German));
+        assert_eq!(Language::from_full_name("SpAnIsH"), Some(Language::Spanish));
+    }
+
+    #[test]
+    fn test_language_from_full_name_invalid() {
+        assert_eq!(Language::from_full_name("en"), None); // code, not full name
+        assert_eq!(Language::from_full_name(""), None);
+        assert_eq!(Language::from_full_name("Japanese"), None);
+    }
+
+    #[test]
+    fn test_language_parse_accepts_both_code_and_name() {
+        // Codes
+        assert_eq!(Language::parse("en"), Some(Language::English));
+        assert_eq!(Language::parse("de"), Some(Language::German));
+        // Full names
+        assert_eq!(Language::parse("English"), Some(Language::English));
+        assert_eq!(Language::parse("German"), Some(Language::German));
+        // Invalid
+        assert_eq!(Language::parse("xx"), None);
+        assert_eq!(Language::parse(""), None);
+    }
+
+    #[test]
+    fn test_language_all() {
+        let all = Language::all();
+        assert_eq!(all.len(), 5);
+        assert!(all.contains(&Language::English));
+        assert!(all.contains(&Language::German));
+        assert!(all.contains(&Language::Spanish));
+        assert!(all.contains(&Language::French));
+        assert!(all.contains(&Language::Italian));
+    }
+
+    // ==================== Card Tests ====================
+
+    #[test]
+    fn test_card_is_foil_false() {
+        let card = create_test_card();
+        assert!(!card.is_foil_card());
+    }
+
+    #[test]
+    fn test_card_is_foil_true_with_1() {
+        let mut card = create_test_card();
+        card.is_foil = "1".to_string();
+        assert!(card.is_foil_card());
+    }
+
+    #[test]
+    fn test_card_is_foil_true_with_true() {
+        let mut card = create_test_card();
+        card.is_foil = "true".to_string();
+        assert!(card.is_foil_card());
+    }
+
+    #[test]
+    fn test_card_is_foil_true_case_insensitive() {
+        let mut card = create_test_card();
+        card.is_foil = "TRUE".to_string();
+        assert!(card.is_foil_card());
+    }
+
+    #[test]
+    fn test_card_is_signed_false() {
+        let card = create_test_card();
+        assert!(!card.is_signed_card());
+    }
+
+    #[test]
+    fn test_card_is_signed_true() {
+        let mut card = create_test_card();
+        card.is_signed = "1".to_string();
+        assert!(card.is_signed_card());
+    }
+
+    #[test]
+    fn test_card_is_playset_none() {
+        let card = create_test_card();
+        assert!(!card.is_playset_card());
+    }
+
+    #[test]
+    fn test_card_is_playset_false() {
+        let mut card = create_test_card();
+        card.is_playset = Some("false".to_string());
+        assert!(!card.is_playset_card());
+    }
+
+    #[test]
+    fn test_card_is_playset_true() {
+        let mut card = create_test_card();
+        card.is_playset = Some("1".to_string());
+        assert!(card.is_playset_card());
+    }
+
+    #[test]
+    fn test_card_special_conditions_none() {
+        let card = create_test_card();
+        assert!(card.special_conditions().is_empty());
+    }
+
+    #[test]
+    fn test_card_special_conditions_foil_only() {
+        let mut card = create_test_card();
+        card.is_foil = "true".to_string();
+        let conditions = card.special_conditions();
+        assert_eq!(conditions, vec!["Foil"]);
+    }
+
+    #[test]
+    fn test_card_special_conditions_signed_only() {
+        let mut card = create_test_card();
+        card.is_signed = "true".to_string();
+        let conditions = card.special_conditions();
+        assert_eq!(conditions, vec!["Signed"]);
+    }
+
+    #[test]
+    fn test_card_special_conditions_both() {
+        let mut card = create_test_card();
+        card.is_foil = "true".to_string();
+        card.is_signed = "true".to_string();
+        let conditions = card.special_conditions();
+        assert_eq!(conditions, vec!["Foil", "Signed"]);
+    }
+
+    #[test]
+    fn test_card_price_f64_valid() {
+        let card = create_test_card();
+        assert!((card.price_f64() - 25.50).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_card_price_f64_integer() {
+        let mut card = create_test_card();
+        card.price = "100".to_string();
+        assert!((card.price_f64() - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_card_price_f64_invalid() {
+        let mut card = create_test_card();
+        card.price = "not_a_number".to_string();
+        assert_eq!(card.price_f64(), 0.0);
+    }
+
+    #[test]
+    fn test_card_price_f64_empty() {
+        let mut card = create_test_card();
+        card.price = "".to_string();
+        assert_eq!(card.price_f64(), 0.0);
+    }
+}
