@@ -71,7 +71,9 @@ flowchart TB
         Matching[card_matching.rs]
         Formatters[formatters.rs]
         StockAnalysis[stock_analysis.rs]
-        Scryfall[scryfall.rs]
+        API[api/]
+        Cache[cache/]
+        Error[error.rs]
     end
     
     subgraph Data["Data Layer"]
@@ -99,10 +101,12 @@ flowchart TB
     Analysis --> StockAnalysis
     Search --> IO
     Search --> Matching
-    Listing --> Scryfall
+    Listing --> API
+    Listing --> Cache
     
-    Scryfall --> ScryfallAPI
-    Scryfall --> CardmarketCDN
+    API --> ScryfallAPI
+    API --> CardmarketCDN
+    Cache --> API
     
     IO --> Models
     Matching --> Models
@@ -116,12 +120,14 @@ flowchart TB
 graph LR
     subgraph lib["lib.rs (Public API)"]
         direction TB
+        api
+        cache
         card_matching
+        error
         formatters
         io
         models
         stock_analysis
-        scryfall
         ui
     end
     
@@ -183,9 +189,10 @@ sequenceDiagram
 sequenceDiagram
     participant User
     participant GUI as StockListingScreen
-    participant Cache as CardCache/ImageCache
-    participant Scryfall as scryfall.rs
-    participant API as Scryfall API
+    participant CardCache as cache/card_cache.rs
+    participant ImageCache as cache/image_cache.rs
+    participant API as api/scryfall.rs
+    participant ScryfallAPI as Scryfall API
     participant CDN as Cardmarket CDN
     
     User->>GUI: Type "mh2130" + Enter
@@ -194,26 +201,26 @@ sequenceDiagram
     
     User->>GUI: Enter (confirm qty=1)
     
-    GUI->>Cache: Check card cache
+    GUI->>CardCache: Check card cache
     alt Cache hit
-        Cache-->>GUI: ScryfallCard
+        CardCache-->>GUI: ScryfallCard
     else Cache miss
-        GUI->>Scryfall: fetch_card_cached()
-        Scryfall->>API: GET /cards/mh2/130
-        API-->>Scryfall: Card JSON
-        Scryfall->>Cache: Store card
-        Scryfall-->>GUI: ScryfallCard
+        GUI->>API: fetch_card()
+        API->>ScryfallAPI: GET /cards/mh2/130
+        ScryfallAPI-->>API: Card JSON
+        API-->>GUI: ScryfallCard
+        GUI->>CardCache: Store card
     end
     
-    GUI->>Cache: Check image cache
+    GUI->>ImageCache: Check image cache
     alt Cache hit
-        Cache-->>GUI: Image bytes
+        ImageCache-->>GUI: Image bytes
     else Cache miss
-        GUI->>Scryfall: fetch_image_cached()
-        Scryfall->>API: GET image URL
-        API-->>Scryfall: Image bytes
-        Scryfall->>Cache: Store image file
-        Scryfall-->>GUI: Image bytes
+        GUI->>API: fetch_image()
+        API->>ScryfallAPI: GET image URL
+        ScryfallAPI-->>API: Image bytes
+        API-->>GUI: Image bytes
+        GUI->>ImageCache: Store image file
     end
     
     GUI->>GUI: Update default_set to "mh2"
@@ -224,10 +231,10 @@ sequenceDiagram
     
     opt Load prices
         User->>GUI: Click "Load Cardmarket Prices"
-        GUI->>Scryfall: PriceGuide::fetch()
-        Scryfall->>CDN: GET price_guide_1.json
-        CDN-->>Scryfall: ~50MB price data
-        Scryfall-->>GUI: PriceGuide
+        GUI->>API: PriceGuide::fetch()
+        API->>CDN: GET price_guide_1.json
+        CDN-->>API: ~50MB price data
+        API-->>GUI: PriceGuide
     end
     
     GUI->>User: Display card image + prices
@@ -269,21 +276,47 @@ Inventory bin analysis:
 - Free slot calculation
 - Location-based sorting
 
-#### `scryfall.rs`
-External API integration and caching:
+#### `error.rs`
+Centralized error handling:
 
 | Type | Purpose |
 |------|---------|
-| `ScryfallCard` | Card data from Scryfall API (name, set, images, prices) |
-| `CardCache` | Persistent JSON cache for card lookups |
-| `ImageCache` | File-based cache for card images |
-| `PriceGuide` | Cardmarket price data lookup by product ID |
-| `PriceGuideEntry` | Individual price entry with avg, trend, low prices |
+| `ApiError` | Enum covering network, parsing, HTTP, I/O, and cache errors |
+| `ApiResult<T>` | Type alias for `Result<T, ApiError>` |
+
+#### `api/` (module)
+External API clients:
+
+| File | Purpose |
+|------|---------|
+| `scryfall.rs` | Scryfall API client for card data and images |
+| `cardmarket.rs` | Cardmarket price guide fetching (~50MB) |
+
+Key types:
+- `ScryfallCard`: Card data from Scryfall API (name, set, images, prices)
+- `PriceGuide`: Cardmarket price data lookup by product ID
+- `PriceGuideEntry`: Individual price entry with avg, trend, low prices
 
 Key functions:
-- `fetch_card()` / `fetch_card_cached()`: Get card data from Scryfall
-- `fetch_image()` / `fetch_image_cached()`: Get card images
-- `PriceGuide::fetch()`: Download Cardmarket price guide (~50MB)
+- `fetch_card()`: Get card data from Scryfall
+- `fetch_image()`: Get card images
+- `PriceGuide::fetch()`: Download Cardmarket price guide
+
+#### `cache/` (module)
+Persistent caching layer:
+
+| File | Purpose |
+|------|---------|
+| `card_cache.rs` | JSON-based persistent cache for card lookups |
+| `image_cache.rs` | File-based cache for card images |
+
+Key types:
+- `CardCache`: Manages cached card data
+- `ImageCache`: Manages cached image files
+
+Key functions:
+- `fetch_card_cached()`: Get card data with caching
+- `fetch_image_cached()`: Get card images with caching
 
 ### UI Architecture
 
@@ -390,7 +423,15 @@ check_stock/
 │   ├── card_matching.rs     # Matching logic
 │   ├── formatters.rs        # Output formatters
 │   ├── stock_analysis.rs    # Bin analysis
-│   ├── scryfall.rs          # Scryfall API + caching
+│   ├── error.rs             # Centralized error types
+│   ├── api/                 # External API clients
+│   │   ├── mod.rs
+│   │   ├── scryfall.rs      # Scryfall API client
+│   │   └── cardmarket.rs    # Cardmarket price guide
+│   ├── cache/               # Persistent caching
+│   │   ├── mod.rs
+│   │   ├── card_cache.rs    # Card data cache
+│   │   └── image_cache.rs   # Image file cache
 │   └── ui/
 │       ├── mod.rs
 │       ├── app.rs           # Main app, screen routing
