@@ -4,6 +4,8 @@ This document contains feature requests for the Check Stock Application.
 
 ## High Priority
 
+* Checklist for picking
+
 ### Database Integration with Off-Site Backup
 
 **Goal**: Store cards added via Card Lookup in a local SQLite database with automatic off-site backup to Cloudflare R2.
