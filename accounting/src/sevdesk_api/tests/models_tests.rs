@@ -85,6 +85,7 @@ fn invoice_creation_result_success() {
         invoice_id: Some(100),
         invoice_number: Some("INV-001".to_string()),
         error: None,
+        workflow_status: None,
     };
 
     assert_eq!(result.order_id, "12345");
@@ -100,6 +101,7 @@ fn invoice_creation_result_error() {
         invoice_id: None,
         invoice_number: None,
         error: Some("API error".to_string()),
+        workflow_status: None,
     };
 
     assert!(result.invoice_id.is_none());

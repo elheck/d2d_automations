@@ -3334,6 +3334,7 @@ name = "sevdesk_invoicing"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "csv",
  "eframe",

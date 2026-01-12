@@ -5,7 +5,9 @@ use tokio::runtime::Runtime;
 
 use crate::{
     csv_processor::CsvProcessor,
-    models::{InvoiceCreationResult, OrderRecord},
+    models::{
+        CheckAccountResponse, InvoiceCreationResult, InvoiceWorkflowOptions, OrderRecord, SendType,
+    },
     sevdesk_api::SevDeskApi,
 };
 
@@ -26,7 +28,19 @@ pub struct InvoiceApp {
     api_connection_status: Option<bool>,
     runtime: Runtime,
     validation_errors: Vec<String>,
-    dry_run_mode: bool, // New field for dry-run mode
+    dry_run_mode: bool,
+    // Check account (Verrechnungskonto) fields
+    check_accounts: Vec<CheckAccountResponse>,
+    selected_check_account_index: Option<usize>,
+    check_accounts_loading: bool,
+    check_accounts_error: Option<String>,
+    // Workflow options
+    workflow_finalize: bool,
+    workflow_send_type: SendType,
+    workflow_enshrine: bool,
+    workflow_book: bool,
+    // PDF download folder
+    pdf_download_path: Option<PathBuf>,
 }
 
 impl Default for InvoiceApp {
@@ -52,7 +66,19 @@ impl Default for InvoiceApp {
             api_connection_status: None,
             runtime,
             validation_errors: Vec::new(),
-            dry_run_mode: false, // Default to false (actual mode)
+            dry_run_mode: false,
+            // Check account fields
+            check_accounts: Vec::new(),
+            selected_check_account_index: None,
+            check_accounts_loading: false,
+            check_accounts_error: None,
+            // Workflow options - default to false
+            workflow_finalize: false,
+            workflow_send_type: SendType::default(),
+            workflow_enshrine: false,
+            workflow_book: false,
+            // PDF download path - default to None
+            pdf_download_path: None,
         }
     }
 }
@@ -144,6 +170,163 @@ impl eframe::App for InvoiceApp {
                             egui::Color32::GREEN,
                             format!("Loaded {} orders", self.orders.len()),
                         );
+                    }
+                });
+
+                ui.add_space(20.0);
+
+                // Check Account (Verrechnungskonto) Section
+                ui.group(|ui| {
+                    ui.label("Verrechnungskonto (Check Account):");
+
+                    if self.check_accounts_loading {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Loading accounts...");
+                        });
+                    } else if let Some(error) = &self.check_accounts_error {
+                        ui.colored_label(egui::Color32::RED, format!("Error: {}", error));
+                        if ui.button("Retry").clicked() {
+                            self.load_check_accounts();
+                        }
+                    } else if self.check_accounts.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.label("No accounts loaded.");
+                            if self.api_connection_status == Some(true) {
+                                if ui.button("Load Accounts").clicked() {
+                                    self.load_check_accounts();
+                                }
+                            } else {
+                                ui.colored_label(
+                                    egui::Color32::GRAY,
+                                    "(Connect to API first)",
+                                );
+                            }
+                        });
+                    } else {
+                        // Dropdown for selecting check account
+                        let selected_text = self
+                            .selected_check_account_index
+                            .and_then(|idx| self.check_accounts.get(idx))
+                            .map(|acc| acc.display_name())
+                            .unwrap_or_else(|| "Select an account...".to_string());
+
+                        egui::ComboBox::from_label("")
+                            .selected_text(selected_text)
+                            .width(350.0)
+                            .show_ui(ui, |ui| {
+                                for (idx, account) in self.check_accounts.iter().enumerate() {
+                                    let is_selected = self.selected_check_account_index == Some(idx);
+                                    let label = if account.is_default() {
+                                        format!("{} ⭐", account.display_name())
+                                    } else {
+                                        account.display_name()
+                                    };
+                                    if ui.selectable_label(is_selected, label).clicked() {
+                                        info!("Selected check account: {} (ID: {})", account.name, account.id);
+                                        self.selected_check_account_index = Some(idx);
+                                    }
+                                }
+                            });
+
+                        if self.selected_check_account_index.is_some() {
+                            ui.colored_label(egui::Color32::GREEN, "✓ Account selected");
+                        }
+                    }
+                });
+
+                ui.add_space(20.0);
+
+                // Invoice Workflow Options Section
+                ui.group(|ui| {
+                    ui.label("Invoice Workflow Options:");
+                    ui.add_space(5.0);
+
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.workflow_finalize, "Finalize Invoice")
+                            .on_hover_text("Mark invoice as sent (DRAFT → OPEN, status 100 → 200)");
+
+                        if self.workflow_finalize {
+                            ui.label("Send Type:");
+                            egui::ComboBox::from_id_salt("send_type_combo")
+                                .selected_text(self.workflow_send_type.description())
+                                .width(180.0)
+                                .show_ui(ui, |ui| {
+                                    for send_type in SendType::all() {
+                                        let is_selected = self.workflow_send_type == *send_type;
+                                        if ui.selectable_label(is_selected, send_type.description()).clicked() {
+                                            self.workflow_send_type = send_type.clone();
+                                        }
+                                    }
+                                });
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        let enshrine_enabled = self.workflow_finalize;
+                        ui.add_enabled(enshrine_enabled, egui::Checkbox::new(&mut self.workflow_enshrine, "Enshrine Invoice"))
+                            .on_hover_text("Lock invoice from changes (irreversible). Requires finalization.");
+
+                        if !enshrine_enabled && self.workflow_enshrine {
+                            self.workflow_enshrine = false;
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        let book_enabled = self.workflow_finalize && self.selected_check_account_index.is_some();
+                        ui.add_enabled(book_enabled, egui::Checkbox::new(&mut self.workflow_book, "Book Invoice"))
+                            .on_hover_text("Book invoice as paid against the selected check account. Requires finalization and account selection.");
+
+                        if !book_enabled && self.workflow_book {
+                            self.workflow_book = false;
+                        }
+
+                        if self.workflow_book && self.selected_check_account_index.is_none() {
+                            ui.colored_label(egui::Color32::RED, "⚠ Select check account first");
+                        }
+                    });
+
+                    // PDF Download Folder (only show when VPDF is selected)
+                    if self.workflow_finalize && self.workflow_send_type == SendType::Vpdf {
+                        ui.add_space(5.0);
+                        ui.horizontal(|ui| {
+                            ui.label("PDF Download Folder:");
+                            if ui.button("Select Folder").clicked() {
+                                if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                                    info!("Selected PDF download folder: {:?}", path);
+                                    self.pdf_download_path = Some(path);
+                                }
+                            }
+
+                            if let Some(path) = &self.pdf_download_path {
+                                ui.label(path.display().to_string());
+                                if ui.button("✕").on_hover_text("Clear folder selection").clicked() {
+                                    self.pdf_download_path = None;
+                                }
+                            } else {
+                                ui.colored_label(egui::Color32::GRAY, "(PDFs will not be downloaded)");
+                            }
+                        });
+                    }
+
+                    // Show workflow summary
+                    if self.workflow_finalize || self.workflow_enshrine || self.workflow_book {
+                        ui.add_space(5.0);
+                        ui.separator();
+                        let mut steps = vec!["Create invoice".to_string()];
+                        if self.workflow_finalize {
+                            steps.push(format!("Finalize ({})", self.workflow_send_type.description()));
+                            if self.workflow_send_type == SendType::Vpdf && self.pdf_download_path.is_some() {
+                                steps.push("Download PDF".to_string());
+                            }
+                        }
+                        if self.workflow_enshrine {
+                            steps.push("Enshrine".to_string());
+                        }
+                        if self.workflow_book {
+                            steps.push("Book payment".to_string());
+                        }
+                        ui.colored_label(egui::Color32::LIGHT_BLUE, format!("Workflow: {}", steps.join(" → ")));
                     }
                 });
 
@@ -272,6 +455,8 @@ impl InvoiceApp {
                 Ok(success) => {
                     if success {
                         info!("API connection test successful");
+                        // Automatically load check accounts on successful connection
+                        self.load_check_accounts();
                     } else {
                         warn!("API connection test failed");
                     }
@@ -285,6 +470,41 @@ impl InvoiceApp {
         } else {
             warn!("Attempted to test API connection with empty token");
         }
+    }
+
+    fn load_check_accounts(&mut self) {
+        info!("Loading check accounts");
+        self.check_accounts_loading = true;
+        self.check_accounts_error = None;
+
+        let api = SevDeskApi::new(self.api_token.clone());
+        match self.runtime.block_on(api.fetch_check_accounts()) {
+            Ok(accounts) => {
+                info!("Loaded {} check accounts", accounts.len());
+
+                // Find and auto-select the default account
+                let default_index = accounts.iter().position(|a| a.is_default());
+                if let Some(idx) = default_index {
+                    info!("Auto-selecting default account: {}", accounts[idx].name);
+                    self.selected_check_account_index = Some(idx);
+                }
+
+                self.check_accounts = accounts;
+                self.check_accounts_loading = false;
+            }
+            Err(e) => {
+                error!("Failed to load check accounts: {e}");
+                self.check_accounts_error = Some(e.to_string());
+                self.check_accounts_loading = false;
+            }
+        }
+    }
+
+    /// Returns the currently selected check account, if any.
+    #[allow(dead_code)]
+    pub fn selected_check_account(&self) -> Option<&CheckAccountResponse> {
+        self.selected_check_account_index
+            .and_then(|idx| self.check_accounts.get(idx))
     }
 
     fn load_csv_file(&mut self) {
@@ -410,7 +630,44 @@ impl InvoiceApp {
                             invoice_result.error.as_ref().unwrap()
                         );
                     }
-                    self.results.push(invoice_result);
+
+                    // Execute workflow if invoice was created successfully
+                    let mut final_result = invoice_result;
+                    if final_result.error.is_none() && final_result.invoice_id.is_some() {
+                        let workflow_options =
+                            self.build_workflow_options_with_date(&order.date_of_purchase);
+                        if workflow_options.finalize
+                            || workflow_options.enshrine
+                            || workflow_options.book
+                        {
+                            let invoice_id = final_result.invoice_id.unwrap();
+                            let invoice_number =
+                                final_result.invoice_number.as_deref().unwrap_or("Unknown");
+
+                            let workflow_status = if self.dry_run_mode {
+                                self.runtime.block_on(api.simulate_invoice_workflow(
+                                    invoice_id,
+                                    invoice_number,
+                                    &workflow_options,
+                                ))
+                            } else {
+                                self.runtime.block_on(api.execute_invoice_workflow(
+                                    invoice_id,
+                                    invoice_number,
+                                    &workflow_options,
+                                ))
+                            };
+
+                            // Check for workflow errors
+                            if let Some(ref err) = workflow_status.workflow_error {
+                                error!("Workflow error for {}: {}", order.name, err);
+                            }
+
+                            final_result.workflow_status = Some(workflow_status);
+                        }
+                    }
+
+                    self.results.push(final_result);
                 }
                 Err(e) => {
                     error!(
@@ -429,6 +686,7 @@ impl InvoiceApp {
                         invoice_id: None,
                         invoice_number: None,
                         error: Some(e.to_string()),
+                        workflow_status: None,
                     });
                 }
             }
@@ -450,6 +708,29 @@ impl InvoiceApp {
         info!("Invoice {action} completed: {success_count} successful, {error_count} errors");
 
         self.processing_state = ProcessingState::Completed;
+    }
+
+    /// Builds workflow options from current UI state
+    fn build_workflow_options(&self) -> InvoiceWorkflowOptions {
+        InvoiceWorkflowOptions {
+            finalize: self.workflow_finalize,
+            send_type: self.workflow_send_type.clone(),
+            enshrine: self.workflow_enshrine,
+            book: self.workflow_book,
+            check_account_id: self
+                .selected_check_account_index
+                .and_then(|idx| self.check_accounts.get(idx))
+                .map(|acc| acc.id.clone()),
+            pdf_download_path: self.pdf_download_path.clone(),
+            payment_date: None, // Will be set per-order
+        }
+    }
+
+    /// Builds workflow options with a specific payment date (from order)
+    fn build_workflow_options_with_date(&self, payment_date: &str) -> InvoiceWorkflowOptions {
+        let mut options = self.build_workflow_options();
+        options.payment_date = Some(payment_date.to_string());
+        options
     }
 }
 

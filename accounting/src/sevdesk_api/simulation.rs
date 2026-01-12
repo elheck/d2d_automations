@@ -32,6 +32,7 @@ impl SevDeskApi {
                     invoice_id: Some(99999), // Fake ID for dry run
                     invoice_number: Some(simulated_invoice_number),
                     error: None,
+                    workflow_status: None,
                 })
             }
             Err(e) => {
@@ -42,6 +43,7 @@ impl SevDeskApi {
                     invoice_id: None,
                     invoice_number: None,
                     error: Some(e.to_string()),
+                    workflow_status: None,
                 })
             }
         }

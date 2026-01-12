@@ -248,10 +248,83 @@ pub struct InvoiceCreationResult {
     #[allow(dead_code)]
     pub order_id: String,
     pub customer_name: String,
-    #[allow(dead_code)]
     pub invoice_id: Option<u32>,
     pub invoice_number: Option<String>,
     pub error: Option<String>,
+    /// Workflow status - tracks which steps have been completed
+    pub workflow_status: Option<InvoiceWorkflowStatus>,
+}
+
+/// Status of the invoice workflow steps
+#[derive(Debug, Clone, Default)]
+pub struct InvoiceWorkflowStatus {
+    /// Whether the invoice was finalized (sent/marked as sent)
+    pub finalized: bool,
+    /// Whether the invoice was enshrined (locked from changes)
+    pub enshrined: bool,
+    /// Whether the invoice was booked against a check account
+    pub booked: bool,
+    /// Path where the PDF was saved (if downloaded)
+    pub pdf_path: Option<std::path::PathBuf>,
+    /// Any error that occurred during workflow
+    pub workflow_error: Option<String>,
+}
+
+/// Options for invoice workflow processing
+#[derive(Debug, Clone, Default)]
+pub struct InvoiceWorkflowOptions {
+    /// Finalize invoices after creation (mark as sent, status 100 → 200)
+    pub finalize: bool,
+    /// Send type for finalization: VPR (print), VP (postal), VM (mail), VPDF (pdf download)
+    pub send_type: SendType,
+    /// Enshrine invoices after finalization (lock from changes)
+    pub enshrine: bool,
+    /// Book invoices against check account (mark as paid)
+    pub book: bool,
+    /// Check account ID to book against (required if book is true)
+    pub check_account_id: Option<String>,
+    /// Directory to save PDFs when using VPDF send type
+    pub pdf_download_path: Option<std::path::PathBuf>,
+    /// Date of purchase (used as payment date when booking)
+    pub payment_date: Option<String>,
+}
+
+/// Send type for invoice finalization
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum SendType {
+    /// Downloaded as PDF
+    #[default]
+    Vpdf,
+    /// Printed
+    Vpr,
+    /// Sent by postal mail
+    Vp,
+    /// Sent by email
+    Vm,
+}
+
+impl SendType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SendType::Vpdf => "VPDF",
+            SendType::Vpr => "VPR",
+            SendType::Vp => "VP",
+            SendType::Vm => "VM",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            SendType::Vpdf => "Downloaded (PDF)",
+            SendType::Vpr => "Printed",
+            SendType::Vp => "Postal Mail",
+            SendType::Vm => "Email",
+        }
+    }
+
+    pub fn all() -> &'static [SendType] {
+        &[SendType::Vpdf, SendType::Vpr, SendType::Vp, SendType::Vm]
+    }
 }
 
 /// Response from /StaticCountry endpoint
@@ -268,4 +341,46 @@ pub struct StaticCountryResponse {
     pub locale: Option<String>,
     #[allow(dead_code)]
     pub priority: Option<String>,
+}
+
+/// Response from /CheckAccount endpoint - represents a payment/clearing account
+#[derive(Debug, Clone, Deserialize)]
+pub struct CheckAccountResponse {
+    pub id: String,
+    #[serde(rename = "objectName")]
+    #[allow(dead_code)]
+    pub object_name: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub account_type: String, // "online", "offline", or "register"
+    pub currency: String,
+    #[serde(rename = "defaultAccount")]
+    pub default_account: Option<String>,
+    pub status: Option<String>, // "0" = Archived, "100" = Active
+    #[allow(dead_code)]
+    pub iban: Option<String>,
+    #[serde(rename = "accountingNumber")]
+    pub accounting_number: Option<String>,
+}
+
+impl CheckAccountResponse {
+    /// Returns a display name for the dropdown (e.g., "Iron Bank (EUR) - 1800")
+    pub fn display_name(&self) -> String {
+        let mut name = self.name.clone();
+        name.push_str(&format!(" ({})", self.currency));
+        if let Some(acc_num) = &self.accounting_number {
+            name.push_str(&format!(" - {}", acc_num));
+        }
+        name
+    }
+
+    /// Returns true if this is the default account
+    pub fn is_default(&self) -> bool {
+        self.default_account.as_deref() == Some("1")
+    }
+
+    /// Returns true if this account is active (not archived)
+    pub fn is_active(&self) -> bool {
+        self.status.as_deref() != Some("0")
+    }
 }

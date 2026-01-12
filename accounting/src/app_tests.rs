@@ -162,6 +162,7 @@ mod result_counting_tests {
             invoice_id: Some(1),
             invoice_number: Some(invoice_num.to_string()),
             error: None,
+            workflow_status: None,
         }
     }
 
@@ -172,6 +173,7 @@ mod result_counting_tests {
             invoice_id: None,
             invoice_number: None,
             error: Some(error.to_string()),
+            workflow_status: None,
         }
     }
 

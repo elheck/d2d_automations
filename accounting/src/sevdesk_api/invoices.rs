@@ -30,6 +30,7 @@ impl SevDeskApi {
                     invoice_id: Some(invoice_id.parse().unwrap_or(0)),
                     invoice_number: Some(invoice_number),
                     error: None,
+                    workflow_status: None,
                 })
             }
             Err(e) => {
@@ -40,6 +41,7 @@ impl SevDeskApi {
                     invoice_id: None,
                     invoice_number: None,
                     error: Some(e.to_string()),
+                    workflow_status: None,
                 })
             }
         }
