@@ -14,6 +14,7 @@ pub enum Screen {
     StockAnalysis,
     StockListing,
     Search,
+    Picking,
 }
 
 #[derive(PartialEq)]

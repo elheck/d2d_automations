@@ -7,6 +7,7 @@ use crate::{
     ui::{
         components::{FilePicker, OutputWindow},
         language::Language,
+        screens::PickingState,
         state::{AppState, OutputFormat, Screen},
     },
 };
@@ -16,7 +17,7 @@ use log::{debug, error, info};
 pub struct StockCheckerScreen;
 
 impl StockCheckerScreen {
-    pub fn show(ctx: &egui::Context, state: &mut AppState) {
+    pub fn show(ctx: &egui::Context, state: &mut AppState, picking_state: &mut PickingState) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("← Back to Welcome Screen").clicked() {
@@ -98,9 +99,9 @@ impl StockCheckerScreen {
             ui.separator();
 
             if state.show_selection || state.selection_mode {
-                Self::show_selection_view(ui, state);
+                Self::show_selection_view(ui, state, picking_state);
             } else if !state.output.is_empty() {
-                Self::show_regular_output(ui, state);
+                Self::show_regular_output(ui, state, picking_state);
             }
 
             if state.show_output_window {
@@ -194,7 +195,11 @@ impl StockCheckerScreen {
         Ok(())
     }
 
-    fn show_selection_view(ui: &mut egui::Ui, state: &mut AppState) {
+    fn show_selection_view(
+        ui: &mut egui::Ui,
+        state: &mut AppState,
+        picking_state: &mut PickingState,
+    ) {
         ui.label("Select the cards you want to include:");
         egui::ScrollArea::vertical()
             .max_height(ui.available_height() - 50.0)
@@ -235,6 +240,14 @@ impl StockCheckerScreen {
         ui.separator();
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
             ui.horizontal(|ui| {
+                // Interactive picking list button (with images)
+                if ui
+                    .button("🎴 Interactive Picking List")
+                    .on_hover_text("Open visual picking list with card images")
+                    .clicked()
+                {
+                    Self::start_interactive_picking(state, picking_state);
+                }
                 if ui.button("Generate Picking List").clicked() {
                     Self::generate_selected_output(state, OutputFormat::PickingList);
                 }
@@ -253,7 +266,11 @@ impl StockCheckerScreen {
         });
     }
 
-    fn show_regular_output(ui: &mut egui::Ui, state: &mut AppState) {
+    fn show_regular_output(
+        ui: &mut egui::Ui,
+        state: &mut AppState,
+        picking_state: &mut PickingState,
+    ) {
         egui::ScrollArea::vertical()
             .max_height(ui.available_height() - 50.0)
             .show(ui, |ui| {
@@ -269,6 +286,14 @@ impl StockCheckerScreen {
             ui.separator();
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                 ui.horizontal(|ui| {
+                    // Interactive picking list button (with images)
+                    if ui
+                        .button("🎴 Interactive Picking List")
+                        .on_hover_text("Open visual picking list with card images")
+                        .clicked()
+                    {
+                        Self::start_interactive_picking(state, picking_state);
+                    }
                     if ui.button("Select Cards for Lists").clicked() {
                         Self::start_selection(state);
                     }
@@ -306,6 +331,59 @@ impl StockCheckerScreen {
         }
         state.show_selection = true;
         state.selection_mode = true;
+    }
+
+    fn start_interactive_picking(state: &mut AppState, picking_state: &mut PickingState) {
+        // Build the list of selected cards for the picking screen
+        let selected_matches: Vec<_> = if state.selected.is_empty() {
+            // No selection made yet, use all matches
+            state
+                .all_matches
+                .iter()
+                .map(|(name, needed_qty, cards)| {
+                    let group_cards: Vec<_> = cards
+                        .iter()
+                        .map(|(card, quantity, set_name)| MatchedCard {
+                            card,
+                            quantity: *quantity,
+                            set_name: set_name.clone(),
+                        })
+                        .collect();
+                    (name.clone(), *needed_qty, group_cards)
+                })
+                .collect()
+        } else {
+            // Use only selected cards
+            let mut idx = 0;
+            let mut matches = Vec::new();
+            for (name, needed_qty, cards) in &state.all_matches {
+                let mut group_cards = Vec::new();
+                for (card, quantity, set_name) in cards {
+                    if state.selected[idx] {
+                        group_cards.push(MatchedCard {
+                            card,
+                            quantity: *quantity,
+                            set_name: set_name.clone(),
+                        });
+                    }
+                    idx += 1;
+                }
+                if !group_cards.is_empty() {
+                    matches.push((name.clone(), *needed_qty, group_cards));
+                }
+            }
+            matches
+        };
+
+        // Initialize picking state with the selected cards
+        *picking_state = PickingState::from_matched_cards(&selected_matches);
+
+        // Navigate to the picking screen
+        state.current_screen = Screen::Picking;
+        info!(
+            "Starting interactive picking with {} items",
+            picking_state.total_count()
+        );
     }
 
     fn generate_regular_output(state: &mut AppState) {

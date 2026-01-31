@@ -21,6 +21,8 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --verbose
 ```
 
+When testing changes on the console, prefer to use './run_quality_checks.sh' to ensure consistency with CI.
+
 Tests use fixtures in `tests/fixtures/` - prefer reusing existing fixtures over creating new test data.
 
 ## Architecture Patterns

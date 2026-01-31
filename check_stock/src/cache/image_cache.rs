@@ -30,6 +30,11 @@ impl ImageCache {
         Self { cache_dir }
     }
 
+    /// Get the cache directory path
+    pub fn cache_dir(&self) -> &std::path::Path {
+        &self.cache_dir
+    }
+
     /// Generate a filename from set code and collector number
     fn filename(set_code: &str, collector_number: &str) -> String {
         format!("{}_{}.jpg", set_code.to_lowercase(), collector_number)
