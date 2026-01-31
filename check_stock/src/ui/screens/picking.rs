@@ -620,3 +620,7 @@ impl PickingScreen {
         ctx.request_repaint();
     }
 }
+
+#[cfg(test)]
+#[path = "picking_tests.rs"]
+mod tests;
