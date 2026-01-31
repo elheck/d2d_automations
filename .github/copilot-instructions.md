@@ -6,7 +6,7 @@ This monorepo contains Rust applications for Magic: The Gathering business opera
 
 - **`check_stock/`** - MTG Stock Checker & Analysis (egui desktop app)
 - **`accounting/`** - SevDesk Invoice Creator (egui desktop app, Cardmarket → SevDesk integration)
-- **`inventory_sync/`** - Inventory Sync (CLI app, CSV → SQLite with price tracking)
+- **`inventory_sync/`** - Inventory Sync (CLI app, planned - currently skeleton)
 
 Each project is a standalone Cargo project with its own `Cargo.toml`. Run commands from within the respective directory.
 
@@ -52,18 +52,10 @@ After every code change, complete the following steps:
 ### Error Handling
 - `check_stock`: Custom `ApiError` enum in [error.rs](check_stock/src/error.rs) with `ApiResult<T>` alias
 - `accounting`: Uses `anyhow::Result` with `.context()` for error messages
-- `inventory_sync`: Custom `Error` enum with `thiserror`, uses `Result<T>` alias
 
-### Async Pattern (accounting, inventory_sync)
+### Async Pattern (accounting)
 - Tokio runtime created in app state: `runtime: Runtime::new()`
 - Block on async calls in GUI: `self.runtime.block_on(async_fn())`
-- `inventory_sync`: Full async with `#[tokio::main]`
-
-### Database Pattern (inventory_sync)
-- SQLite via `rusqlite` with `bundled` feature
-- `Database` struct wraps connection with typed methods
-- Schema initialized on open with `CREATE TABLE IF NOT EXISTS`
-- Upsert pattern: `INSERT ... ON CONFLICT DO UPDATE`
 
 ## Domain-Specific Conventions
 

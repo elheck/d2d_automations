@@ -5,78 +5,75 @@
 
 ## Overview
 
-d2d_automations is a Rust-based desktop application for Magic: The Gathering stock checking and analysis, featuring a GUI built with egui.
+d2d_automations is a monorepo containing Rust applications for Magic: The Gathering business operations.
 
-## Building and Running (Development)
+## Projects
 
-1. **Install Rust**
-   - If you don't have Rust, install it from [rustup.rs](https://rustup.rs/).
+| Project | Description | Status |
+|---------|-------------|--------|
+| [check_stock](check_stock/) | MTG Stock Checker & Analysis (egui desktop app) | ✅ Active |
+| [accounting](accounting/) | SevDesk Invoice Creator (egui desktop app, Cardmarket → SevDesk) | ✅ Active |
+| [inventory_sync](inventory_sync/) | Inventory Sync (CLI app, CSV → SQLite with price tracking) | 🚧 Planned |
 
-2. **Clone the repository**
-   ```sh
-   git clone <your-repo-url>
-   cd d2d_automations/check_stock
-   ```
+## Quick Start
 
-3. **Build and run in development mode**
-   ```sh
-   cargo run
-   ```
-   This will build and launch the application with debug info.
+Each project is a standalone Cargo project. Navigate to the respective directory:
 
-4. **Lint and check code**
-   ```sh
-   cargo clippy
-   cargo fmt
-   ```
+```bash
+# Check Stock (desktop GUI)
+cd check_stock
+cargo run
 
-5. **Run tests**
-   ```sh
-   cargo test
-   ```
+# Accounting (desktop GUI)
+cd accounting
+export SEVDESK_API="your_token_here"
+cargo run
 
-6. **Run performance tests**
-   ```sh
-   cargo test test_search_performance -- --nocapture
-   ```
+# Inventory Sync (CLI)
+cd inventory_sync
+cargo run
+```
+
+## Development
+
+### Quality Checks
+
+Each project has its own quality check script:
+
+```bash
+cd <project>
+./run_quality_checks.sh
+```
+
+This runs:
+- `cargo fmt --all -- --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --verbose`
+
+### CI/CD
+
+- **Continuous Integration**: GitHub Actions runs on push/PR to main
+- **Release Builds**: Triggered by tags (e.g., `v1.0.0`)
 
 ## Testing
 
-The project includes comprehensive test suites:
+```bash
+# Run tests for a specific project
+cd check_stock
+cargo test
 
-- **Unit tests**: Basic functionality testing for I/O operations and utilities
-- **Integration tests**: Testing the interaction between components
-- **Performance tests**: Comprehensive performance testing for the search function
+# Run performance tests
+cargo test test_search_performance -- --nocapture
+```
 
-### Performance Testing
+For detailed information about performance testing, see [check_stock/PERFORMANCE_TESTING.md](check_stock/PERFORMANCE_TESTING.md).
 
-The search function performance is tested with various scenarios:
-- Different inventory sizes (10 to 10,000+ cards)
-- Various language preferences and filtering modes
-- Edge cases and concurrent safety
-- Memory usage estimation
+## Building for Release
 
-For detailed information about performance testing, see [`check_stock/PERFORMANCE_TESTING.md`](check_stock/PERFORMANCE_TESTING.md).
-
-## Building a Release Binary
-
-To build an optimized release binary:
-
-```sh
+```bash
+cd <project>
 cargo build --release
 ```
-The binary will be located at `target/release/d2d_automations` (or `d2d_automations.exe` on Windows).
-
-## Automated Release with GitHub Actions
-
-This project includes a GitHub Actions workflow (`.github/workflows/release.yml`) to build and upload release binaries automatically when you create a new release on GitHub.
-
-**How to trigger a release build:**
-1. Push your changes to the main branch.
-2. On GitHub, go to the Releases section and create a new release (with a tag, e.g., `v1.0.0`).
-3. The workflow will automatically build the project for all configured platforms and upload the binaries as release assets.
-
-You can customize the workflow in `.github/workflows/release.yml` as needed.
 
 ## Troubleshooting
 
