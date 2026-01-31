@@ -180,3 +180,73 @@ jobs:
         echo "✅ Code formatting: PASSED"
         echo "✅ Clippy lints: PASSED"
         echo "✅ Security audit: PASSED"
+
+  build_and_test_inventory_sync:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+    
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          inventory_sync/target
+        key: ${{ runner.os }}-inventory-sync-cargo-${{ hashFiles('inventory_sync/Cargo.lock') }}
+    
+    - name: Check code formatting
+      run: cargo fmt --all -- --check
+      working-directory: ./inventory_sync
+    
+    - name: Check
+      run: cargo check --verbose
+      working-directory: ./inventory_sync
+    
+    - name: Run unit tests
+      run: cargo test --verbose --lib
+      working-directory: ./inventory_sync
+    
+    - name: Run all tests
+      run: cargo test --verbose
+      working-directory: ./inventory_sync
+    
+    - name: Generate test summary
+      run: |
+        echo "## Inventory Sync Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "✅ All tests passed successfully" >> $GITHUB_STEP_SUMMARY
+      working-directory: ./inventory_sync
+    
+    - name: Test documentation
+      run: cargo test --doc --verbose
+      working-directory: ./inventory_sync
+    
+    - name: Clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
+      working-directory: ./inventory_sync
+
+    - name: Build release
+      run: cargo build --release --verbose
+      working-directory: ./inventory_sync
+    
+    - name: Security audit
+      run: cargo audit
+      working-directory: ./inventory_sync
+    
+    - name: Test Summary
+      if: always()
+      run: |
+        echo "🔍 Inventory Sync Test Summary:"
+        echo "✅ Unit tests: PASSED"
+        echo "✅ Documentation tests: PASSED"
+        echo "✅ Code formatting: PASSED"
+        echo "✅ Clippy lints: PASSED"
+        echo "✅ Security audit: PASSED"

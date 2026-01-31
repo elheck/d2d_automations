@@ -1,0 +1,18 @@
+[package]
+name = "inventory_sync"
+version = "0.1.0"
+edition = "2021"
+description = "MTG inventory sync - collects pricing data and syncs stock from CSV to SQLite"
+authors = ["Aron"]
+
+[dependencies]
+
+[dev-dependencies]
+
+[[bin]]
+name = "inventory_sync"
+path = "src/main.rs"
+
+[lib]
+name = "inventory_sync"
+path = "src/lib.rs"

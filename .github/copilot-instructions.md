@@ -1,11 +1,12 @@
 # Copilot Instructions for d2d_automations
 
-This monorepo contains two Rust GUI applications for Magic: The Gathering business operations.
+This monorepo contains Rust applications for Magic: The Gathering business operations.
 
 ## Repository Structure
 
 - **`check_stock/`** - MTG Stock Checker & Analysis (egui desktop app)
 - **`accounting/`** - SevDesk Invoice Creator (egui desktop app, Cardmarket → SevDesk integration)
+- **`inventory_sync/`** - Inventory Sync (CLI app, CSV → SQLite with price tracking)
 
 Each project is a standalone Cargo project with its own `Cargo.toml`. Run commands from within the respective directory.
 
@@ -25,6 +26,16 @@ When testing changes on the console, prefer to use './run_quality_checks.sh' to 
 
 Tests use fixtures in `tests/fixtures/` - prefer reusing existing fixtures over creating new test data.
 
+## Post-Change Checklist
+
+After every code change, complete the following steps:
+
+1. **Update README files**: Search all `README.md` files in the repository and update any sections affected by the change (usage examples, feature lists, API documentation, etc.)
+
+2. **Check FEATURE_REQUESTS**: Search all `FEATURE_REQUESTS.md` files to determine if the change implements any requested features. If so, mark them as completed with the implementation date.
+
+3. **Unit test coverage**: Ensure all new functionality has corresponding unit tests. New public functions, structs, and modules must have test coverage. Run `./run_quality_checks.sh` to verify tests pass.
+
 ## Architecture Patterns
 
 ### GUI Layer (egui/eframe)
@@ -41,10 +52,18 @@ Tests use fixtures in `tests/fixtures/` - prefer reusing existing fixtures over 
 ### Error Handling
 - `check_stock`: Custom `ApiError` enum in [error.rs](check_stock/src/error.rs) with `ApiResult<T>` alias
 - `accounting`: Uses `anyhow::Result` with `.context()` for error messages
+- `inventory_sync`: Custom `Error` enum with `thiserror`, uses `Result<T>` alias
 
-### Async Pattern (accounting)
+### Async Pattern (accounting, inventory_sync)
 - Tokio runtime created in app state: `runtime: Runtime::new()`
 - Block on async calls in GUI: `self.runtime.block_on(async_fn())`
+- `inventory_sync`: Full async with `#[tokio::main]`
+
+### Database Pattern (inventory_sync)
+- SQLite via `rusqlite` with `bundled` feature
+- `Database` struct wraps connection with typed methods
+- Schema initialized on open with `CREATE TABLE IF NOT EXISTS`
+- Upsert pattern: `INSERT ... ON CONFLICT DO UPDATE`
 
 ## Domain-Specific Conventions
 
@@ -72,3 +91,5 @@ Tests use fixtures in `tests/fixtures/` - prefer reusing existing fixtures over 
 | CSV processor | `accounting/src/csv_processor/mod.rs` |
 | Error types | `check_stock/src/error.rs` |
 | Test fixtures | `accounting/tests/fixtures/*.csv` |
+| Database layer | `inventory_sync/src/db.rs` |
+| CLI structure | `inventory_sync/src/main.rs` |
