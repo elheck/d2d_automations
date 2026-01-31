@@ -4,6 +4,36 @@ This document contains feature requests for the Check Stock Application.
 
 ## High Priority
 
+### MTG Price Monitor & Historical Database
+
+**Goal**: Continuously monitor MTG card prices (from a watchlist or full inventory) and build a local database of historical price data for trend analysis.
+
+#### Use Cases
+- Track price trends over time to identify buy/sell opportunities
+- Detect price spikes or drops on specific cards
+- Build historical data for portfolio valuation
+- Generate price alerts when thresholds are crossed
+
+#### Proposed Features
+- **Watchlist support**: Monitor specific cards or entire inventory
+- **Scheduled polling**: Configurable intervals (hourly, daily) respecting API rate limits
+- **Price sources**: Cardmarket (primary), optionally Scryfall/TCGPlayer
+- **Local SQLite database**: Store historical snapshots with timestamps
+- **Trend visualization**: Charts showing price history (30d, 90d, 1y)
+- **Alerts**: Optional notifications when prices cross user-defined thresholds
+
+#### Architecture Options
+1. **Integrated into check_stock**: Add a "Price Monitor" screen with background polling
+2. **Standalone application**: Separate `price_monitor/` project
+
+#### Technical Considerations
+- Cardmarket API rate limits (or scraping the price guide JSON)
+- Delta storage vs full snapshots for database efficiency
+- Background task scheduling (tokio cron or system scheduler)
+- Could integrate with the planned SQLite + Litestream backup infrastructure
+
+---
+
 * Checklist for picking
 
 ### Database Integration with Off-Site Backup
