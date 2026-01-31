@@ -36,6 +36,15 @@ After every code change, complete the following steps:
 
 3. **Unit test coverage**: Ensure all new functionality has corresponding unit tests. New public functions, structs, and modules must have test coverage. Run `./run_quality_checks.sh` to verify tests pass.
 
+## Security Guidelines
+
+**Security is more important than performance.** Always use best security practices, even if it means slower code.
+
+- **Parameterized queries only**: Never use string concatenation or interpolation to build SQL queries. Always use prepared statements with parameters.
+- **Input validation**: Validate and sanitize all external input (user input, API responses, file contents).
+- **No secrets in code**: API keys, tokens, and credentials must come from environment variables, never hardcoded.
+- **Communicate security implications**: Before implementing any change with security implications, explain the risks and proposed mitigations to the user. Do not proceed without acknowledgment.
+
 ## Architecture Patterns
 
 ### GUI Layer (egui/eframe)

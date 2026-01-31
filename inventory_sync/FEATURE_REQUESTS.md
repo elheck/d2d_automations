@@ -25,6 +25,12 @@ inventory_sync is a standalone server application that runs continuously on a se
                                              └─────────────────────────┘
 ```
 
+## Requirements
+
+### Data Integrity
+- **Safe shutdown**: The server must be safe to quit at any time without risking data integrity. All database writes must be atomic and transactional.
+- **No unsanitized SQL**: Under no circumstances may unsanitized SQL be used. All queries must use parameterized statements / prepared statements to prevent SQL injection.
+
 ## Features
 
 ### 1. REST API for Card Sync
