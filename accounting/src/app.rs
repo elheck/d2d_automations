@@ -603,7 +603,18 @@ impl InvoiceApp {
 
             match result {
                 Ok(invoice_result) => {
-                    if invoice_result.error.is_none() {
+                    if let Some(ref err) = invoice_result.error {
+                        error!(
+                            "Failed to {} invoice for {}: {}",
+                            if self.dry_run_mode {
+                                "simulate"
+                            } else {
+                                "create"
+                            },
+                            order.name,
+                            err
+                        );
+                    } else {
                         let action = if self.dry_run_mode {
                             "Simulated"
                         } else {
@@ -618,52 +629,42 @@ impl InvoiceApp {
                                 .as_ref()
                                 .unwrap_or(&"[DRY RUN]".to_string())
                         );
-                    } else {
-                        error!(
-                            "Failed to {} invoice for {}: {}",
-                            if self.dry_run_mode {
-                                "simulate"
-                            } else {
-                                "create"
-                            },
-                            order.name,
-                            invoice_result.error.as_ref().unwrap()
-                        );
                     }
 
                     // Execute workflow if invoice was created successfully
                     let mut final_result = invoice_result;
-                    if final_result.error.is_none() && final_result.invoice_id.is_some() {
-                        let workflow_options =
-                            self.build_workflow_options_with_date(&order.date_of_purchase);
-                        if workflow_options.finalize
-                            || workflow_options.enshrine
-                            || workflow_options.book
-                        {
-                            let invoice_id = final_result.invoice_id.unwrap();
-                            let invoice_number =
-                                final_result.invoice_number.as_deref().unwrap_or("Unknown");
+                    if let Some(invoice_id) = final_result.invoice_id {
+                        if final_result.error.is_none() {
+                            let workflow_options =
+                                self.build_workflow_options_with_date(&order.date_of_purchase);
+                            if workflow_options.finalize
+                                || workflow_options.enshrine
+                                || workflow_options.book
+                            {
+                                let invoice_number =
+                                    final_result.invoice_number.as_deref().unwrap_or("Unknown");
 
-                            let workflow_status = if self.dry_run_mode {
-                                self.runtime.block_on(api.simulate_invoice_workflow(
-                                    invoice_id,
-                                    invoice_number,
-                                    &workflow_options,
-                                ))
-                            } else {
-                                self.runtime.block_on(api.execute_invoice_workflow(
-                                    invoice_id,
-                                    invoice_number,
-                                    &workflow_options,
-                                ))
-                            };
+                                let workflow_status = if self.dry_run_mode {
+                                    self.runtime.block_on(api.simulate_invoice_workflow(
+                                        invoice_id,
+                                        invoice_number,
+                                        &workflow_options,
+                                    ))
+                                } else {
+                                    self.runtime.block_on(api.execute_invoice_workflow(
+                                        invoice_id,
+                                        invoice_number,
+                                        &workflow_options,
+                                    ))
+                                };
 
-                            // Check for workflow errors
-                            if let Some(ref err) = workflow_status.workflow_error {
-                                error!("Workflow error for {}: {}", order.name, err);
+                                // Check for workflow errors
+                                if let Some(ref err) = workflow_status.workflow_error {
+                                    error!("Workflow error for {}: {}", order.name, err);
+                                }
+
+                                final_result.workflow_status = Some(workflow_status);
                             }
-
-                            final_result.workflow_status = Some(workflow_status);
                         }
                     }
 
