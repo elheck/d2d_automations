@@ -31,6 +31,14 @@ inventory_sync is a standalone server application that runs continuously on a se
 - **Safe shutdown**: The server must be safe to quit at any time without risking data integrity. All database writes must be atomic and transactional.
 - **No unsanitized SQL**: Under no circumstances may unsanitized SQL be used. All queries must use parameterized statements / prepared statements to prevent SQL injection.
 
+### Security
+- **API Authentication**: All endpoints require authentication via API key or bearer token. No anonymous access.
+- **Input Validation**: Validate and sanitize all incoming data (CSV content, card fields). Reject malformed or suspicious input. Limit payload sizes to prevent memory exhaustion.
+- **Network Security**: Bind to `127.0.0.1` (localhost) by default. Require explicit configuration to expose externally. Use HTTPS/TLS if exposed to network.
+- **Rate Limiting**: Protect against abuse and denial of service attacks with request rate limits per client.
+- **Secure Configuration**: All secrets (API keys, tokens) must come from environment variables. Never log sensitive data. Never hardcode credentials.
+- **Error Handling**: Never expose internal error details or stack traces to API clients. Log details server-side only.
+
 ## Features
 
 ### 1. REST API for Card Sync
