@@ -1,83 +1,73 @@
 # Feature Requests for Inventory Sync
 
-This document tracks feature requests and enhancement ideas for the inventory_sync application.
+This document tracks feature requests for the inventory_sync service.
 
-## High Priority
+## Overview
 
-### 1. CSV Import from Cardmarket
-**Description**: Parse Cardmarket CSV exports and store card data in SQLite
-- Parse semicolon-separated CSV format
-- Handle multi-item fields with ` | ` delimiter
-- Store card metadata (name, set, condition, language, etc.)
-- Support incremental updates (upsert pattern)
+inventory_sync is a standalone server application that runs continuously on a separate server. It provides an API for syncing card inventory to a SQLite database and automatically collects prices on a schedule.
 
-**Priority**: High
+## Architecture
+
+```
+┌─────────────────┐         HTTP API         ┌─────────────────────────┐
+│   check_stock   │ ──────────────────────▶  │    inventory_sync       │
+│   (desktop)     │    POST /sync            │    (server)             │
+└─────────────────┘                          │                         │
+                                             │  - REST API             │
+                                             │  - SQLite database      │
+                                             │  - Scheduled price jobs │
+                                             └─────────────────────────┘
+                                                        │
+                                                        ▼ every 12h
+                                             ┌─────────────────────────┐
+                                             │   Price Sources         │
+                                             │   (Scryfall, etc.)      │
+                                             └─────────────────────────┘
+```
+
+## Features
+
+### 1. REST API for Card Sync
+**Description**: Expose an HTTP API that check_stock can call to sync cards.
+- `POST /sync` - Accept CSV data or card list, store in SQLite
+- `GET /cards` - Query stored cards
+- `GET /prices/{card_id}` - Get price history for a card
+- Upsert logic (insert new, update existing)
+
 **Status**: Planned
 
-### 2. SQLite Database Layer
-**Description**: Persistent storage with efficient querying
-- Cards table with Cardmarket IDs as primary key
-- Price history table for tracking changes over time
-- Full-text search indexes for card names
-- Schema migrations for future updates
+### 2. Automated Price Collection
+**Description**: Background job that fetches prices every 12 hours without intervention.
+- Runs continuously as a server daemon
+- Scheduled price fetching (every 12 hours)
+- Support multiple price sources (Scryfall, Cardmarket, etc.)
+- Store historical price data with timestamps
+- Graceful handling of API rate limits
 
-**Priority**: High
 **Status**: Planned
 
-### 3. Scryfall Price Integration
-**Description**: Fetch current prices from Scryfall API
-- Match cards by set code and collector number
-- Store both regular and foil prices
-- Respect API rate limits (50ms between requests)
-- Record price history with timestamps
+### 3. SQLite Database
+**Description**: Persistent storage for cards and price history.
+- Cards table with card metadata
+- Price history table with timestamps and source
+- Efficient queries for price trends
 
-**Priority**: High
 **Status**: Planned
 
-## Medium Priority
-
-### 4. CLI Interface
-**Description**: Command-line interface for all operations
-- `sync` command for CSV import
-- `prices` command for price collection
-- `stats` command for database statistics
-- `daemon` command for scheduled operation
-
-**Priority**: Medium
-**Status**: Planned
-
-### 5. Daemon Mode with Scheduling
-**Description**: Background service for automated sync and price collection
-- Configurable sync intervals
-- Cron-style scheduling support
+### 4. Server Runtime
+**Description**: Long-running server process.
+- HTTP server (axum or actix-web)
+- Background task scheduler for price collection
 - Graceful shutdown handling
+- Configurable via environment variables or config file
 
-**Priority**: Medium
 **Status**: Planned
-
-## Low Priority
-
-### 6. Price Alerts
-**Description**: Notify when prices cross thresholds
-- User-defined price thresholds per card
-- Support for both price increases and decreases
-
-**Priority**: Low
-**Status**: Future consideration
-
-### 7. Multiple Price Sources
-**Description**: Aggregate prices from multiple sources
-- Cardmarket price guide integration
-- TCGPlayer API support
-
-**Priority**: Low
-**Status**: Future consideration
 
 ## Completed
 
 _No features completed yet_
 
----
+
 
 ## How to Request Features
 

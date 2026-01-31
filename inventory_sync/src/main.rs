@@ -5,4 +5,3 @@
 fn main() {
     println!("Hello, inventory_sync!");
 }
-
