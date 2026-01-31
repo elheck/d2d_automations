@@ -40,6 +40,8 @@ After every code change, complete the following steps:
 
 **Security is more important than performance.** Always use best security practices, even if it means slower code.
 
+**Be unnecessarily secure.** Implement the software as if you expect a penetration test at any second. When in doubt, choose the more secure option.
+
 - **Parameterized queries only**: Never use string concatenation or interpolation to build SQL queries. Always use prepared statements with parameters.
 - **Input validation**: Validate and sanitize all external input (user input, API responses, file contents).
 - **No secrets in code**: API keys, tokens, and credentials must come from environment variables, never hardcoded.
