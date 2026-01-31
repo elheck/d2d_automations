@@ -34,7 +34,6 @@ This document contains feature requests for the Check Stock Application.
 
 ---
 
-* Checklist for picking
 
 ### Database Integration with Off-Site Backup
 
