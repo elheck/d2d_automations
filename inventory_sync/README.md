@@ -1,17 +1,31 @@
 # Inventory Sync
 
-MTG inventory sync application that will collect pricing data and sync stock from CSV exports to a SQLite database.
+MTG inventory sync server that collects pricing data and syncs stock from CSV exports to a SQLite database.
 
 ## Status
 
-🚧 **Under Development** - This project is currently a skeleton with no implemented features yet.
+🚧 **Under Development** - Basic price guide fetching implemented.
+
+## Current Features
+
+- **Cardmarket Price Guide**: Fetches MTG price guide from Cardmarket CDN on startup (~120k entries)
 
 ## Planned Features
 
-- **CSV Import**: Sync inventory from Cardmarket CSV exports
-- **SQLite Database**: Persistent storage with full-text search indexes
-- **Price Tracking**: Collect and store historical pricing data from Scryfall
-- **Daemon Mode**: Run as a background service with scheduled syncs
+- **REST API**: HTTP endpoints for card sync and price queries
+- **SQLite Database**: Persistent storage with historical price data
+- **Scheduled Jobs**: Background price collection every 12 hours
+- **Docker Deployment**: Containerized deployment with volume mounts
+
+## Usage
+
+```bash
+# Run the application
+cargo run
+
+# With debug logging
+RUST_LOG=debug cargo run
+```
 
 ## Development
 

@@ -6,6 +6,16 @@ description = "MTG inventory sync - collects pricing data and syncs stock from C
 authors = ["Aron"]
 
 [dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+log = "0.4"
+env_logger = "0.11"
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.36", features = ["bundled"] }
+dirs = "5.0"
 
 [dev-dependencies]
 
