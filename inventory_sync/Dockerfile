@@ -67,5 +67,5 @@ ENV RUST_LOG=info
 # Mount point for persistent data
 VOLUME ["/data"]
 
-# Run with database in mounted volume
+# Run in daemon mode (checks hourly, syncs once daily)
 ENTRYPOINT ["inventory_sync", "--database", "/data/inventory.db"]

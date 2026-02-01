@@ -1,6 +1,7 @@
 //! Inventory Sync - MTG Stock & Pricing Database
 //!
 //! Syncs card inventory from CSV exports to SQLite and collects pricing data.
+//! Runs continuously with daily sync scheduling.
 
 use clap::Parser;
 use inventory_sync::{
@@ -9,6 +10,8 @@ use inventory_sync::{
 };
 use rusqlite::Connection;
 use std::path::PathBuf;
+use std::time::Duration;
+use tokio::time::interval;
 
 /// MTG inventory sync server - collects pricing data and syncs to SQLite
 #[derive(Parser, Debug)]
@@ -18,6 +21,14 @@ struct Args {
     /// Path to the SQLite database file
     #[arg(short, long, default_value_t = default_db_path())]
     database: String,
+
+    /// Run once and exit (default: run continuously with daily schedule)
+    #[arg(long, default_value_t = false)]
+    once: bool,
+
+    /// Check interval in hours when running continuously
+    #[arg(long, default_value_t = 1)]
+    interval_hours: u64,
 }
 
 /// Returns the default database path: ~/.local/share/inventory_sync/inventory.db
@@ -52,29 +63,58 @@ async fn main() {
         }
     }
 
+    if args.once {
+        // Run once and exit
+        run_sync(&db_path).await;
+    } else {
+        // Run continuously with interval checks
+        log::info!(
+            "Running in daemon mode, checking every {} hour(s)",
+            args.interval_hours
+        );
+        run_daemon(&db_path, args.interval_hours).await;
+    }
+}
+
+/// Run the sync daemon - checks periodically and syncs when needed
+async fn run_daemon(db_path: &PathBuf, interval_hours: u64) {
+    let check_interval = Duration::from_secs(interval_hours * 3600);
+    let mut ticker = interval(check_interval);
+
+    // Run immediately on startup
+    run_sync(db_path).await;
+
+    loop {
+        ticker.tick().await;
+        log::info!("Scheduled check triggered");
+        run_sync(db_path).await;
+    }
+}
+
+/// Run a single sync operation
+async fn run_sync(db_path: &PathBuf) {
     // Open or create the SQLite database
-    let mut conn = match Connection::open(&db_path) {
+    let mut conn = match Connection::open(db_path) {
         Ok(conn) => {
             log::info!("Opened database: {}", db_path.display());
             conn
         }
         Err(e) => {
             log::error!("Failed to open database: {}", e);
-            std::process::exit(1);
+            return;
         }
     };
 
     // Initialize database schema
     if let Err(e) = init_schema(&conn) {
         log::error!("Failed to initialize database schema: {}", e);
-        std::process::exit(1);
+        return;
     }
 
     // Check if we already have price data for today
     match has_price_data_for_today(&conn) {
         Ok(true) => {
             log::info!("Price data for today already exists in database, skipping download");
-            log::info!("inventory_sync completed (no updates needed).");
             return;
         }
         Ok(false) => {
@@ -82,7 +122,7 @@ async fn main() {
         }
         Err(e) => {
             log::error!("Failed to check existing price data: {}", e);
-            std::process::exit(1);
+            return;
         }
     }
 
@@ -99,7 +139,7 @@ async fn main() {
         }
         Err(e) => {
             log::error!("Failed to fetch product catalog: {}", e);
-            std::process::exit(1);
+            return;
         }
     };
 
@@ -110,7 +150,7 @@ async fn main() {
         }
         Err(e) => {
             log::error!("Failed to upsert products: {}", e);
-            std::process::exit(1);
+            return;
         }
     }
 
@@ -126,7 +166,7 @@ async fn main() {
         }
         Err(e) => {
             log::error!("Failed to fetch price guide: {}", e);
-            std::process::exit(1);
+            return;
         }
     };
 
@@ -150,9 +190,9 @@ async fn main() {
         }
         Err(e) => {
             log::error!("Failed to insert price history: {}", e);
-            std::process::exit(1);
+            return;
         }
     }
 
-    log::info!("inventory_sync completed successfully.");
+    log::info!("Sync completed successfully.");
 }
