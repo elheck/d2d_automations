@@ -1,5 +1,5 @@
 # Build stage
-FROM rust:1.83-slim-bookworm AS builder
+FROM rust:1.85-slim-bookworm AS builder
 
 WORKDIR /app
 
@@ -17,7 +17,7 @@ COPY src ./src
 RUN cargo build --release
 
 # Test stage - used by CI to run tests in the same environment as production
-FROM rust:1.83-slim-bookworm AS tester
+FROM rust:1.85-slim-bookworm AS tester
 
 WORKDIR /app
 
@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y \
 
 # Install additional tools for CI
 RUN rustup component add rustfmt clippy && \
-    cargo install cargo-audit@0.21.2
+    cargo install cargo-audit
 
 # Copy manifests and source
 COPY Cargo.toml Cargo.lock* ./
