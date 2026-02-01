@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y \
 
 # Install additional tools for CI
 RUN rustup component add rustfmt clippy && \
-    cargo install cargo-audit
+    cargo install cargo-audit --locked
 
 # Copy manifests and source
 COPY Cargo.toml Cargo.lock* ./
