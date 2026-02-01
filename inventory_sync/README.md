@@ -1,31 +1,58 @@
 # Inventory Sync
 
-MTG inventory sync server that collects pricing data and syncs stock from CSV exports to a SQLite database.
+MTG inventory sync server that collects historical pricing data and syncs stock from CSV exports to a SQLite database.
 
 ## Status
 
-🚧 **Under Development** - Basic price guide fetching implemented.
+🚧 **Under Development** - Core price collection implemented.
 
 ## Current Features
 
-- **Cardmarket Price Guide**: Fetches MTG price guide from Cardmarket CDN on startup (~120k entries)
+- **Cardmarket Product Catalog**: Fetches full MTG product catalog (singles + non-singles, ~120k products)
+- **Cardmarket Price Guide**: Fetches daily price data with trend, avg, low prices (normal + foil variants)
+- **Historical Price Storage**: Stores one price snapshot per product per day (never overwrites historical data)
+- **SQLite Database**: Persistent storage with products and price_history tables
+- **CLI Configuration**: Customizable database path via `--database` flag
 
-## Planned Features
+## Database Schema
 
-- **REST API**: HTTP endpoints for card sync and price queries
-- **SQLite Database**: Persistent storage with historical price data
-- **Scheduled Jobs**: Background price collection every 12 hours
-- **Docker Deployment**: Containerized deployment with volume mounts
+### Products Table
+Stores product catalog information (id, name, category, expansion, etc.)
+
+### Price History Table
+Stores daily price snapshots with composite key (id_product, price_date):
+- `avg`, `low`, `trend` - regular card prices
+- `avg1`, `avg7`, `avg30` - 1-day, 7-day, 30-day averages
+- `avg_foil`, `low_foil`, `trend_foil` - foil variant prices
+- `created_at` - Cardmarket's price guide creation timestamp
 
 ## Usage
 
 ```bash
-# Run the application
+# Run with default database (~/.local/share/inventory_sync/inventory.db)
 cargo run
+
+# Run with custom database path
+cargo run -- --database /path/to/inventory.db
 
 # With debug logging
 RUST_LOG=debug cargo run
+
+# Query price history with product names
+sqlite3 inventory.db "
+  SELECT p.name, ph.price_date, ph.trend, ph.avg
+  FROM price_history ph
+  JOIN products p ON ph.id_product = p.id_product
+  WHERE p.name LIKE '%Black Lotus%'
+  ORDER BY ph.price_date DESC;
+"
 ```
+
+## Planned Features
+
+- **REST API**: HTTP endpoints for card sync and price queries
+- **Scheduled Jobs**: Background price collection (daily cron)
+- **Docker Deployment**: Containerized deployment with volume mounts
 
 ## Development
 
@@ -39,6 +66,12 @@ cargo test
 # Build release
 cargo build --release
 ```
+
+## Security
+
+- All database queries use parameterized statements (no SQL string concatenation)
+- All write operations are wrapped in transactions for atomicity
+- Input validation on all external data (API responses)
 
 ## License
 

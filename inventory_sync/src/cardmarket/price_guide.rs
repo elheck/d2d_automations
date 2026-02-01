@@ -106,6 +106,11 @@ impl PriceGuide {
     pub fn created_at(&self) -> &str {
         &self.created_at
     }
+
+    /// Iterate over all price entries
+    pub fn iter(&self) -> impl Iterator<Item = &PriceGuideEntry> {
+        self.entries.values()
+    }
 }
 
 #[cfg(test)]
