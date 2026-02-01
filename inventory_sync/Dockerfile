@@ -16,8 +16,30 @@ COPY src ./src
 # Build the application
 RUN cargo build --release
 
+# Test stage - used by CI to run tests in the same environment as production
+FROM rust:1.83-slim-bookworm AS tester
+
+WORKDIR /app
+
+# Install build/test dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install additional tools for CI
+RUN rustup component add rustfmt clippy && \
+    cargo install cargo-audit
+
+# Copy manifests and source
+COPY Cargo.toml Cargo.lock* ./
+COPY src ./src
+
+# Default command runs full test suite
+CMD ["sh", "-c", "cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --verbose && cargo build --release && cargo audit"]
+
 # Runtime stage
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS runtime
 
 WORKDIR /app
 

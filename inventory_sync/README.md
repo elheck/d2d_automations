@@ -71,12 +71,22 @@ docker run --rm -e RUST_LOG=debug -v inventory_data:/data inventory_sync
 docker compose run --rm inventory_sync
 ```
 
+### Pull from GitHub Container Registry
+
+```bash
+# Pull latest release
+docker pull ghcr.io/YOUR_USERNAME/inventory_sync:latest
+
+# Run from registry
+docker run --rm -v inventory_data:/data ghcr.io/YOUR_USERNAME/inventory_sync:latest
+```
+
 ### Daily Scheduling with Cron
 
 Add to your crontab (`crontab -e`) to run daily at 3 AM:
 
 ```bash
-0 3 * * * cd /path/to/inventory_sync && docker compose run --rm inventory_sync >> /var/log/inventory_sync.log 2>&1
+0 3 * * * docker run --rm -v inventory_data:/data ghcr.io/YOUR_USERNAME/inventory_sync:latest >> /var/log/inventory_sync.log 2>&1
 ```
 
 ### Access the Database
@@ -97,6 +107,10 @@ docker run --rm -v inventory_data:/data -it alpine sh -c "apk add sqlite && sqli
 
 # Run tests
 cargo test
+
+# Run tests in Docker (same as CI)
+docker build --target tester -t inventory_sync:test .
+docker run --rm inventory_sync:test
 
 # Build release
 cargo build --release
