@@ -1,51 +1,46 @@
 # Copilot Instructions for d2d_automations
 
-This monorepo contains Rust applications for Magic: The Gathering business operations.
+Rust monorepo for Magic: The Gathering business operations.
 
-## Repository Structure
+## Projects
 
-- **`check_stock/`** - MTG Stock Checker & Analysis (egui desktop app)
-- **`accounting/`** - SevDesk Invoice Creator (egui desktop app, Cardmarket → SevDesk integration)
-- **`inventory_sync/`** - Inventory Sync (CLI app, planned - currently skeleton)
+| Project | Type | Status |
+|---------|------|--------|
+| `check_stock/` | egui desktop app - Stock Checker & Analysis | Active |
+| `accounting/` | egui desktop app - Cardmarket → SevDesk invoicing | Active |
+| `inventory_sync/` | REST API server - CSV → SQLite with price tracking | Skeleton |
 
-Each project is a standalone Cargo project with its own `Cargo.toml`. Run commands from within the respective directory.
+Each project is standalone with its own `Cargo.toml`. Run commands from within the project directory.
 
 ## Development Workflow
 
 ```bash
-# Quality checks (runs fmt, clippy, tests)
-./run_quality_checks.sh
-
-# CI-equivalent commands
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --verbose
+cd <project>
+./run_quality_checks.sh  # Runs fmt, clippy, tests - use this for consistency with CI
 ```
-
-When testing changes on the console, prefer to use './run_quality_checks.sh' to ensure consistency with CI.
 
 Tests use fixtures in `tests/fixtures/` - prefer reusing existing fixtures over creating new test data.
 
 ## Post-Change Checklist
 
-After every code change, complete the following steps:
-
-1. **Update README files**: Search all `README.md` files in the repository and update any sections affected by the change (usage examples, feature lists, API documentation, etc.)
-
-2. **Check FEATURE_REQUESTS**: Search all `FEATURE_REQUESTS.md` files to determine if the change implements any requested features. If so, mark them as completed with the implementation date.
-
-3. **Unit test coverage**: Ensure all new functionality has corresponding unit tests. New public functions, structs, and modules must have test coverage. Run `./run_quality_checks.sh` to verify tests pass.
+1. **Update README files**: Search all `README.md` files and update affected sections
+2. **Check FEATURE_REQUESTS**: Mark completed features with implementation date in `FEATURE_REQUESTS.md` files
+3. **Unit test coverage**: All new public functions/structs need tests. Run `./run_quality_checks.sh`
 
 ## Security Guidelines
 
-**Security is more important than performance.** Always use best security practices, even if it means slower code.
+**Security > Performance.** Be unnecessarily secure - expect a penetration test at any second.
 
-**Be unnecessarily secure.** Implement the software as if you expect a penetration test at any second. When in doubt, choose the more secure option.
+- **Parameterized queries only**: Never string-concat SQL. Always use prepared statements.
+- **Input validation**: Validate all external input (user input, API responses, CSV files).
+- **No secrets in code**: Use environment variables (`SEVDESK_API`, etc.). Never hardcode.
+- **Communicate risks**: Before security-impacting changes, explain risks and mitigations. Wait for acknowledgment.
 
-- **Parameterized queries only**: Never use string concatenation or interpolation to build SQL queries. Always use prepared statements with parameters.
-- **Input validation**: Validate and sanitize all external input (user input, API responses, file contents).
-- **No secrets in code**: API keys, tokens, and credentials must come from environment variables, never hardcoded.
-- **Communicate security implications**: Before implementing any change with security implications, explain the risks and proposed mitigations to the user. Do not proceed without acknowledgment.
+### Server-Specific (inventory_sync)
+- Atomic/transactional database writes for safe shutdown
+- API authentication required on all endpoints
+- Bind to `127.0.0.1` by default; require explicit config for external exposure
+- Rate limiting to prevent abuse; never expose stack traces to clients
 
 ## Architecture Patterns
 
@@ -85,14 +80,15 @@ After every code change, complete the following steps:
 - Country cache with thread-safe `Arc<RwLock<CountryCache>>`
 - Dry-run mode simulates operations without API calls
 
-## Key Files for Reference
+## Key Files
 
-| Pattern | Example File |
-|---------|-------------|
+| Pattern | Example |
+|---------|----------|
 | Screen component | `check_stock/src/ui/screens/stock_checker.rs` |
+| Screen state | `check_stock/src/ui/screens/picking.rs` (PickingState) |
 | API client | `accounting/src/sevdesk_api/client.rs` |
 | CSV processor | `accounting/src/csv_processor/mod.rs` |
 | Error types | `check_stock/src/error.rs` |
+| Unit tests | `accounting/src/csv_processor/validator_tests.rs` |
+| Integration tests | `accounting/tests/csv_processor_tests.rs` |
 | Test fixtures | `accounting/tests/fixtures/*.csv` |
-| Database layer | `inventory_sync/src/db.rs` |
-| CLI structure | `inventory_sync/src/main.rs` |

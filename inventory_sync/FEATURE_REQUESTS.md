@@ -4,7 +4,7 @@ This document tracks feature requests for the inventory_sync service.
 
 ## Overview
 
-inventory_sync is a standalone server application that runs continuously on a separate server. It provides an API for syncing card inventory to a SQLite database and automatically collects prices on a schedule.
+inventory_sync is a standalone server application that runs continuously on a separate server in a Docker container. It provides an API for syncing card inventory to a SQLite database and automatically collects prices on a schedule.
 
 ## Architecture
 
@@ -26,6 +26,12 @@ inventory_sync is a standalone server application that runs continuously on a se
 ```
 
 ## Requirements
+
+### Deployment
+- **Docker-based**: The application must run in a Docker container for consistent deployment and isolation.
+- **Volume mounts**: SQLite database file must be stored on a mounted volume for persistence across container restarts.
+- **Environment configuration**: All configuration (ports, API keys, database path) via environment variables.
+- **Health checks**: Container should expose a health endpoint for orchestration tools.
 
 ### Data Integrity
 - **Safe shutdown**: The server must be safe to quit at any time without risking data integrity. All database writes must be atomic and transactional.
@@ -69,11 +75,13 @@ inventory_sync is a standalone server application that runs continuously on a se
 **Status**: Planned
 
 ### 4. Server Runtime
-**Description**: Long-running server process.
+**Description**: Long-running server process in Docker.
 - HTTP server (axum or actix-web)
 - Background task scheduler for price collection
-- Graceful shutdown handling
-- Configurable via environment variables or config file
+- Graceful shutdown handling (responds to SIGTERM)
+- Configurable via environment variables
+- Dockerfile for building the container image
+- docker-compose.yml for local development
 
 **Status**: Planned
 
