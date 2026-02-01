@@ -1,0 +1,11 @@
+target/
+*.db
+*.sqlite
+.git/
+.gitignore
+*.md
+!README.md
+Dockerfile
+docker-compose.yml
+.dockerignore
+*.csv

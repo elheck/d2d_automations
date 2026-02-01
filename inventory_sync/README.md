@@ -52,7 +52,42 @@ sqlite3 inventory.db "
 
 - **REST API**: HTTP endpoints for card sync and price queries
 - **Scheduled Jobs**: Background price collection (daily cron)
-- **Docker Deployment**: Containerized deployment with volume mounts
+
+## Docker Deployment
+
+### Build and Run
+
+```bash
+# Build the Docker image
+docker build -t inventory_sync .
+
+# Run once (data persists in named volume)
+docker run --rm -v inventory_data:/data inventory_sync
+
+# Run with debug logging
+docker run --rm -e RUST_LOG=debug -v inventory_data:/data inventory_sync
+
+# Using docker compose
+docker compose run --rm inventory_sync
+```
+
+### Daily Scheduling with Cron
+
+Add to your crontab (`crontab -e`) to run daily at 3 AM:
+
+```bash
+0 3 * * * cd /path/to/inventory_sync && docker compose run --rm inventory_sync >> /var/log/inventory_sync.log 2>&1
+```
+
+### Access the Database
+
+```bash
+# Copy database from volume to host
+docker run --rm -v inventory_data:/data -v $(pwd):/out alpine cp /data/inventory.db /out/
+
+# Or use sqlite3 directly in the container
+docker run --rm -v inventory_data:/data -it alpine sh -c "apk add sqlite && sqlite3 /data/inventory.db"
+```
 
 ## Development
 

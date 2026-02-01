@@ -1,0 +1,16 @@
+services:
+  inventory_sync:
+    build: .
+    container_name: inventory_sync
+    restart: "no"
+    environment:
+      - RUST_LOG=info
+      - TZ=Europe/Berlin
+    volumes:
+      - inventory_data:/data
+    # Uncomment to run on a schedule with cron on host:
+    # docker compose run --rm inventory_sync
+
+volumes:
+  inventory_data:
+    driver: local
