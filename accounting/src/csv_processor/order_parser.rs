@@ -136,6 +136,11 @@ pub fn parse_order_line(line: &str) -> Result<OrderRecord> {
 /// Handles both single-item and multi-item orders. Multi-item orders use
 /// " | " as a delimiter between items.
 ///
+/// # Note on delimiter handling
+/// Card names can contain " | " (e.g., "Magic: The Gathering | Marvel's Spider-Man"),
+/// so we use the Product ID count as authoritative (IDs are numeric and never contain pipes).
+/// Descriptions are then split to match the expected item count.
+///
 /// # Arguments
 /// * `description` - Item description(s), possibly " | "-separated
 /// * `product_ids` - Product ID(s), possibly " | "-separated
@@ -148,15 +153,29 @@ pub fn parse_order_items(
     product_ids: &str,
     product_names: &str,
 ) -> Result<Vec<OrderItem>> {
-    let descriptions = description.split(" | ").collect::<Vec<&str>>();
     let ids = product_ids.split(" | ").collect::<Vec<&str>>();
     let names = product_names.split(" | ").collect::<Vec<&str>>();
 
-    // Check if we have multiple items
-    if descriptions.len() == ids.len() && ids.len() == names.len() && descriptions.len() > 1 {
-        info!("Parsing {} individual items from order", descriptions.len());
-        let mut items = Vec::new();
+    // Use product ID count as authoritative - IDs are numeric and never contain " | "
+    let expected_count = ids.len();
 
+    // Check if we have multiple items (IDs and names must match)
+    if expected_count > 1 && ids.len() == names.len() {
+        info!("Parsing {} individual items from order", expected_count);
+
+        // Split descriptions carefully - card names may contain " | "
+        let descriptions = split_descriptions_by_count(description, expected_count);
+
+        if descriptions.len() != expected_count {
+            warn!(
+                "Description count {} doesn't match expected {}, falling back to single item",
+                descriptions.len(),
+                expected_count
+            );
+            return parse_as_single_item(description, product_ids, product_names);
+        }
+
+        let mut items = Vec::new();
         for ((desc, id), name) in descriptions.iter().zip(ids.iter()).zip(names.iter()) {
             let price = extract_price_from_description(desc)?;
             let quantity = extract_quantity_from_description(desc);
@@ -172,20 +191,91 @@ pub fn parse_order_items(
         debug!("Successfully parsed {} items", items.len());
         Ok(items)
     } else {
-        // Single item - extract price from description if possible
-        let price = extract_price_from_description(description).unwrap_or(0.0);
-        let quantity = extract_quantity_from_description(description);
-        let item = OrderItem {
-            description: description.to_string(),
-            product_id: product_ids.to_string(),
-            localized_product_name: product_names.to_string(),
-            price,
-            quantity,
-        };
-
-        debug!("Single item order, price: {price:.2}, quantity: {quantity}");
-        Ok(vec![item])
+        parse_as_single_item(description, product_ids, product_names)
     }
+}
+
+/// Splits description string into exactly `count` parts.
+///
+/// Uses " | " as delimiter but handles cases where card names contain " | "
+/// by looking for the pattern that starts each item (e.g., "1x ", "2x ").
+fn split_descriptions_by_count(description: &str, count: usize) -> Vec<String> {
+    if count <= 1 {
+        return vec![description.to_string()];
+    }
+
+    // First try simple split
+    let simple_split: Vec<&str> = description.split(" | ").collect();
+    if simple_split.len() == count {
+        return simple_split.iter().map(|s| s.to_string()).collect();
+    }
+
+    // If simple split gives more parts than expected, we need to reconstruct
+    // by finding items that start with quantity patterns (e.g., "1x ", "2x ")
+    debug!(
+        "Simple split gave {} parts, expected {}. Attempting smart split.",
+        simple_split.len(),
+        count
+    );
+
+    let mut result = Vec::new();
+    let mut current_item = String::new();
+
+    for (i, part) in simple_split.iter().enumerate() {
+        let trimmed = part.trim();
+
+        // Check if this part starts a new item (begins with quantity like "1x " or "2x ")
+        let starts_new_item = trimmed
+            .split_whitespace()
+            .next()
+            .map(|first_word| {
+                first_word.ends_with('x')
+                    && first_word[..first_word.len() - 1]
+                        .chars()
+                        .all(|c| c.is_ascii_digit())
+            })
+            .unwrap_or(false);
+
+        if i == 0 {
+            // First part always starts an item
+            current_item = trimmed.to_string();
+        } else if starts_new_item {
+            // This starts a new item, save current and start new
+            result.push(current_item);
+            current_item = trimmed.to_string();
+        } else {
+            // This is a continuation of the previous item (embedded " | " in card name)
+            current_item.push_str(" | ");
+            current_item.push_str(trimmed);
+        }
+    }
+
+    // Don't forget the last item
+    if !current_item.is_empty() {
+        result.push(current_item);
+    }
+
+    result
+}
+
+/// Parses the order as a single item (fallback case).
+fn parse_as_single_item(
+    description: &str,
+    product_ids: &str,
+    product_names: &str,
+) -> Result<Vec<OrderItem>> {
+    let price = extract_price_from_description(description).unwrap_or(0.0);
+    let quantity = extract_quantity_from_description(description);
+    let item = OrderItem {
+        description: description.to_string(),
+        product_id: product_ids.to_string(),
+        localized_product_name: product_names.to_string(),
+        price,
+        quantity,
+    };
+
+    debug!("Single item order, price: {price:.2}, quantity: {quantity}");
+    Ok(vec![item])
 }
 
 #[cfg(test)]

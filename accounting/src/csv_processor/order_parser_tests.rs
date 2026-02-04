@@ -50,6 +50,84 @@ mod parse_order_items_tests {
 
         assert_eq!(items.len(), 1);
     }
+
+    #[test]
+    fn handles_pipe_in_card_name() {
+        // Card names can contain " | " (e.g., "Magic: The Gathering | Marvel's Spider-Man")
+        // The parser should use product ID count as authoritative
+        let items = parse_order_items(
+            "1x Moss Diamond - 0,02 EUR | 1x Robot Token (Magic: The Gathering | Marvel's Spider-Man) - 0,02 EUR",
+            "512140 | 848235",
+            "Moss Diamond | Robot Token",
+        )
+        .unwrap();
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].product_id, "512140");
+        assert_eq!(items[0].localized_product_name, "Moss Diamond");
+        assert!((items[0].price - 0.02).abs() < 0.001);
+
+        assert_eq!(items[1].product_id, "848235");
+        assert_eq!(items[1].localized_product_name, "Robot Token");
+        assert!(items[1].description.contains("Marvel's Spider-Man"));
+        assert!((items[1].price - 0.02).abs() < 0.001);
+    }
+
+    #[test]
+    fn handles_real_cardmarket_format() {
+        // Real Cardmarket format: "1x Card (Set) - CollectorNum - Rarity - Condition - Language - Price EUR"
+        let items = parse_order_items(
+            "1x Moss Diamond (Commander Legends) - 327 - Common - NM - English - 0,02 EUR | 2x Gift of Paradise (Commander Legends) - 229 - Common - NM - English - 0,04 EUR",
+            "512140 | 510645",
+            "Moss Diamond | Gift of Paradise",
+        )
+        .unwrap();
+
+        assert_eq!(items.len(), 2);
+
+        assert_eq!(items[0].quantity, 1);
+        assert!((items[0].price - 0.02).abs() < 0.001);
+
+        assert_eq!(items[1].quantity, 2);
+        assert!((items[1].price - 0.04).abs() < 0.001);
+    }
+}
+
+mod split_descriptions_by_count_tests {
+    use super::*;
+
+    #[test]
+    fn simple_split_matches_count() {
+        let result = split_descriptions_by_count("1x Card A - 1,00 EUR | 1x Card B - 2,00 EUR", 2);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], "1x Card A - 1,00 EUR");
+        assert_eq!(result[1], "1x Card B - 2,00 EUR");
+    }
+
+    #[test]
+    fn handles_embedded_pipe_in_card_name() {
+        let desc = "1x Card A - 1,00 EUR | 1x Token (Set | Subset) - 2,00 EUR";
+        let result = split_descriptions_by_count(desc, 2);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], "1x Card A - 1,00 EUR");
+        assert!(result[1].contains("Set | Subset"));
+    }
+
+    #[test]
+    fn returns_single_for_count_one() {
+        let result = split_descriptions_by_count("1x Card - 1,00 EUR", 1);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "1x Card - 1,00 EUR");
+    }
+
+    #[test]
+    fn handles_multiple_pipes_in_description() {
+        // Two items, but description has 3 pipe separators due to embedded pipe
+        let desc = "1x Card A - 1,00 EUR | 1x Token (A | B | C) - 2,00 EUR";
+        let result = split_descriptions_by_count(desc, 2);
+        assert_eq!(result.len(), 2);
+        assert!(result[1].contains("A | B | C"));
+    }
 }
 
 mod parse_order_line_tests {
