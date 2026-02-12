@@ -10,7 +10,31 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      check_stock: ${{ steps.filter.outputs.check_stock }}
+      accounting: ${{ steps.filter.outputs.accounting }}
+      inventory_sync: ${{ steps.filter.outputs.inventory_sync }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            check_stock:
+              - 'check_stock/**'
+              - '.github/workflows/rust.yml'
+            accounting:
+              - 'accounting/**'
+              - '.github/workflows/rust.yml'
+            inventory_sync:
+              - 'inventory_sync/**'
+              - '.github/workflows/rust.yml'
+
   build_and_test_check_stock:
+    needs: changes
+    if: needs.changes.outputs.check_stock == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
@@ -111,6 +135,8 @@ jobs:
         echo "📋 Total test cases: 32"
 
   build_and_test_accounting:
+    needs: changes
+    if: needs.changes.outputs.accounting == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -182,6 +208,8 @@ jobs:
         echo "✅ Security audit: PASSED"
 
   build_and_test_inventory_sync:
+    needs: changes
+    if: needs.changes.outputs.inventory_sync == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
