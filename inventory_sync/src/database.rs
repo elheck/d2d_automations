@@ -316,10 +316,7 @@ pub fn search_products_by_name(
 }
 
 /// Get price history for a product (all dates, ordered chronologically)
-pub fn get_price_history(
-    conn: &Connection,
-    id_product: u64,
-) -> DbResult<Vec<PriceHistoryPoint>> {
+pub fn get_price_history(conn: &Connection, id_product: u64) -> DbResult<Vec<PriceHistoryPoint>> {
     let mut stmt = conn.prepare(
         "SELECT price_date, avg, low, trend, avg_foil, trend_foil
          FROM price_history
