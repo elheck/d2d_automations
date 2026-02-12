@@ -3,16 +3,21 @@ services:
     image: ghcr.io/elheck/inventory_sync:latest
     container_name: inventory_sync
     restart: unless-stopped
+    ports:
+      - "3000:3000"
     environment:
       - RUST_LOG=info
       - TZ=Europe/Berlin
     volumes:
       - inventory_data:/data
+    command: ["--database", "/data/inventory.db", "--interval-hours", "12", "--web-port", "3000"]
 
 volumes:
   inventory_data:
     driver: local
 
-# Container runs continuously, checking hourly and syncing once per day
+# Container runs continuously, checking every 12 hours and syncing when needed
+# Web UI available at http://localhost:3000
 # Deploy with: docker compose up -d
 # View logs: docker compose logs -f
+# Access web UI: http://localhost:3000

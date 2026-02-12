@@ -5,6 +5,7 @@
 
 use crate::cardmarket::{PriceGuide, ProductCatalog};
 use rusqlite::{params, Connection, Transaction};
+use serde::Serialize;
 
 /// Result type for database operations
 pub type DbResult<T> = rusqlite::Result<T>;
@@ -260,6 +261,108 @@ pub fn get_product_count(conn: &Connection) -> DbResult<i64> {
 /// Get total count of price history entries
 pub fn get_price_history_count(conn: &Connection) -> DbResult<i64> {
     conn.query_row("SELECT COUNT(*) FROM price_history", [], |row| row.get(0))
+}
+
+// ── Web API Query Functions ────────────────────────────────────────────────
+
+/// Product search result (for API responses)
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSearchResult {
+    pub id_product: u64,
+    pub name: String,
+    pub category_name: String,
+    pub id_expansion: u64,
+}
+
+/// Price history data point (for charting)
+#[derive(Debug, Clone, Serialize)]
+pub struct PriceHistoryPoint {
+    pub price_date: String,
+    pub avg: Option<f64>,
+    pub low: Option<f64>,
+    pub trend: Option<f64>,
+    pub avg_foil: Option<f64>,
+    pub trend_foil: Option<f64>,
+}
+
+/// Search products by name (case-insensitive substring match)
+///
+/// Returns up to `limit` results ordered by name.
+pub fn search_products_by_name(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+) -> DbResult<Vec<ProductSearchResult>> {
+    let pattern = format!("%{}%", query);
+    let mut stmt = conn.prepare(
+        "SELECT id_product, name, category_name, id_expansion
+         FROM products
+         WHERE name LIKE ?1 COLLATE NOCASE
+         ORDER BY name
+         LIMIT ?2",
+    )?;
+
+    let results: DbResult<Vec<ProductSearchResult>> = stmt
+        .query_map(params![pattern, limit], |row| {
+            Ok(ProductSearchResult {
+                id_product: row.get(0)?,
+                name: row.get(1)?,
+                category_name: row.get(2)?,
+                id_expansion: row.get(3)?,
+            })
+        })?
+        .collect();
+    results
+}
+
+/// Get price history for a product (all dates, ordered chronologically)
+pub fn get_price_history(
+    conn: &Connection,
+    id_product: u64,
+) -> DbResult<Vec<PriceHistoryPoint>> {
+    let mut stmt = conn.prepare(
+        "SELECT price_date, avg, low, trend, avg_foil, trend_foil
+         FROM price_history
+         WHERE id_product = ?1
+         ORDER BY price_date ASC",
+    )?;
+
+    let results: DbResult<Vec<PriceHistoryPoint>> = stmt
+        .query_map(params![id_product], |row| {
+            Ok(PriceHistoryPoint {
+                price_date: row.get(0)?,
+                avg: row.get(1)?,
+                low: row.get(2)?,
+                trend: row.get(3)?,
+                avg_foil: row.get(4)?,
+                trend_foil: row.get(5)?,
+            })
+        })?
+        .collect();
+    results
+}
+
+/// Get product details by ID
+pub fn get_product_by_id(
+    conn: &Connection,
+    id_product: u64,
+) -> DbResult<Option<ProductSearchResult>> {
+    let mut stmt = conn.prepare(
+        "SELECT id_product, name, category_name, id_expansion
+         FROM products
+         WHERE id_product = ?1",
+    )?;
+
+    let mut rows = stmt.query(params![id_product])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(ProductSearchResult {
+            id_product: row.get(0)?,
+            name: row.get(1)?,
+            category_name: row.get(2)?,
+            id_expansion: row.get(3)?,
+        })),
+        None => Ok(None),
+    }
 }
 
 #[cfg(test)]

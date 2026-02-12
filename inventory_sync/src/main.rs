@@ -10,6 +10,7 @@ use inventory_sync::{
 };
 use rusqlite::Connection;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::interval;
 
@@ -29,6 +30,10 @@ struct Args {
     /// Check interval in hours when running continuously
     #[arg(long, default_value_t = 1)]
     interval_hours: u64,
+
+    /// Enable web UI on specified port (default: disabled)
+    #[arg(long)]
+    web_port: Option<u16>,
 }
 
 /// Returns the default database path: ~/.local/share/inventory_sync/inventory.db
@@ -63,67 +68,88 @@ async fn main() {
         }
     }
 
-    if args.once {
-        // Run once and exit
-        run_sync(&db_path).await;
-    } else {
-        // Run continuously with interval checks
-        log::info!(
-            "Running in daemon mode, checking every {} hour(s)",
-            args.interval_hours
-        );
-        run_daemon(&db_path, args.interval_hours).await;
-    }
-}
-
-/// Run the sync daemon - checks periodically and syncs when needed
-async fn run_daemon(db_path: &PathBuf, interval_hours: u64) {
-    let check_interval = Duration::from_secs(interval_hours * 3600);
-    let mut ticker = interval(check_interval);
-
-    // Run immediately on startup
-    run_sync(db_path).await;
-
-    loop {
-        ticker.tick().await;
-        log::info!("Scheduled check triggered");
-        run_sync(db_path).await;
-    }
-}
-
-/// Run a single sync operation
-async fn run_sync(db_path: &PathBuf) {
-    // Open or create the SQLite database
-    let mut conn = match Connection::open(db_path) {
+    // Open database connection
+    let conn = match Connection::open(&db_path) {
         Ok(conn) => {
             log::info!("Opened database: {}", db_path.display());
             conn
         }
         Err(e) => {
             log::error!("Failed to open database: {}", e);
-            return;
+            std::process::exit(1);
         }
     };
 
     // Initialize database schema
     if let Err(e) = init_schema(&conn) {
         log::error!("Failed to initialize database schema: {}", e);
-        return;
+        std::process::exit(1);
     }
 
+    // Wrap connection in Arc<Mutex> for thread-safe sharing
+    let db = Arc::new(Mutex::new(conn));
+
+    // Spawn web server if --web-port specified
+    if let Some(port) = args.web_port {
+        let web_db = Arc::clone(&db);
+        tokio::spawn(async move {
+            if let Err(e) = inventory_sync::web::serve(web_db, port).await {
+                log::error!("Web server error: {}", e);
+            }
+        });
+    }
+
+    if args.once {
+        // Run once and exit
+        run_sync(&db).await;
+    } else {
+        // Run continuously with interval checks
+        log::info!(
+            "Running in daemon mode, checking every {} hour(s)",
+            args.interval_hours
+        );
+        run_daemon(&db, args.interval_hours).await;
+    }
+}
+
+/// Run the sync daemon - checks periodically and syncs when needed
+async fn run_daemon(db: &Arc<Mutex<Connection>>, interval_hours: u64) {
+    let check_interval = Duration::from_secs(interval_hours * 3600);
+    let mut ticker = interval(check_interval);
+
+    // Run immediately on startup
+    run_sync(db).await;
+
+    loop {
+        ticker.tick().await;
+        log::info!("Scheduled check triggered");
+        run_sync(db).await;
+    }
+}
+
+/// Run a single sync operation
+async fn run_sync(db: &Arc<Mutex<Connection>>) {
     // Check if we already have price data for today
-    match has_price_data_for_today(&conn) {
-        Ok(true) => {
-            log::info!("Price data for today already exists in database, skipping download");
-            return;
+    let should_sync = {
+        let conn = db.lock().unwrap();
+        match has_price_data_for_today(&conn) {
+            Ok(true) => {
+                log::info!("Price data for today already exists in database, skipping download");
+                false
+            }
+            Ok(false) => {
+                log::info!("No price data for today, proceeding with download...");
+                true
+            }
+            Err(e) => {
+                log::error!("Failed to check existing price data: {}", e);
+                false
+            }
         }
-        Ok(false) => {
-            log::info!("No price data for today, proceeding with download...");
-        }
-        Err(e) => {
-            log::error!("Failed to check existing price data: {}", e);
-            return;
-        }
+    };
+
+    if !should_sync {
+        return;
     }
 
     // Fetch product catalog from Cardmarket (singles + non-singles)
@@ -144,13 +170,16 @@ async fn run_sync(db_path: &PathBuf) {
     };
 
     // Upsert products into database
-    match upsert_products(&mut conn, &catalog) {
-        Ok(count) => {
-            log::info!("Synced {} products to database", count);
-        }
-        Err(e) => {
-            log::error!("Failed to upsert products: {}", e);
-            return;
+    {
+        let mut conn = db.lock().unwrap();
+        match upsert_products(&mut conn, &catalog) {
+            Ok(count) => {
+                log::info!("Synced {} products to database", count);
+            }
+            Err(e) => {
+                log::error!("Failed to upsert products: {}", e);
+                return;
+            }
         }
     }
 
@@ -171,26 +200,29 @@ async fn run_sync(db_path: &PathBuf) {
     };
 
     // Insert price history (only if not already present for this date)
-    match insert_price_history(&mut conn, &guide, &catalog) {
-        Ok(result) => {
-            if result.inserted > 0 {
-                log::info!(
-                    "Inserted {} price entries for {} ({} products not in catalog)",
-                    result.inserted,
-                    result.price_date,
-                    result.no_product
-                );
-            } else {
-                log::info!(
-                    "Price data for {} already exists, {} entries skipped",
-                    result.price_date,
-                    result.skipped
-                );
+    {
+        let mut conn = db.lock().unwrap();
+        match insert_price_history(&mut conn, &guide, &catalog) {
+            Ok(result) => {
+                if result.inserted > 0 {
+                    log::info!(
+                        "Inserted {} price entries for {} ({} products not in catalog)",
+                        result.inserted,
+                        result.price_date,
+                        result.no_product
+                    );
+                } else {
+                    log::info!(
+                        "Price data for {} already exists, {} entries skipped",
+                        result.price_date,
+                        result.skipped
+                    );
+                }
             }
-        }
-        Err(e) => {
-            log::error!("Failed to insert price history: {}", e);
-            return;
+            Err(e) => {
+                log::error!("Failed to insert price history: {}", e);
+                return;
+            }
         }
     }
 

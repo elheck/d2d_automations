@@ -11,6 +11,8 @@ pub enum Error {
     Parse(serde_json::Error),
     /// HTTP error status code
     HttpStatus(reqwest::StatusCode),
+    /// Database operation failed
+    Database(rusqlite::Error),
 }
 
 impl fmt::Display for Error {
@@ -19,6 +21,7 @@ impl fmt::Display for Error {
             Error::Network(e) => write!(f, "Network error: {}", e),
             Error::Parse(e) => write!(f, "Parse error: {}", e),
             Error::HttpStatus(status) => write!(f, "HTTP error: {}", status),
+            Error::Database(e) => write!(f, "Database error: {}", e),
         }
     }
 }
@@ -29,6 +32,7 @@ impl std::error::Error for Error {
             Error::Network(e) => Some(e),
             Error::Parse(e) => Some(e),
             Error::HttpStatus(_) => None,
+            Error::Database(e) => Some(e),
         }
     }
 }
@@ -42,6 +46,12 @@ impl From<reqwest::Error> for Error {
 impl From<serde_json::Error> for Error {
     fn from(err: serde_json::Error) -> Self {
         Error::Parse(err)
+    }
+}
+
+impl From<rusqlite::Error> for Error {
+    fn from(err: rusqlite::Error) -> Self {
+        Error::Database(err)
     }
 }
 

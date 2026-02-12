@@ -17,6 +17,9 @@ clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.36", features = ["bundled"] }
 dirs = "5.0"
 chrono = "0.4"
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "cors"] }
 
 [dev-dependencies]
 

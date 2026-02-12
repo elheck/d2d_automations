@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MTG Price Tracker</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #333; margin-bottom: 20px; }
+        .search-box {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+        }
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+        .results {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .result-item {
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .result-item:hover { background: #f9f9f9; }
+        .result-item:last-child { border-bottom: none; }
+        .card-name { font-weight: 600; color: #333; }
+        .card-meta { font-size: 14px; color: #666; margin-top: 4px; }
+        .chart-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: none;
+        }
+        .chart-container.active { display: block; }
+        .chart-header {
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #eee;
+        }
+        .no-data {
+            text-align: center;
+            color: #999;
+            padding: 40px;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🃏 MTG Price Tracker</h1>
+
+        <div class="search-box">
+            <input
+                type="text"
+                id="searchInput"
+                placeholder="Search for cards... (e.g., Lightning Bolt, Black Lotus)"
+                autocomplete="off"
+            >
+        </div>
+
+        <div id="results" class="results" style="display: none;">
+            <div id="resultsList"></div>
+        </div>
+
+        <div id="chartContainer" class="chart-container">
+            <div class="chart-header">
+                <h2 id="chartTitle"></h2>
+                <p id="chartMeta"></p>
+            </div>
+            <canvas id="priceChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        let chart = null;
+        const searchInput = document.getElementById('searchInput');
+        const resultsDiv = document.getElementById('results');
+        const resultsList = document.getElementById('resultsList');
+        const chartContainer = document.getElementById('chartContainer');
+        const chartTitle = document.getElementById('chartTitle');
+        const chartMeta = document.getElementById('chartMeta');
+
+        // Debounce search input
+        let searchTimeout;
+        searchInput.addEventListener('input', (e) => {
+            clearTimeout(searchTimeout);
+            const query = e.target.value.trim();
+
+            if (query.length < 2) {
+                resultsDiv.style.display = 'none';
+                return;
+            }
+
+            searchTimeout = setTimeout(() => searchCards(query), 300);
+        });
+
+        // Search API call
+        async function searchCards(query) {
+            resultsList.innerHTML = '<div class="loading">Searching...</div>';
+            resultsDiv.style.display = 'block';
+
+            try {
+                const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&limit=20`);
+                const data = await response.json();
+
+                if (data.success && data.data.length > 0) {
+                    displayResults(data.data);
+                } else {
+                    resultsList.innerHTML = '<div class="no-data">No cards found</div>';
+                }
+            } catch (error) {
+                resultsList.innerHTML = '<div class="no-data">Error loading results</div>';
+                console.error(error);
+            }
+        }
+
+        // Display search results
+        function displayResults(results) {
+            resultsList.innerHTML = results.map(card => `
+                <div class="result-item" onclick="loadPriceChart(${card.id_product})">
+                    <div class="card-name">${escapeHtml(card.name)}</div>
+                    <div class="card-meta">${escapeHtml(card.category_name)} • Expansion ID: ${card.id_expansion}</div>
+                </div>
+            `).join('');
+        }
+
+        // Load price chart for selected card
+        async function loadPriceChart(idProduct) {
+            chartContainer.classList.remove('active');
+
+            try {
+                const response = await fetch(`/api/prices/${idProduct}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    renderChart(data.data);
+                } else {
+                    alert('Error loading price data');
+                }
+            } catch (error) {
+                alert('Failed to load price data');
+                console.error(error);
+            }
+        }
+
+        // Render Chart.js chart
+        function renderChart(priceData) {
+            chartTitle.textContent = priceData.product.name;
+            chartMeta.textContent = `${priceData.product.category_name} • ${priceData.history.length} data points`;
+            chartContainer.classList.add('active');
+
+            // Destroy existing chart
+            if (chart) {
+                chart.destroy();
+            }
+
+            const dates = priceData.history.map(p => p.price_date);
+            const avgPrices = priceData.history.map(p => p.avg);
+            const trendPrices = priceData.history.map(p => p.trend);
+            const lowPrices = priceData.history.map(p => p.low);
+
+            const ctx = document.getElementById('priceChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [
+                        {
+                            label: 'Trend Price',
+                            data: trendPrices,
+                            borderColor: '#4CAF50',
+                            backgroundColor: 'rgba(76, 175, 80, 0.1)',
+                            tension: 0.3,
+                        },
+                        {
+                            label: 'Average Price',
+                            data: avgPrices,
+                            borderColor: '#2196F3',
+                            backgroundColor: 'rgba(33, 150, 243, 0.1)',
+                            tension: 0.3,
+                        },
+                        {
+                            label: 'Low Price',
+                            data: lowPrices,
+                            borderColor: '#FF9800',
+                            backgroundColor: 'rgba(255, 152, 0, 0.1)',
+                            tension: 0.3,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'top' },
+                        title: {
+                            display: true,
+                            text: 'Price History (EUR)'
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            ticks: {
+                                callback: function(value) {
+                                    return '€' + value.toFixed(2);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Scroll to chart
+            chartContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
