@@ -25,3 +25,7 @@ accounting/openapi.yaml
 
 # Check stock export CSV files
 check_stock/export-*.csv
+
+# Claude Code project settings
+.claude/
+CLAUDE.md
