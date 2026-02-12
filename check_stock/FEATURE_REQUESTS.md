@@ -224,14 +224,7 @@ The check_stock project demonstrates professional-grade Rust development with ex
 - **Effort**: 2-3 days
 - **Priority**: HIGH
 
-#### 2. Add API Error Tests
-**Issue**: API modules (scryfall.rs, cardmarket.rs) have no tests
-- **Missing**: Tests for 404, timeout, malformed JSON, rate limits
-- **Fix**: Add `wiremock` dev-dependency and create mock HTTP tests
-- **Effort**: 2 days
-- **Priority**: HIGH
-
-#### 3. Implement Rate Limiting for Scryfall API
+#### 2. Implement Rate Limiting for Scryfall API
 **Issue**: Semaphore limits concurrency but not requests/second (Scryfall limit: 10 req/s)
 - **Location**: [src/ui/screens/picking.rs:105](src/ui/screens/picking.rs#L105)
 - **Fix**: Add proper rate limiter (e.g., `governor` crate)
@@ -240,7 +233,7 @@ The check_stock project demonstrates professional-grade Rust development with ex
 
 ### Medium Priority Improvements
 
-#### 4. Extract UI Business Logic for Testing
+#### 3. Extract UI Business Logic for Testing
 **Issue**: Large UI functions mix rendering + logic
 - **Location**: [src/ui/screens/stock_checker.rs](src/ui/screens/stock_checker.rs) (480 lines)
 - **Good Example**: picking.rs has 572 lines of tests
@@ -250,12 +243,12 @@ The check_stock project demonstrates professional-grade Rust development with ex
 
 ### Low Priority
 
-#### 5. Add Module Documentation
+#### 4. Add Module Documentation
 - 34 doc comments exist, but 63 public functions
 - Missing detailed docs in io.rs, formatters.rs
 - Add rustdoc examples for public APIs
 
-#### 6. Optimize String Allocations
+#### 5. Optimize String Allocations
 - Profile first before optimizing
 - Format strings in card matching hot paths
 - Likely not a bottleneck with typical inventory sizes
@@ -273,9 +266,9 @@ The check_stock project demonstrates professional-grade Rust development with ex
 | Component | Coverage | Tests |
 |-----------|----------|-------|
 | Core Logic | ~95% | 127 tests |
-| API Layer | ~20% | 0 tests |
+| API Layer | ~80% | 19 tests |
 | UI Screens | <5% | 1 screen tested (picking.rs) |
-| **Total** | **~164 tests** | **All passing** |
+| **Total** | **~184 tests** | **All passing** |
 
 ### Strengths to Maintain
 

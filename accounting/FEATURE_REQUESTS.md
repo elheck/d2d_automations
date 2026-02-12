@@ -2,28 +2,9 @@
 
 This document contains feature requests for the SevDesk Invoicing Application.
 
-## High Priority
-
-### 1. Complete Address Information
-**Description**: Extend invoice address fields to include complete customer address
-- Add street address field
-- Add city field
-- Add postal/ZIP code field
-- Add state/province field (optional)
-- Maintain backward compatibility with existing name/country fields
-- Support for international address formats
-- Address validation (optional)
-
-**Priority**: High
-**Status**: ✅ **IMPLEMENTED** (2026-01-XX)
-- Address fields exist in OrderRecord struct ([src/models.rs:13-41](src/models.rs#L13-L41))
-- Full address sent to SevDesk API ([src/sevdesk_api/invoices.rs:77-80](src/sevdesk_api/invoices.rs#L77-L80))
-- CSV parser handles street, zip, city, country fields
-
 ## Medium Priority
 
-
-### 2. Multi-Currency Support
+### 1. Multi-Currency Support
 **Description**: Handle invoices in different currencies
 - Currency conversion
 - Exchange rate management
@@ -34,7 +15,7 @@ This document contains feature requests for the SevDesk Invoicing Application.
 
 ## Low Priority
 
-### 3. Invoice Preview
+### 2. Invoice Preview
 **Description**: Preview invoices before creation
 - Real-time preview as data is entered
 - Print preview functionality
@@ -57,15 +38,7 @@ The accounting project is a well-structured, production-ready application with s
 
 ### High Priority Improvements
 
-#### 1. Add Tests for Workflow Operations
-**Issue**: Critical workflow features lack test coverage
-- **Location**: [src/sevdesk_api/invoice_workflow.rs](src/sevdesk_api/invoice_workflow.rs)
-- **Missing Tests**: finalize_invoice(), enshrine_invoice(), book_invoice(), download_invoice_pdf()
-- **Fix**: Add wiremock tests (wiremock already in dev-dependencies)
-- **Effort**: 2-3 days
-- **Priority**: HIGH
-
-#### 2. Refactor Large app.rs Update Method
+#### 1. Refactor Large app.rs Update Method
 **Issue**: update() method is 356 lines with deeply nested UI logic
 - **Location**: [src/app.rs:87-443](src/app.rs#L87-L443)
 - **Impact**: Difficult to test and maintain
@@ -73,25 +46,16 @@ The accounting project is a well-structured, production-ready application with s
 - **Effort**: 1-2 days
 - **Priority**: HIGH
 
-#### 3. Add Tests for Contact and Invoice Creation
-**Issue**: Core API integration lacks unit test coverage
-- **Missing Tests**:
-  - get_or_create_contact() ([src/sevdesk_api/contacts.rs](src/sevdesk_api/contacts.rs))
-  - create_invoice_internal() ([src/sevdesk_api/invoices.rs](src/sevdesk_api/invoices.rs))
-- **Fix**: Add wiremock tests for HTTP endpoints
-- **Effort**: 2 days
-- **Priority**: HIGH
-
 ### Medium Priority Improvements
 
-#### 4. Reduce API Error Handling Duplication
+#### 2. Reduce API Error Handling Duplication
 **Issue**: Similar error handling pattern repeated across API modules
 - **Affected Files**: users.rs, contacts.rs, countries.rs, check_accounts.rs
 - **Fix**: Extract helper method `handle_api_error(response, operation_name)`
 - **Effort**: 1 day
 - **Priority**: MEDIUM
 
-#### 5. Review .clone() Usage
+#### 3. Review .clone() Usage
 **Issue**: 28 occurrences, potential performance overhead in order processing
 - **Fix**: Profile with large order batches, optimize if needed
 - **Effort**: 1-2 days
@@ -99,20 +63,20 @@ The accounting project is a well-structured, production-ready application with s
 
 ### Low Priority Improvements
 
-#### 6. Standardize Logging
+#### 4. Standardize Logging
 **Issue**: Mixed use of `log` and `tracing` macros
 - tracing-subscriber initialized but log::info!() used throughout
 - **Fix**: Use tracing macros everywhere for consistency
 - **Effort**: 0.5 day
 
-#### 7. Extract Magic Numbers
+#### 5. Extract Magic Numbers
 **Issue**: Hardcoded SevDesk IDs lack documentation
 - Tax rule ID 11 ([src/sevdesk_api/invoices.rs:117](src/sevdesk_api/invoices.rs#L117))
 - Category IDs ([src/models.rs:66-79](src/models.rs#L66-L79))
 - **Fix**: Define as named constants with documentation
 - **Effort**: 0.5 day
 
-#### 8. Fix Fallback Behaviors
+#### 6. Fix Fallback Behaviors
 **Issue**: Silent fallbacks may hide errors
 - Falls back to user ID 1 if no users found ([src/sevdesk_api/users.rs:63](src/sevdesk_api/users.rs#L63))
 - Falls back to 0.0 for price parsing failures
@@ -133,9 +97,10 @@ The accounting project is a well-structured, production-ready application with s
 |-----------|----------|-------|
 | CSV Processor | ~95% | 35 tests |
 | SevDesk API Utils | ~80% | 16 tests |
-| Workflow Operations | ~20% | 0 tests |
+| Workflow Operations | ~80% | 18 tests |
+| Contacts & Invoices | ~80% | 22 tests |
 | UI/App Logic | <5% | 0 tests |
-| **Total** | **~127 tests** | **All passing** |
+| **Total** | **~146 tests** | **All passing** |
 
 ### Strengths to Maintain
 

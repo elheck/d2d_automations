@@ -69,19 +69,7 @@ inventory_sync is a standalone server application that runs continuously on a se
 - ✅ Historical price storage - one entry per product per day (implemented 2026-02-01)
 - ⏳ Scheduled background job (pending - currently manual trigger only)
 
-### 3. SQLite Database
-**Description**: Persistent storage for cards and price history.
-- Cards table with card metadata
-- Price history table with timestamps and source
-- Efficient queries for price trends
-
-**Status**: ✅ Implemented (2026-02-01)
-- `products` table: 120k+ MTG products with name, category, expansion, metacard
-- `price_history` table: Daily price snapshots with composite key (id_product, price_date)
-- CLI flag `--database` for custom database path
-- Default path: `~/.local/share/inventory_sync/inventory.db`
-
-### 4. Server Runtime
+### 3. Server Runtime
 **Description**: Long-running server process in Docker.
 - HTTP server (axum or actix-web)
 - Background task scheduler for price collection
@@ -91,21 +79,6 @@ inventory_sync is a standalone server application that runs continuously on a se
 - docker-compose.yml for local development
 
 **Status**: Planned
-
-## Completed
-
-### Product Catalog Fetching (2026-02-01)
-- Fetches Cardmarket product catalog (singles + non-singles, ~120k products)
-- Correlates product IDs with names for price history queries
-
-### Historical Price Collection (2026-02-01)
-- Fetches Cardmarket price guide with trend, avg, low prices
-- Stores daily snapshots in SQLite with deduplication
-- Preserves historical data (never overwrites existing entries for same date)
-- Parameterized queries for SQL injection prevention
-- Transactional writes for data integrity
-
-
 
 ---
 
