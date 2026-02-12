@@ -10,7 +10,7 @@ services:
       - TZ=Europe/Berlin
     volumes:
       - inventory_data:/data
-    command: ["--database", "/data/inventory.db", "--interval-hours", "12", "--web-port", "3000"]
+    command: ["--interval-hours", "12", "--web-port", "3000"]
 
 volumes:
   inventory_data:
