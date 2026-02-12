@@ -40,6 +40,7 @@ pub struct PriceGuideFile {
 }
 
 /// Price guide lookup by product ID
+#[derive(Debug)]
 pub struct PriceGuide {
     entries: HashMap<u64, PriceGuideEntry>,
 }
@@ -65,15 +66,18 @@ impl PriceGuide {
     }
 
     /// Fetch price guide from Cardmarket's CDN
-    /// URL: https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_1.json
     pub fn fetch() -> ApiResult<Self> {
-        const PRICE_GUIDE_URL: &str =
-            "https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_1.json";
+        Self::fetch_from(
+            "https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_1.json",
+        )
+    }
 
-        log::info!("Fetching price guide from Cardmarket...");
+    /// Fetches price guide from the given URL (for testing with mock servers).
+    pub(crate) fn fetch_from(url: &str) -> ApiResult<Self> {
+        log::info!("Fetching price guide from: {}", url);
 
         let response = reqwest::blocking::Client::new()
-            .get(PRICE_GUIDE_URL)
+            .get(url)
             .header("User-Agent", "D2D-Automations/1.0")
             .send()?;
 
@@ -89,11 +93,7 @@ impl PriceGuide {
             .map(|e| (e.id_product, e))
             .collect();
 
-        log::info!(
-            "Fetched {} price entries (created: {})",
-            entries.len(),
-            file.created_at
-        );
+        log::info!("Fetched {} price entries", entries.len());
 
         Ok(Self { entries })
     }

@@ -93,8 +93,18 @@ pub struct ScryfallError {
 
 /// Fetch a card from Scryfall by set code and collector number
 pub fn fetch_card(set_code: &str, collector_number: &str) -> ApiResult<ScryfallCard> {
+    fetch_card_from("https://api.scryfall.com", set_code, collector_number)
+}
+
+/// Fetches a card from the given base URL (for testing with mock servers).
+pub(crate) fn fetch_card_from(
+    base_url: &str,
+    set_code: &str,
+    collector_number: &str,
+) -> ApiResult<ScryfallCard> {
     let url = format!(
-        "https://api.scryfall.com/cards/{}/{}",
+        "{}/cards/{}/{}",
+        base_url,
         set_code.to_lowercase(),
         collector_number
     );
