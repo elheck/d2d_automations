@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
 # Copy manifests and source
 COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
+COPY static ./static
 
 # Build the application
 RUN cargo build --release
@@ -34,6 +35,7 @@ RUN rustup component add rustfmt clippy && \
 # Copy manifests and source
 COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
+COPY static ./static
 
 # Default command runs full test suite
 CMD ["sh", "-c", "cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --verbose && cargo build --release && cargo audit"]
