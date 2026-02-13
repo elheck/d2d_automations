@@ -116,7 +116,7 @@ pub fn create_router(db: Arc<Mutex<Connection>>) -> Router {
     Router::new()
         .route("/", get(index_handler))
         .route("/api/search", get(search_handler))
-        .route("/api/prices/:id", get(prices_handler))
+        .route("/api/prices/{id}", get(prices_handler))
         .with_state(state)
 }
 
