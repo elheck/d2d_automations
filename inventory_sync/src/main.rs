@@ -92,8 +92,9 @@ async fn main() {
     // Spawn web server if --web-port specified
     if let Some(port) = args.web_port {
         let web_db = Arc::clone(&db);
+        let web_db_path = db_path.clone();
         tokio::spawn(async move {
-            if let Err(e) = inventory_sync::web::serve(web_db, port).await {
+            if let Err(e) = inventory_sync::web::serve(web_db, &web_db_path, port).await {
                 log::error!("Web server error: {}", e);
             }
         });

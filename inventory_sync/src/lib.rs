@@ -6,6 +6,8 @@
 pub mod cardmarket;
 pub mod database;
 pub mod error;
+pub mod image_cache;
+pub mod scryfall;
 pub mod web;
 
 pub use cardmarket::{PriceGuide, PriceGuideEntry, ProductCatalog, ProductEntry};

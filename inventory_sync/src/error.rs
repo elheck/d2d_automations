@@ -4,7 +4,7 @@ use std::fmt;
 
 /// Unified error type for inventory_sync operations
 #[derive(Debug)]
-pub enum Error {
+pub enum InventoryError {
     /// HTTP request failed (network error, timeout, etc.)
     Network(reqwest::Error),
     /// Failed to parse JSON response
@@ -13,47 +13,68 @@ pub enum Error {
     HttpStatus(reqwest::StatusCode),
     /// Database operation failed
     Database(rusqlite::Error),
+    /// Card not found on Scryfall
+    ScryfallNotFound(String),
+    /// No image available for card
+    NoImageAvailable(String),
+    /// Failed to fetch image from URL
+    ImageFetchFailed(String),
 }
 
-impl fmt::Display for Error {
+/// Legacy alias for backwards compatibility
+pub type Error = InventoryError;
+
+impl fmt::Display for InventoryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Network(e) => write!(f, "Network error: {}", e),
-            Error::Parse(e) => write!(f, "Parse error: {}", e),
-            Error::HttpStatus(status) => write!(f, "HTTP error: {}", status),
-            Error::Database(e) => write!(f, "Database error: {}", e),
+            InventoryError::Network(e) => write!(f, "Network error: {}", e),
+            InventoryError::Parse(e) => write!(f, "Parse error: {}", e),
+            InventoryError::HttpStatus(status) => write!(f, "HTTP error: {}", status),
+            InventoryError::Database(e) => write!(f, "Database error: {}", e),
+            InventoryError::ScryfallNotFound(name) => {
+                write!(f, "Card not found on Scryfall: {}", name)
+            }
+            InventoryError::NoImageAvailable(name) => {
+                write!(f, "No image available for card: {}", name)
+            }
+            InventoryError::ImageFetchFailed(url) => {
+                write!(f, "Failed to fetch image from: {}", url)
+            }
         }
     }
 }
 
-impl std::error::Error for Error {
+impl std::error::Error for InventoryError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::Network(e) => Some(e),
-            Error::Parse(e) => Some(e),
-            Error::HttpStatus(_) => None,
-            Error::Database(e) => Some(e),
+            InventoryError::Network(e) => Some(e),
+            InventoryError::Parse(e) => Some(e),
+            InventoryError::HttpStatus(_) => None,
+            InventoryError::Database(e) => Some(e),
+            InventoryError::ScryfallNotFound(_) => None,
+            InventoryError::NoImageAvailable(_) => None,
+            InventoryError::ImageFetchFailed(_) => None,
         }
     }
 }
 
-impl From<reqwest::Error> for Error {
+impl From<reqwest::Error> for InventoryError {
     fn from(err: reqwest::Error) -> Self {
-        Error::Network(err)
+        InventoryError::Network(err)
     }
 }
 
-impl From<serde_json::Error> for Error {
+impl From<serde_json::Error> for InventoryError {
     fn from(err: serde_json::Error) -> Self {
-        Error::Parse(err)
+        InventoryError::Parse(err)
     }
 }
 
-impl From<rusqlite::Error> for Error {
+impl From<rusqlite::Error> for InventoryError {
     fn from(err: rusqlite::Error) -> Self {
-        Error::Database(err)
+        InventoryError::Database(err)
     }
 }
 
 /// Result alias for inventory_sync operations
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, InventoryError>;
