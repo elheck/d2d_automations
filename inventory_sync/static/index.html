@@ -638,6 +638,9 @@
             const trendPrices = priceData.history.map(p => p.trend);
             const lowPrices = priceData.history.map(p => p.low);
 
+            // Technical indicators
+            const indicators = priceData.indicators;
+
             const ctx = document.getElementById('priceChart').getContext('2d');
             chart = new Chart(ctx, {
                 type: 'line',
@@ -656,6 +659,7 @@
                             pointBackgroundColor: '#10b981',
                             pointBorderColor: '#0f172a',
                             pointBorderWidth: 2,
+                            yAxisID: 'y',
                         },
                         {
                             label: 'Average Price',
@@ -669,6 +673,7 @@
                             pointBackgroundColor: '#6366f1',
                             pointBorderColor: '#0f172a',
                             pointBorderWidth: 2,
+                            yAxisID: 'y',
                         },
                         {
                             label: 'Low Price',
@@ -682,6 +687,92 @@
                             pointBackgroundColor: '#f59e0b',
                             pointBorderColor: '#0f172a',
                             pointBorderWidth: 2,
+                            yAxisID: 'y',
+                        },
+                        {
+                            label: 'EMA 7',
+                            data: indicators.ema_7,
+                            borderColor: '#8b5cf6',
+                            backgroundColor: 'transparent',
+                            tension: 0.4,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            borderDash: [5, 5],
+                            yAxisID: 'y',
+                        },
+                        {
+                            label: 'EMA 30',
+                            data: indicators.ema_30,
+                            borderColor: '#ec4899',
+                            backgroundColor: 'transparent',
+                            tension: 0.4,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            borderDash: [5, 5],
+                            yAxisID: 'y',
+                        },
+                        {
+                            label: 'BB Upper',
+                            data: indicators.bb_upper,
+                            borderColor: '#94a3b8',
+                            backgroundColor: 'transparent',
+                            tension: 0.4,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            borderDash: [3, 3],
+                            yAxisID: 'y',
+                        },
+                        {
+                            label: 'BB Middle',
+                            data: indicators.bb_middle,
+                            borderColor: '#cbd5e1',
+                            backgroundColor: 'transparent',
+                            tension: 0.4,
+                            borderWidth: 1,
+                            pointRadius: 0,
+                            borderDash: [1, 1],
+                            yAxisID: 'y',
+                        },
+                        {
+                            label: 'BB Lower',
+                            data: indicators.bb_lower,
+                            borderColor: '#94a3b8',
+                            backgroundColor: 'transparent',
+                            tension: 0.4,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            borderDash: [3, 3],
+                            yAxisID: 'y',
+                        },
+                        {
+                            label: 'RSI',
+                            data: indicators.rsi,
+                            borderColor: '#f97316',
+                            backgroundColor: 'rgba(249, 115, 22, 0.1)',
+                            tension: 0.4,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            yAxisID: 'y2',
+                        },
+                        {
+                            label: 'MACD',
+                            data: indicators.macd,
+                            borderColor: '#06b6d4',
+                            backgroundColor: 'transparent',
+                            tension: 0.4,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            yAxisID: 'y3',
+                        },
+                        {
+                            label: 'MACD Signal',
+                            data: indicators.macd_signal,
+                            borderColor: '#d946ef',
+                            backgroundColor: 'transparent',
+                            tension: 0.4,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            yAxisID: 'y3',
                         }
                     ]
                 },
@@ -732,7 +823,11 @@
                             displayColors: true,
                             callbacks: {
                                 label: function(context) {
-                                    return context.dataset.label + ': €' + context.parsed.y.toFixed(2);
+                                    if (context.parsed.y === null) return null;
+                                    const label = context.dataset.label;
+                                    if (label === 'RSI') return label + ': ' + context.parsed.y.toFixed(1);
+                                    if (label === 'MACD' || label === 'MACD Signal') return label + ': ' + context.parsed.y.toFixed(4);
+                                    return label + ': €' + context.parsed.y.toFixed(2);
                                 }
                             }
                         }
@@ -752,6 +847,8 @@
                             }
                         },
                         y: {
+                            type: 'linear',
+                            position: 'left',
                             beginAtZero: false,
                             grid: {
                                 color: '#334155',
@@ -766,6 +863,39 @@
                                 callback: function(value) {
                                     return '€' + value.toFixed(2);
                                 }
+                            }
+                        },
+                        y2: {
+                            type: 'linear',
+                            position: 'right',
+                            min: 0,
+                            max: 100,
+                            grid: { display: false },
+                            ticks: {
+                                color: '#f97316',
+                                font: { size: 11, family: 'Inter' },
+                                callback: function(value) { return value + '%'; }
+                            },
+                            title: {
+                                display: true,
+                                text: 'RSI',
+                                color: '#f97316',
+                                font: { size: 11, family: 'Inter' }
+                            }
+                        },
+                        y3: {
+                            type: 'linear',
+                            position: 'right',
+                            grid: { display: false },
+                            ticks: {
+                                color: '#06b6d4',
+                                font: { size: 11, family: 'Inter' }
+                            },
+                            title: {
+                                display: true,
+                                text: 'MACD',
+                                color: '#06b6d4',
+                                font: { size: 11, family: 'Inter' }
                             }
                         }
                     }

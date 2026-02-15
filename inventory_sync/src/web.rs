@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use crate::database::{get_price_history, get_product_by_id, search_products_by_name};
 use crate::database::{PriceHistoryPoint, ProductSearchResult};
 use crate::image_cache::{fetch_image_cached, ImageCache};
+use crate::indicators::{calculate_all_indicators, TechnicalIndicators};
 
 /// Shared application state (thread-safe database connection + image cache)
 #[derive(Clone)]
@@ -52,6 +53,7 @@ struct ApiResponse<T> {
 struct PriceData {
     product: ProductSearchResult,
     history: Vec<PriceHistoryPoint>,
+    indicators: TechnicalIndicators,
 }
 
 /// GET / - Serve the web UI (single HTML page)
@@ -105,9 +107,17 @@ async fn prices_handler(
         }
     };
 
+    // Calculate technical indicators from trend prices
+    let trend_prices: Vec<f64> = history.iter().filter_map(|p| p.trend).collect();
+    let indicators = calculate_all_indicators(&trend_prices);
+
     Ok(Json(ApiResponse {
         success: true,
-        data: Some(PriceData { product, history }),
+        data: Some(PriceData {
+            product,
+            history,
+            indicators,
+        }),
         error: None,
     }))
 }

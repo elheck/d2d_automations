@@ -7,6 +7,7 @@ pub mod cardmarket;
 pub mod database;
 pub mod error;
 pub mod image_cache;
+pub mod indicators;
 pub mod scryfall;
 pub mod web;
 
