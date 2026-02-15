@@ -72,9 +72,7 @@ impl ScryfallCard {
             purchase_uris: self.purchase_uris.clone(),
         }
     }
-}
 
-impl ScryfallCard {
     /// Get the primary image URL (normal size)
     pub fn image_url(&self) -> Option<&str> {
         // Try direct image_uris first
@@ -93,7 +91,34 @@ impl ScryfallCard {
     }
 }
 
-/// Fetch a card from Scryfall by name (fuzzy search)
+/// Scryfall API user agent
+const USER_AGENT: &str = "D2D-Automations-InventorySync/1.0";
+
+/// Fetch a card from Scryfall by Cardmarket product ID.
+/// This returns the exact printing matching the Cardmarket listing.
+pub async fn fetch_card_by_cardmarket_id(id: u64) -> Result<ScryfallCard, InventoryError> {
+    let url = format!("https://api.scryfall.com/cards/cardmarket/{}", id);
+
+    log::debug!("Fetching card from Scryfall by cardmarket ID: {}", id);
+
+    let response = reqwest::Client::new()
+        .get(&url)
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await?;
+
+    if response.status().is_success() {
+        Ok(response.json::<ScryfallCard>().await?)
+    } else {
+        Err(InventoryError::ScryfallNotFound(format!(
+            "cardmarket_id:{}",
+            id
+        )))
+    }
+}
+
+/// Fetch a card from Scryfall by name (fuzzy search).
+/// Note: This returns an arbitrary printing. Prefer `fetch_card_by_cardmarket_id` when possible.
 pub async fn fetch_card_by_name(name: &str) -> Result<ScryfallCard, InventoryError> {
     let url = format!(
         "https://api.scryfall.com/cards/named?fuzzy={}",
@@ -104,7 +129,7 @@ pub async fn fetch_card_by_name(name: &str) -> Result<ScryfallCard, InventoryErr
 
     let response = reqwest::Client::new()
         .get(&url)
-        .header("User-Agent", "D2D-Automations-InventorySync/1.0")
+        .header("User-Agent", USER_AGENT)
         .send()
         .await?;
 

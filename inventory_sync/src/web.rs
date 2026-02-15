@@ -123,21 +123,21 @@ async fn prices_handler(
     }))
 }
 
-/// GET /api/card-image/{card_name}
-/// Fetches and caches card images from Scryfall
+/// GET /api/card-image/{id_product}
+/// Fetches and caches card images from Scryfall using Cardmarket product ID
 async fn card_image_handler(
     State(state): State<AppState>,
-    Path(card_name): Path<String>,
+    Path(id_product): Path<u64>,
 ) -> Response {
-    match fetch_image_cached(&state.image_cache, &card_name).await {
+    match fetch_image_cached(&state.image_cache, id_product).await {
         Ok(image_bytes) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "image/jpeg")
-            .header(header::CACHE_CONTROL, "public, max-age=86400") // Cache for 24 hours
+            .header(header::CACHE_CONTROL, "public, max-age=86400")
             .body(Body::from(image_bytes))
             .unwrap(),
         Err(e) => {
-            log::warn!("Failed to fetch image for '{}': {}", card_name, e);
+            log::warn!("Failed to fetch image for product {}: {}", id_product, e);
             Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Body::from(format!("Image not found: {}", e)))
@@ -146,20 +146,24 @@ async fn card_image_handler(
     }
 }
 
-/// GET /api/card-info/{card_name}
+/// GET /api/card-info/{id_product}
 /// Returns cached Scryfall metadata (set name, type, mana cost, rarity, oracle text, purchase links)
 async fn card_info_handler(
     State(state): State<AppState>,
-    Path(card_name): Path<String>,
+    Path(id_product): Path<u64>,
 ) -> Result<Json<ApiResponse<CardInfo>>, StatusCode> {
-    match fetch_card_info_cached(&state.image_cache, &card_name).await {
+    match fetch_card_info_cached(&state.image_cache, id_product).await {
         Ok(info) => Ok(Json(ApiResponse {
             success: true,
             data: Some(info),
             error: None,
         })),
         Err(e) => {
-            log::warn!("Failed to fetch card info for '{}': {}", card_name, e);
+            log::warn!(
+                "Failed to fetch card info for product {}: {}",
+                id_product,
+                e
+            );
             Err(StatusCode::NOT_FOUND)
         }
     }
@@ -173,8 +177,8 @@ pub fn create_router(db: Arc<Mutex<Connection>>, image_cache: Arc<ImageCache>) -
         .route("/", get(index_handler))
         .route("/api/search", get(search_handler))
         .route("/api/prices/{id}", get(prices_handler))
-        .route("/api/card-image/{name}", get(card_image_handler))
-        .route("/api/card-info/{name}", get(card_info_handler))
+        .route("/api/card-image/{id}", get(card_image_handler))
+        .route("/api/card-info/{id}", get(card_info_handler))
         .with_state(state)
 }
 

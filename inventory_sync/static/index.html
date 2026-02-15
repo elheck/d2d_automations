@@ -600,7 +600,7 @@
 
             // Only fetch images/info for singles (Scryfall only has singles)
             if (priceData.product.category_name === 'Magic Single') {
-                fetchCardData(priceData.product.name);
+                fetchCardData(priceData.product.id_product, priceData.product.name);
             } else {
                 cardImageContainer.innerHTML = `
                     <div class="card-image-placeholder">
@@ -1000,12 +1000,13 @@
         }
 
         // Fetch card image and info from our API (which caches from Scryfall)
-        async function fetchCardData(cardName) {
+        // Uses Cardmarket product ID for exact printing match
+        async function fetchCardData(idProduct, cardName) {
             // Show placeholder while loading
             cardImageContainer.innerHTML = '<div class="card-image-placeholder">🔍</div>';
 
             // Fetch image and card info in parallel
-            const imageUrl = `/api/card-image/${encodeURIComponent(cardName)}`;
+            const imageUrl = `/api/card-image/${idProduct}`;
 
             // Load image
             const img = new Image();
@@ -1029,7 +1030,7 @@
 
             // Fetch card info
             try {
-                const response = await fetch(`/api/card-info/${encodeURIComponent(cardName)}`);
+                const response = await fetch(`/api/card-info/${idProduct}`);
                 const data = await response.json();
                 if (data.success && data.data) {
                     displayCardInfo(data.data, cardName);
