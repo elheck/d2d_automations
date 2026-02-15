@@ -16,8 +16,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::database::{get_price_history, get_product_by_id, search_products_by_name};
 use crate::database::{PriceHistoryPoint, ProductSearchResult};
-use crate::image_cache::{fetch_image_cached, ImageCache};
+use crate::image_cache::{fetch_card_info_cached, fetch_image_cached, ImageCache};
 use crate::indicators::{calculate_all_indicators, TechnicalIndicators};
+use crate::scryfall::CardInfo;
 
 /// Shared application state (thread-safe database connection + image cache)
 #[derive(Clone)]
@@ -145,6 +146,25 @@ async fn card_image_handler(
     }
 }
 
+/// GET /api/card-info/{card_name}
+/// Returns cached Scryfall metadata (set name, type, mana cost, rarity, oracle text, purchase links)
+async fn card_info_handler(
+    State(state): State<AppState>,
+    Path(card_name): Path<String>,
+) -> Result<Json<ApiResponse<CardInfo>>, StatusCode> {
+    match fetch_card_info_cached(&state.image_cache, &card_name).await {
+        Ok(info) => Ok(Json(ApiResponse {
+            success: true,
+            data: Some(info),
+            error: None,
+        })),
+        Err(e) => {
+            log::warn!("Failed to fetch card info for '{}': {}", card_name, e);
+            Err(StatusCode::NOT_FOUND)
+        }
+    }
+}
+
 /// Build the web server router
 pub fn create_router(db: Arc<Mutex<Connection>>, image_cache: Arc<ImageCache>) -> Router {
     let state = AppState { db, image_cache };
@@ -154,6 +174,7 @@ pub fn create_router(db: Arc<Mutex<Connection>>, image_cache: Arc<ImageCache>) -
         .route("/api/search", get(search_handler))
         .route("/api/prices/{id}", get(prices_handler))
         .route("/api/card-image/{name}", get(card_image_handler))
+        .route("/api/card-info/{name}", get(card_info_handler))
         .with_state(state)
 }
 

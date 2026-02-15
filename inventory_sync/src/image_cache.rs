@@ -4,7 +4,7 @@
 //! Uses card name as the cache key (sanitized for filesystem safety).
 
 use crate::error::InventoryError;
-use crate::scryfall::{fetch_card_by_name, fetch_image};
+use crate::scryfall::{fetch_card_by_name, fetch_image, CardInfo};
 use std::path::PathBuf;
 
 /// Persistent cache for card images
@@ -52,6 +52,12 @@ impl ImageCache {
         self.cache_dir.join(Self::filename(card_name))
     }
 
+    /// Get the full path for cached card metadata (JSON)
+    fn meta_path(&self, card_name: &str) -> PathBuf {
+        self.cache_dir
+            .join(format!("{}.json", Self::sanitize_filename(card_name)))
+    }
+
     /// Check if an image is cached
     pub fn contains(&self, card_name: &str) -> bool {
         self.path(card_name).exists()
@@ -78,9 +84,40 @@ impl ImageCache {
             log::debug!("Cached image for: {}", card_name);
         }
     }
+
+    /// Get cached card metadata
+    pub fn get_meta(&self, card_name: &str) -> Option<CardInfo> {
+        let path = self.meta_path(card_name);
+        match std::fs::read_to_string(&path) {
+            Ok(json) => match serde_json::from_str(&json) {
+                Ok(info) => Some(info),
+                Err(e) => {
+                    log::warn!("Failed to parse cached metadata for {}: {}", card_name, e);
+                    None
+                }
+            },
+            Err(_) => None,
+        }
+    }
+
+    /// Store card metadata in the cache
+    pub fn insert_meta(&self, card_name: &str, info: &CardInfo) {
+        let path = self.meta_path(card_name);
+        match serde_json::to_string(info) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    log::warn!("Failed to cache metadata for {}: {}", card_name, e);
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to serialize metadata for {}: {}", card_name, e);
+            }
+        }
+    }
 }
 
-/// Fetch a card image, checking cache first
+/// Fetch a card image, checking cache first.
+/// Also caches card metadata alongside the image.
 pub async fn fetch_image_cached(
     cache: &ImageCache,
     card_name: &str,
@@ -97,6 +134,9 @@ pub async fn fetch_image_cached(
     );
     let card = fetch_card_by_name(card_name).await?;
 
+    // Cache metadata alongside image
+    cache.insert_meta(card_name, &card.card_info());
+
     // Get image URL
     let image_url = card
         .image_url()
@@ -109,6 +149,41 @@ pub async fn fetch_image_cached(
     cache.insert(card_name, &bytes);
 
     Ok(bytes)
+}
+
+/// Fetch card info (metadata), checking cache first.
+/// If not cached, fetches from Scryfall and caches both image and metadata.
+pub async fn fetch_card_info_cached(
+    cache: &ImageCache,
+    card_name: &str,
+) -> Result<CardInfo, InventoryError> {
+    // Check metadata cache first
+    if let Some(info) = cache.get_meta(card_name) {
+        return Ok(info);
+    }
+
+    // Fetch from Scryfall
+    log::info!(
+        "Metadata cache miss for '{}', fetching from Scryfall",
+        card_name
+    );
+    let card = fetch_card_by_name(card_name).await?;
+    let info = card.card_info();
+
+    // Cache metadata
+    cache.insert_meta(card_name, &info);
+
+    // Also cache image if not already cached
+    if !cache.contains(card_name) {
+        if let Some(image_url) = card.image_url() {
+            match fetch_image(image_url).await {
+                Ok(bytes) => cache.insert(card_name, &bytes),
+                Err(e) => log::warn!("Failed to cache image for '{}': {}", card_name, e),
+            }
+        }
+    }
+
+    Ok(info)
 }
 
 #[cfg(test)]
@@ -150,6 +225,35 @@ mod tests {
         let retrieved = cache.get("Black Lotus");
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap(), test_data);
+    }
+
+    #[test]
+    fn test_metadata_cache() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let cache = ImageCache::new(temp_dir.path());
+
+        // No metadata initially
+        assert!(cache.get_meta("Lightning Bolt").is_none());
+
+        let info = CardInfo {
+            set_name: Some("Ravnica: Clue Edition".to_string()),
+            type_line: Some("Instant".to_string()),
+            mana_cost: Some("{R}".to_string()),
+            rarity: Some("uncommon".to_string()),
+            oracle_text: Some("Deals 3 damage.".to_string()),
+            purchase_uris: None,
+        };
+
+        cache.insert_meta("Lightning Bolt", &info);
+
+        let retrieved = cache.get_meta("Lightning Bolt");
+        assert!(retrieved.is_some());
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.set_name.as_deref(), Some("Ravnica: Clue Edition"));
+        assert_eq!(retrieved.type_line.as_deref(), Some("Instant"));
+        assert_eq!(retrieved.mana_cost.as_deref(), Some("{R}"));
+        assert_eq!(retrieved.rarity.as_deref(), Some("uncommon"));
     }
 
     #[test]

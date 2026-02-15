@@ -65,6 +65,67 @@ fn test_scryfall_card_deserialize_minimal() {
     assert!(card.card_faces.is_none());
 }
 
+#[test]
+fn test_scryfall_card_with_metadata() {
+    let card_json = r#"{
+        "name": "Lightning Bolt",
+        "set_name": "Ravnica: Clue Edition",
+        "type_line": "Instant",
+        "mana_cost": "{R}",
+        "rarity": "uncommon",
+        "oracle_text": "Lightning Bolt deals 3 damage to any target.",
+        "purchase_uris": {
+            "cardmarket": "https://www.cardmarket.com/en/Magic/Products/Singles/Ravnica-Clue-Edition/Lightning-Bolt",
+            "tcgplayer": "https://www.tcgplayer.com/product/534658"
+        },
+        "image_uris": {
+            "normal": "https://example.com/normal.jpg"
+        }
+    }"#;
+
+    let card: ScryfallCard = serde_json::from_str(card_json).unwrap();
+    assert_eq!(card.set_name.as_deref(), Some("Ravnica: Clue Edition"));
+    assert_eq!(card.type_line.as_deref(), Some("Instant"));
+    assert_eq!(card.mana_cost.as_deref(), Some("{R}"));
+    assert_eq!(card.rarity.as_deref(), Some("uncommon"));
+    assert_eq!(
+        card.oracle_text.as_deref(),
+        Some("Lightning Bolt deals 3 damage to any target.")
+    );
+    assert!(card.purchase_uris.is_some());
+    let uris = card.purchase_uris.as_ref().unwrap();
+    assert!(uris.cardmarket.as_ref().unwrap().contains("cardmarket.com"));
+}
+
+#[test]
+fn test_card_info_extraction() {
+    let card_json = r#"{
+        "name": "Lightning Bolt",
+        "set_name": "Ravnica: Clue Edition",
+        "type_line": "Instant",
+        "mana_cost": "{R}",
+        "rarity": "uncommon",
+        "oracle_text": "Lightning Bolt deals 3 damage to any target.",
+        "purchase_uris": {
+            "cardmarket": "https://www.cardmarket.com/en/Magic/Products/Singles/Ravnica-Clue-Edition/Lightning-Bolt"
+        }
+    }"#;
+
+    let card: ScryfallCard = serde_json::from_str(card_json).unwrap();
+    let info = card.card_info();
+
+    assert_eq!(info.set_name.as_deref(), Some("Ravnica: Clue Edition"));
+    assert_eq!(info.type_line.as_deref(), Some("Instant"));
+    assert_eq!(info.mana_cost.as_deref(), Some("{R}"));
+    assert_eq!(info.rarity.as_deref(), Some("uncommon"));
+
+    // CardInfo should serialize/deserialize for caching
+    let json = serde_json::to_string(&info).unwrap();
+    let deserialized: crate::scryfall::CardInfo = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.set_name, info.set_name);
+    assert_eq!(deserialized.rarity, info.rarity);
+}
+
 // Integration tests (require network access)
 #[tokio::test]
 #[ignore] // Run with: cargo test -- --ignored

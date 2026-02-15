@@ -598,9 +598,9 @@
         function renderChart(priceData) {
             chartTitle.textContent = priceData.product.name;
 
-            // Only fetch images for singles (Scryfall only has singles)
+            // Only fetch images/info for singles (Scryfall only has singles)
             if (priceData.product.category_name === 'Magic Single') {
-                fetchCardImage(priceData.product.name);
+                fetchCardData(priceData.product.name);
             } else {
                 cardImageContainer.innerHTML = `
                     <div class="card-image-placeholder">
@@ -637,6 +637,7 @@
                         ${priceChange >= 0 ? '+' : ''}€${priceChange.toFixed(2)} (${priceChangePercent >= 0 ? '+' : ''}${priceChangePercent}%)
                     </span>
                 </div>
+                <div id="cardInfoSection" style="width: 100%; border-top: 1px solid var(--border); margin-top: 0.5rem; padding-top: 0.5rem; display: flex; gap: 1.5rem; flex-wrap: wrap;"></div>
                 ${hasFoil ? `
                 <div style="width: 100%; border-top: 1px solid var(--border); margin-top: 0.5rem; padding-top: 0.5rem; display: flex; gap: 1.5rem; flex-wrap: wrap;">
                     <div class="chart-stat">
@@ -998,43 +999,97 @@
             return div.innerHTML;
         }
 
-        // Fetch card image from our API (which caches from Scryfall)
-        async function fetchCardImage(cardName) {
+        // Fetch card image and info from our API (which caches from Scryfall)
+        async function fetchCardData(cardName) {
             // Show placeholder while loading
             cardImageContainer.innerHTML = '<div class="card-image-placeholder">🔍</div>';
 
-            try {
-                // Use our server-side API endpoint which handles caching
-                const imageUrl = `/api/card-image/${encodeURIComponent(cardName)}`;
+            // Fetch image and card info in parallel
+            const imageUrl = `/api/card-image/${encodeURIComponent(cardName)}`;
 
-                // Check if image loads successfully
-                const img = new Image();
-                img.onload = function() {
-                    cardImageContainer.innerHTML = `
-                        <img src="${imageUrl}"
-                             alt="${escapeHtml(cardName)}"
-                             class="card-image"
-                             loading="lazy">
-                    `;
-                };
-                img.onerror = function() {
-                    cardImageContainer.innerHTML = `
-                        <div class="card-image-placeholder">
-                            🃏
-                            <div class="image-error">Image not found</div>
-                        </div>
-                    `;
-                };
-                img.src = imageUrl;
-            } catch (error) {
-                console.error('Failed to fetch card image:', error);
+            // Load image
+            const img = new Image();
+            img.onload = function() {
+                cardImageContainer.innerHTML = `
+                    <img src="${imageUrl}"
+                         alt="${escapeHtml(cardName)}"
+                         class="card-image"
+                         loading="lazy">
+                `;
+            };
+            img.onerror = function() {
                 cardImageContainer.innerHTML = `
                     <div class="card-image-placeholder">
                         🃏
                         <div class="image-error">Image not found</div>
                     </div>
                 `;
+            };
+            img.src = imageUrl;
+
+            // Fetch card info
+            try {
+                const response = await fetch(`/api/card-info/${encodeURIComponent(cardName)}`);
+                const data = await response.json();
+                if (data.success && data.data) {
+                    displayCardInfo(data.data, cardName);
+                }
+            } catch (error) {
+                console.error('Failed to fetch card info:', error);
             }
+        }
+
+        // Display Scryfall card info in the metadata section
+        function displayCardInfo(info, cardName) {
+            const cardInfoDiv = document.getElementById('cardInfoSection');
+            if (!cardInfoDiv) return;
+
+            let html = '';
+
+            if (info.set_name) {
+                html += `
+                    <div class="chart-stat">
+                        <span class="stat-label">Set:</span>
+                        <span class="stat-value">${escapeHtml(info.set_name)}</span>
+                    </div>`;
+            }
+            if (info.type_line) {
+                html += `
+                    <div class="chart-stat">
+                        <span class="stat-label">Type:</span>
+                        <span class="stat-value">${escapeHtml(info.type_line)}</span>
+                    </div>`;
+            }
+            if (info.mana_cost) {
+                html += `
+                    <div class="chart-stat">
+                        <span class="stat-label">Mana Cost:</span>
+                        <span class="stat-value">${escapeHtml(info.mana_cost)}</span>
+                    </div>`;
+            }
+            if (info.rarity) {
+                html += `
+                    <div class="chart-stat">
+                        <span class="stat-label">Rarity:</span>
+                        <span class="stat-value" style="text-transform: capitalize;">${escapeHtml(info.rarity)}</span>
+                    </div>`;
+            }
+            if (info.oracle_text) {
+                html += `
+                    <div class="chart-stat" style="width: 100%;">
+                        <span class="stat-label">Text:</span>
+                        <span class="stat-value" style="white-space: pre-wrap;">${escapeHtml(info.oracle_text)}</span>
+                    </div>`;
+            }
+            if (info.purchase_uris && info.purchase_uris.cardmarket) {
+                // Update the card title to be a Cardmarket link
+                const titleEl = document.getElementById('chartTitle');
+                if (titleEl) {
+                    titleEl.innerHTML = `<a href="${escapeHtml(info.purchase_uris.cardmarket)}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline; text-decoration-style: dotted;">${escapeHtml(cardName)}</a>`;
+                }
+            }
+
+            cardInfoDiv.innerHTML = html;
         }
     </script>
 </body>

@@ -3,7 +3,7 @@
 //! Uses async reqwest for non-blocking HTTP requests.
 
 use crate::error::InventoryError;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Scryfall card response
 #[derive(Debug, Deserialize)]
@@ -14,6 +14,25 @@ pub struct ScryfallCard {
     /// For double-faced cards, images are in card_faces
     #[serde(default)]
     pub card_faces: Option<Vec<CardFace>>,
+    #[serde(default)]
+    pub set_name: Option<String>,
+    #[serde(default)]
+    pub type_line: Option<String>,
+    #[serde(default)]
+    pub mana_cost: Option<String>,
+    #[serde(default)]
+    pub rarity: Option<String>,
+    #[serde(default)]
+    pub oracle_text: Option<String>,
+    #[serde(default)]
+    pub purchase_uris: Option<PurchaseUris>,
+}
+
+/// Purchase links from Scryfall
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct PurchaseUris {
+    pub cardmarket: Option<String>,
+    pub tcgplayer: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -28,6 +47,31 @@ pub struct CardFace {
     pub name: String,
     #[serde(default)]
     pub image_uris: Option<ImageUris>,
+}
+
+/// Metadata about a card from Scryfall (serializable for caching)
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CardInfo {
+    pub set_name: Option<String>,
+    pub type_line: Option<String>,
+    pub mana_cost: Option<String>,
+    pub rarity: Option<String>,
+    pub oracle_text: Option<String>,
+    pub purchase_uris: Option<PurchaseUris>,
+}
+
+impl ScryfallCard {
+    /// Extract cacheable card info from the full Scryfall response
+    pub fn card_info(&self) -> CardInfo {
+        CardInfo {
+            set_name: self.set_name.clone(),
+            type_line: self.type_line.clone(),
+            mana_cost: self.mana_cost.clone(),
+            rarity: self.rarity.clone(),
+            oracle_text: self.oracle_text.clone(),
+            purchase_uris: self.purchase_uris.clone(),
+        }
+    }
 }
 
 impl ScryfallCard {
