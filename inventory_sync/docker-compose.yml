@@ -12,6 +12,17 @@ services:
       - inventory_data:/data
     command: ["--interval-hours", "12", "--web-port", "3000"]
 
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Berlin
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=3600
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
 volumes:
   inventory_data:
     driver: local
@@ -21,3 +32,4 @@ volumes:
 # Deploy with: docker compose up -d
 # View logs: docker compose logs -f
 # Access web UI: http://localhost:3000
+# Watchtower checks for new images every hour and auto-updates
