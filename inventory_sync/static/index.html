@@ -598,8 +598,17 @@
         function renderChart(priceData) {
             chartTitle.textContent = priceData.product.name;
 
-            // Fetch and display card image from Scryfall
-            fetchCardImage(priceData.product.name);
+            // Only fetch images for singles (Scryfall only has singles)
+            if (priceData.product.category_name === 'Magic Single') {
+                fetchCardImage(priceData.product.name);
+            } else {
+                cardImageContainer.innerHTML = `
+                    <div class="card-image-placeholder">
+                        🃏
+                        <div class="image-error">${escapeHtml(priceData.product.category_name)}</div>
+                    </div>
+                `;
+            }
 
             const dataPoints = priceData.history.length;
             const latestPrice = priceData.history[priceData.history.length - 1];
