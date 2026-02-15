@@ -36,7 +36,7 @@ struct SearchParams {
 }
 
 fn default_limit() -> usize {
-    20
+    100
 }
 
 /// API response wrapper
@@ -254,7 +254,7 @@ mod tests {
             limit: default_limit(),
         };
 
-        assert_eq!(params.limit, 20);
+        assert_eq!(params.limit, 100);
     }
 
     #[test]

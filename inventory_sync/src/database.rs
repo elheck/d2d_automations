@@ -294,7 +294,8 @@ pub struct PriceHistoryPoint {
 
 /// Search products by name (case-insensitive substring match)
 ///
-/// Returns up to `limit` results ordered by name.
+/// Returns up to `limit` results, prioritizing exact name matches first,
+/// then partial matches, all ordered alphabetically.
 pub fn search_products_by_name(
     conn: &Connection,
     query: &str,
@@ -305,12 +306,17 @@ pub fn search_products_by_name(
         "SELECT id_product, name, category_name, id_expansion
          FROM products
          WHERE name LIKE ?1 COLLATE NOCASE
-         ORDER BY name
-         LIMIT ?2",
+         ORDER BY
+             CASE WHEN name = ?2 COLLATE NOCASE THEN 0
+                  WHEN name LIKE ?2 COLLATE NOCASE THEN 1
+                  ELSE 2
+             END,
+             name
+         LIMIT ?3",
     )?;
 
     let results: DbResult<Vec<ProductSearchResult>> = stmt
-        .query_map(params![pattern, limit], |row| {
+        .query_map(params![pattern, query, limit], |row| {
             Ok(ProductSearchResult {
                 id_product: row.get(0)?,
                 name: row.get(1)?,
