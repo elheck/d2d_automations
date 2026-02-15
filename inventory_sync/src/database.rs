@@ -281,8 +281,15 @@ pub struct PriceHistoryPoint {
     pub avg: Option<f64>,
     pub low: Option<f64>,
     pub trend: Option<f64>,
+    pub avg1: Option<f64>,
+    pub avg7: Option<f64>,
+    pub avg30: Option<f64>,
     pub avg_foil: Option<f64>,
+    pub low_foil: Option<f64>,
     pub trend_foil: Option<f64>,
+    pub avg1_foil: Option<f64>,
+    pub avg7_foil: Option<f64>,
+    pub avg30_foil: Option<f64>,
 }
 
 /// Search products by name (case-insensitive substring match)
@@ -318,7 +325,8 @@ pub fn search_products_by_name(
 /// Get price history for a product (all dates, ordered chronologically)
 pub fn get_price_history(conn: &Connection, id_product: u64) -> DbResult<Vec<PriceHistoryPoint>> {
     let mut stmt = conn.prepare(
-        "SELECT price_date, avg, low, trend, avg_foil, trend_foil
+        "SELECT price_date, avg, low, trend, avg1, avg7, avg30,
+                avg_foil, low_foil, trend_foil, avg1_foil, avg7_foil, avg30_foil
          FROM price_history
          WHERE id_product = ?1
          ORDER BY price_date ASC",
@@ -331,8 +339,15 @@ pub fn get_price_history(conn: &Connection, id_product: u64) -> DbResult<Vec<Pri
                 avg: row.get(1)?,
                 low: row.get(2)?,
                 trend: row.get(3)?,
-                avg_foil: row.get(4)?,
-                trend_foil: row.get(5)?,
+                avg1: row.get(4)?,
+                avg7: row.get(5)?,
+                avg30: row.get(6)?,
+                avg_foil: row.get(7)?,
+                low_foil: row.get(8)?,
+                trend_foil: row.get(9)?,
+                avg1_foil: row.get(10)?,
+                avg7_foil: row.get(11)?,
+                avg30_foil: row.get(12)?,
             })
         })?
         .collect();

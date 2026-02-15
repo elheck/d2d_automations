@@ -616,6 +616,8 @@
             const priceChange = latestPrice.trend - oldestPrice.trend;
             const priceChangePercent = ((priceChange / oldestPrice.trend) * 100).toFixed(1);
 
+            const hasFoil = latestPrice.avg_foil != null || latestPrice.trend_foil != null;
+
             chartMeta.innerHTML = `
                 <div class="chart-stat">
                     <span class="stat-label">Category:</span>
@@ -627,7 +629,7 @@
                 </div>
                 <div class="chart-stat">
                     <span class="stat-label">Latest Trend:</span>
-                    <span class="stat-value">€${latestPrice.trend.toFixed(2)}</span>
+                    <span class="stat-value">€${latestPrice.trend != null ? latestPrice.trend.toFixed(2) : '—'}</span>
                 </div>
                 <div class="chart-stat">
                     <span class="stat-label">Change:</span>
@@ -635,6 +637,34 @@
                         ${priceChange >= 0 ? '+' : ''}€${priceChange.toFixed(2)} (${priceChangePercent >= 0 ? '+' : ''}${priceChangePercent}%)
                     </span>
                 </div>
+                ${hasFoil ? `
+                <div style="width: 100%; border-top: 1px solid var(--border); margin-top: 0.5rem; padding-top: 0.5rem; display: flex; gap: 1.5rem; flex-wrap: wrap;">
+                    <div class="chart-stat">
+                        <span class="stat-label">Foil Trend:</span>
+                        <span class="stat-value">${latestPrice.trend_foil != null ? '€' + latestPrice.trend_foil.toFixed(2) : '—'}</span>
+                    </div>
+                    <div class="chart-stat">
+                        <span class="stat-label">Foil Avg:</span>
+                        <span class="stat-value">${latestPrice.avg_foil != null ? '€' + latestPrice.avg_foil.toFixed(2) : '—'}</span>
+                    </div>
+                    <div class="chart-stat">
+                        <span class="stat-label">Foil Low:</span>
+                        <span class="stat-value">${latestPrice.low_foil != null ? '€' + latestPrice.low_foil.toFixed(2) : '—'}</span>
+                    </div>
+                    <div class="chart-stat">
+                        <span class="stat-label">Foil Avg 1d:</span>
+                        <span class="stat-value">${latestPrice.avg1_foil != null ? '€' + latestPrice.avg1_foil.toFixed(2) : '—'}</span>
+                    </div>
+                    <div class="chart-stat">
+                        <span class="stat-label">Foil Avg 7d:</span>
+                        <span class="stat-value">${latestPrice.avg7_foil != null ? '€' + latestPrice.avg7_foil.toFixed(2) : '—'}</span>
+                    </div>
+                    <div class="chart-stat">
+                        <span class="stat-label">Foil Avg 30d:</span>
+                        <span class="stat-value">${latestPrice.avg30_foil != null ? '€' + latestPrice.avg30_foil.toFixed(2) : '—'}</span>
+                    </div>
+                </div>
+                ` : ''}
             `;
 
             // Destroy existing chart
@@ -646,6 +676,9 @@
             const avgPrices = priceData.history.map(p => p.avg);
             const trendPrices = priceData.history.map(p => p.trend);
             const lowPrices = priceData.history.map(p => p.low);
+            const avg1Prices = priceData.history.map(p => p.avg1);
+            const avg7Prices = priceData.history.map(p => p.avg7);
+            const avg30Prices = priceData.history.map(p => p.avg30);
 
             // Technical indicators
             const indicators = priceData.indicators;
@@ -696,6 +729,39 @@
                             pointBackgroundColor: '#f59e0b',
                             pointBorderColor: '#0f172a',
                             pointBorderWidth: 2,
+                            yAxisID: 'y',
+                        },
+                        {
+                            label: 'Avg 1d',
+                            data: avg1Prices,
+                            borderColor: '#14b8a6',
+                            backgroundColor: 'transparent',
+                            tension: 0.4,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            borderDash: [2, 4],
+                            yAxisID: 'y',
+                        },
+                        {
+                            label: 'Avg 7d',
+                            data: avg7Prices,
+                            borderColor: '#0ea5e9',
+                            backgroundColor: 'transparent',
+                            tension: 0.4,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            borderDash: [4, 4],
+                            yAxisID: 'y',
+                        },
+                        {
+                            label: 'Avg 30d',
+                            data: avg30Prices,
+                            borderColor: '#a855f7',
+                            backgroundColor: 'transparent',
+                            tension: 0.4,
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            borderDash: [6, 4],
                             yAxisID: 'y',
                         },
                         {
