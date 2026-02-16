@@ -4,7 +4,8 @@
 //! Cards are grouped by location for efficient warehouse picking.
 
 use crate::cache::ImageCache;
-use crate::card_matching::MatchedCard;
+use crate::card_matching::{get_card_name, MatchedCard};
+use crate::models::Language;
 use crate::ui::state::Screen;
 use eframe::egui;
 use log::{debug, error, info, warn};
@@ -40,8 +41,10 @@ pub struct PickingItem {
 
 impl PickingItem {
     pub fn from_matched_card(mc: &MatchedCard<'_>) -> Self {
+        let lang = Language::parse(&mc.card.language);
+        let card_name = get_card_name(mc.card, lang).to_string();
         Self {
-            card_name: mc.card.name.clone(),
+            card_name,
             set_name: mc.set_name.clone(),
             set_code: mc.card.set_code.clone(),
             collector_number: mc.card.cn.clone(),
@@ -245,142 +248,135 @@ impl PickingScreen {
     const CARD_IMAGE_HEIGHT: f32 = 360.0;
 
     fn show_picking_list(ctx: &egui::Context, ui: &mut egui::Ui, state: &mut PickingState) {
-        let mut current_location = String::new();
         let mut price_changed = false;
 
-        // Collect visible items grouped by location
-        let mut location_groups: Vec<(String, Vec<usize>)> = Vec::new();
-        for i in 0..state.items.len() {
-            let item = &state.items[i];
-            if item.picked && !state.show_picked {
-                continue;
-            }
-            if item.location != current_location {
-                current_location = item.location.clone();
-                location_groups.push((current_location.clone(), Vec::new()));
-            }
-            if let Some(group) = location_groups.last_mut() {
-                group.1.push(i);
-            }
-        }
+        // Collect all visible item indices
+        let visible: Vec<usize> = (0..state.items.len())
+            .filter(|&i| !state.items[i].picked || state.show_picked)
+            .collect();
 
         // Trigger image loading for all visible items
-        for (_, indices) in &location_groups {
-            for &i in indices {
-                let item = &state.items[i];
-                let image_key = item.image_key();
-                if !state.images.contains_key(&image_key)
-                    && !state.loading_images.contains(&image_key)
-                    && !item.set_code.is_empty()
-                    && !item.collector_number.is_empty()
-                {
-                    Self::load_card_image(ctx, state, i);
-                }
+        for &i in &visible {
+            let item = &state.items[i];
+            let image_key = item.image_key();
+            if !state.images.contains_key(&image_key)
+                && !state.loading_images.contains(&image_key)
+                && !item.set_code.is_empty()
+                && !item.collector_number.is_empty()
+            {
+                Self::load_card_image(ctx, state, i);
             }
         }
 
         let available_width = ui.available_width();
         let cols = ((available_width / Self::CARD_TILE_WIDTH).floor() as usize).max(1);
 
-        for (location, indices) in &location_groups {
-            ui.add_space(10.0);
-            ui.heading(if location.is_empty() {
-                "No Location".to_string()
-            } else {
-                location.clone()
-            });
-            ui.separator();
+        // Single grid for all cards
+        egui::Grid::new("picking_grid")
+            .num_columns(cols)
+            .min_col_width(Self::CARD_TILE_WIDTH)
+            .max_col_width(Self::CARD_TILE_WIDTH)
+            .spacing([10.0, 15.0])
+            .show(ui, |ui| {
+                for (col_idx, &i) in visible.iter().enumerate() {
+                    let item = &state.items[i];
+                    let picked = item.picked;
+                    let image_key = item.image_key();
+                    let gray = egui::Color32::GRAY;
 
-            // Render cards in grid rows
-            for chunk in indices.chunks(cols) {
-                ui.horizontal_wrapped(|ui| {
-                    for &i in chunk {
-                        let item = &state.items[i];
-                        let picked = item.picked;
-                        let image_key = item.image_key();
+                    // Each grid cell: vertical group with image on top, info below
+                    let response = ui
+                        .vertical(|ui| {
+                            // Card image
+                            if let Some(texture) = state.images.get(&image_key) {
+                                let aspect = texture.size()[0] as f32 / texture.size()[1] as f32;
+                                let width = Self::CARD_IMAGE_HEIGHT * aspect;
+                                let size = egui::vec2(width, Self::CARD_IMAGE_HEIGHT);
 
-                        let response = ui
-                            .vertical(|ui| {
-                                ui.set_width(Self::CARD_TILE_WIDTH);
-
-                                // Card image
-                                if let Some(texture) = state.images.get(&image_key) {
-                                    let aspect =
-                                        texture.size()[0] as f32 / texture.size()[1] as f32;
-                                    let width = Self::CARD_IMAGE_HEIGHT * aspect;
-                                    let size = egui::vec2(width, Self::CARD_IMAGE_HEIGHT);
-
-                                    if picked {
-                                        ui.add(egui::Image::new((texture.id(), size)).tint(
-                                            egui::Color32::from_rgba_unmultiplied(
-                                                128, 128, 128, 180,
-                                            ),
-                                        ));
-                                    } else {
-                                        ui.image((texture.id(), size));
-                                    }
-                                } else {
-                                    ui.add_sized(
-                                        [Self::CARD_TILE_WIDTH, Self::CARD_IMAGE_HEIGHT],
-                                        egui::Label::new(egui::RichText::new("Loading...").weak()),
-                                    );
-                                }
-
-                                // Info below image
-                                let gray = egui::Color32::GRAY;
-
-                                let name_text = if picked {
-                                    egui::RichText::new(&item.card_name)
-                                        .size(16.0)
-                                        .strikethrough()
-                                        .color(gray)
-                                } else {
-                                    egui::RichText::new(&item.card_name).size(16.0).strong()
-                                };
-                                ui.label(name_text);
-
-                                let loc_text = if item.location.is_empty() {
-                                    "No location".to_string()
-                                } else {
-                                    item.location.clone()
-                                };
-                                let info = format!(
-                                    "{} • {}\nQty: {} • {:.2} €\n{} • {}{}",
-                                    item.set_name,
-                                    item.condition,
-                                    item.quantity,
-                                    item.price,
-                                    loc_text,
-                                    item.language,
-                                    if item.is_foil { " Foil" } else { "" }
-                                );
-                                let info_text = if picked {
-                                    egui::RichText::new(info).size(14.0).color(gray)
-                                } else {
-                                    egui::RichText::new(info).size(14.0)
-                                };
-                                ui.label(info_text);
-
-                                // Pick/Undo button
                                 if picked {
-                                    if ui.button("Undo").clicked() {
-                                        return Some(false);
-                                    }
-                                } else if ui.button("Pick").clicked() {
-                                    return Some(true);
+                                    ui.add(egui::Image::new((texture.id(), size)).tint(
+                                        egui::Color32::from_rgba_unmultiplied(128, 128, 128, 180),
+                                    ));
+                                } else {
+                                    ui.image((texture.id(), size));
                                 }
-                                None
-                            })
-                            .inner;
+                            } else {
+                                ui.add_sized(
+                                    [Self::CARD_TILE_WIDTH, Self::CARD_IMAGE_HEIGHT],
+                                    egui::Label::new(egui::RichText::new("Loading...").weak()),
+                                );
+                            }
 
-                        if let Some(new_picked) = response {
-                            state.items[i].picked = new_picked;
-                            price_changed = true;
-                        }
+                            // Location (prominent)
+                            let loc_text = if item.location.is_empty() {
+                                "No location".to_string()
+                            } else {
+                                item.location.clone()
+                            };
+                            let loc_style = if picked {
+                                egui::RichText::new(&loc_text)
+                                    .size(15.0)
+                                    .strong()
+                                    .color(gray)
+                            } else {
+                                egui::RichText::new(&loc_text)
+                                    .size(15.0)
+                                    .strong()
+                                    .color(egui::Color32::LIGHT_BLUE)
+                            };
+                            ui.label(loc_style);
+
+                            // Card name
+                            let name_text = if picked {
+                                egui::RichText::new(&item.card_name)
+                                    .size(16.0)
+                                    .strikethrough()
+                                    .color(gray)
+                            } else {
+                                egui::RichText::new(&item.card_name).size(16.0).strong()
+                            };
+                            ui.label(name_text);
+
+                            // Card details
+                            let info = format!(
+                                "{} • {}\nQty: {} • {:.2} €\n{}{}",
+                                item.set_name,
+                                item.condition,
+                                item.quantity,
+                                item.price,
+                                item.language,
+                                if item.is_foil { " • Foil" } else { "" }
+                            );
+                            let info_text = if picked {
+                                egui::RichText::new(info).size(14.0).color(gray)
+                            } else {
+                                egui::RichText::new(info).size(14.0)
+                            };
+                            ui.label(info_text);
+
+                            // Pick/Undo button
+                            if picked {
+                                if ui.button("Undo").clicked() {
+                                    return Some(false);
+                                }
+                            } else if ui.button("Pick").clicked() {
+                                return Some(true);
+                            }
+                            None
+                        })
+                        .inner;
+
+                    if let Some(new_picked) = response {
+                        state.items[i].picked = new_picked;
+                        price_changed = true;
                     }
-                });
-            }
-        }
+
+                    // End row after filling all columns
+                    if (col_idx + 1) % cols == 0 {
+                        ui.end_row();
+                    }
+                }
+            });
 
         if price_changed {
             state.update_picked_price();

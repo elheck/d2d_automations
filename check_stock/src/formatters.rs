@@ -1,4 +1,4 @@
-use crate::card_matching::{parse_location_code, MatchedCard};
+use crate::card_matching::{get_card_name, parse_location_code, MatchedCard};
 use crate::models::Language;
 
 pub fn format_regular_output(
@@ -287,8 +287,9 @@ pub fn format_invoice_list(matched_cards: &[MatchedCard]) -> String {
         total_price += line_total;
         // Discount will be applied in the wrapper function
 
-        // Add special conditions to name
-        let mut name = card.name.to_string();
+        // Get localized name based on language
+        let lang = Language::parse(&card.language);
+        let mut name = get_card_name(card, lang).to_string();
         let special_conditions = card.special_conditions();
         if !special_conditions.is_empty() {
             name = format!("{} ({})", name, special_conditions.join(", "));
