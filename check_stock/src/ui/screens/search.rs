@@ -2,11 +2,13 @@ use crate::{
     io::read_csv,
     ui::{
         components::FilePicker,
-        state::{Screen, SearchState},
+        screens::PickingState,
+        state::{AppState, Screen, SearchState, SelectedSearchCard},
     },
 };
 use eframe::egui;
 use log::{debug, info};
+use std::collections::HashMap;
 use std::time::Instant;
 
 pub struct SearchScreen;
@@ -28,14 +30,19 @@ impl SearchScreen {
         }
     }
 
-    pub fn show(ctx: &egui::Context, current_screen: &mut Screen, state: &mut SearchState) {
+    pub fn show(
+        ctx: &egui::Context,
+        app_state: &mut AppState,
+        state: &mut SearchState,
+        picking_state: &mut PickingState,
+    ) {
         // Check if we need to perform a delayed search
         Self::check_delayed_search(state);
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("← Back to Menu").clicked() {
-                    *current_screen = Screen::Welcome;
+                    app_state.current_screen = Screen::Welcome;
                 }
             });
             ui.add_space(10.0);
@@ -63,6 +70,10 @@ impl SearchScreen {
 
                 // Search controls
                 Self::show_search_controls(ui, state);
+                ui.add_space(10.0);
+
+                // Selected cards panel
+                Self::show_selected_cards_panel(ui, app_state, state, picking_state);
                 ui.add_space(10.0);
 
                 // Results
@@ -171,6 +182,64 @@ impl SearchScreen {
         });
     }
 
+    fn show_selected_cards_panel(
+        ui: &mut egui::Ui,
+        app_state: &mut AppState,
+        state: &mut SearchState,
+        picking_state: &mut PickingState,
+    ) {
+        if state.selected_cards.is_empty() {
+            return;
+        }
+
+        let total_price: f64 = state
+            .selected_cards
+            .iter()
+            .map(|sc| sc.card.price.parse::<f64>().unwrap_or(0.0) * sc.quantity as f64)
+            .sum();
+
+        let card_count: i32 = state.selected_cards.iter().map(|sc| sc.quantity).sum();
+
+        let header = format!("Selected Cards ({card_count})  —  Total: {total_price:.2} €");
+        egui::CollapsingHeader::new(header)
+            .default_open(true)
+            .show(ui, |ui| {
+                let mut remove_idx = None;
+
+                egui::ScrollArea::vertical()
+                    .max_height(150.0)
+                    .id_salt("selected_cards_scroll")
+                    .show(ui, |ui| {
+                        for (i, sc) in state.selected_cards.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                let price = sc.card.price.parse::<f64>().unwrap_or(0.0);
+                                ui.label(format!(
+                                    "{}x {} [{}] {} - {:.2} €",
+                                    sc.quantity, sc.card.name, sc.card.language, sc.card.set, price
+                                ));
+                                if ui.small_button("✕").clicked() {
+                                    remove_idx = Some(i);
+                                }
+                            });
+                        }
+                    });
+
+                if let Some(idx) = remove_idx {
+                    state.selected_cards.remove(idx);
+                }
+
+                ui.add_space(5.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Proceed to Lists").clicked() {
+                        Self::proceed_to_lists(app_state, state, picking_state);
+                    }
+                    if ui.button("Clear All").clicked() {
+                        state.selected_cards.clear();
+                    }
+                });
+            });
+    }
+
     fn show_search_results(ui: &mut egui::Ui, state: &mut SearchState) {
         let total_results = state.filtered_cards.len();
         let total_pages = total_results.div_ceil(state.results_per_page);
@@ -235,39 +304,154 @@ impl SearchScreen {
 
         ui.add_space(5.0);
 
+        // Collect add actions to apply after the grid (avoids borrow conflicts)
+        let mut add_actions: Vec<(usize, i32)> = Vec::new();
+
         egui::ScrollArea::vertical()
             .max_height(ui.available_height() - 20.0)
             .show(ui, |ui| {
                 egui::Grid::new("search_results")
-                    .num_columns(8)
+                    .num_columns(10)
                     .spacing([10.0, 4.0])
                     .striped(true)
                     .show(ui, |ui| {
                         // Header
+                        ui.strong("");
+                        ui.strong("Qty");
+                        ui.strong("Stock");
                         ui.strong("Name");
                         ui.strong("Set");
                         ui.strong("Language");
                         ui.strong("Condition");
                         ui.strong("Price");
-                        ui.strong("Quantity");
                         ui.strong("Location");
                         ui.strong("Rarity");
                         ui.end_row();
 
                         // Results - only show the current page
-                        for card in &state.filtered_cards[start_idx..end_idx] {
+                        for (rel_idx, card) in
+                            state.filtered_cards[start_idx..end_idx].iter().enumerate()
+                        {
+                            let abs_idx = start_idx + rel_idx;
+                            let available: i32 = card.quantity.parse().unwrap_or(1).max(1);
+
+                            // Already selected quantity for this card
+                            let already_selected: i32 = state
+                                .selected_cards
+                                .iter()
+                                .find(|sc| sc.card.cardmarket_id == card.cardmarket_id)
+                                .map(|sc| sc.quantity)
+                                .unwrap_or(0);
+                            let remaining = (available - already_selected).max(0);
+
+                            // Add button (disabled when no remaining stock)
+                            let add_btn = ui.add_enabled(remaining > 0, egui::Button::new("Add"));
+                            if add_btn.clicked() {
+                                let qty = state.quantity_inputs.entry(abs_idx).or_insert(1);
+                                add_actions.push((abs_idx, *qty));
+                            }
+
+                            // Quantity input (capped to remaining stock)
+                            let qty = state.quantity_inputs.entry(abs_idx).or_insert(1);
+                            if *qty > remaining {
+                                *qty = remaining.max(1);
+                            }
+                            ui.add(
+                                egui::DragValue::new(qty)
+                                    .range(1..=remaining.max(1))
+                                    .speed(0.1),
+                            );
+
+                            // Stock count right next to qty
+                            ui.label(&card.quantity);
+
                             ui.label(&card.name);
                             ui.label(&card.set);
                             ui.label(&card.language);
                             ui.label(&card.condition);
                             ui.label(format!("{}€", &card.price));
-                            ui.label(&card.quantity);
                             ui.label(card.location.as_deref().unwrap_or(""));
                             ui.label(&card.rarity);
+
                             ui.end_row();
                         }
                     });
             });
+
+        // Apply add actions (capped to available stock)
+        for (abs_idx, qty) in add_actions {
+            if let Some(card) = state.filtered_cards.get(abs_idx) {
+                let available: i32 = card.quantity.parse().unwrap_or(1).max(1);
+                if let Some(existing) = state
+                    .selected_cards
+                    .iter_mut()
+                    .find(|sc| sc.card.cardmarket_id == card.cardmarket_id)
+                {
+                    let remaining = available - existing.quantity;
+                    if remaining > 0 {
+                        existing.quantity += qty.min(remaining);
+                    }
+                } else {
+                    state.selected_cards.push(SelectedSearchCard {
+                        card: card.clone(),
+                        quantity: qty.min(available),
+                    });
+                }
+            }
+        }
+    }
+
+    fn proceed_to_lists(
+        app_state: &mut AppState,
+        state: &mut SearchState,
+        _picking_state: &mut PickingState,
+    ) {
+        // Group selected cards by name
+        let mut groups: HashMap<String, Vec<SelectedSearchCard>> = HashMap::new();
+        for sc in &state.selected_cards {
+            groups
+                .entry(sc.card.name.clone())
+                .or_default()
+                .push(SelectedSearchCard {
+                    card: sc.card.clone(),
+                    quantity: sc.quantity,
+                });
+        }
+
+        // Convert to AppState.all_matches format
+        app_state.all_matches.clear();
+        app_state.selected.clear();
+
+        for (name, cards) in &groups {
+            let needed_qty: i32 = cards.iter().map(|sc| sc.quantity).sum();
+            let match_tuples: Vec<_> = cards
+                .iter()
+                .map(|sc| {
+                    let set_name = format!("{} ({})", sc.card.set, sc.card.set_code);
+                    (sc.card.clone(), sc.quantity, set_name)
+                })
+                .collect();
+            app_state
+                .all_matches
+                .push((name.clone(), needed_qty, match_tuples));
+        }
+
+        // All pre-selected
+        let total_cards: usize = app_state
+            .all_matches
+            .iter()
+            .map(|(_, _, cards)| cards.len())
+            .sum();
+        app_state.selected = vec![true; total_cards];
+        app_state.show_selection = true;
+        app_state.selection_mode = true;
+        app_state.current_screen = Screen::StockChecker;
+
+        info!(
+            "Proceeding to lists with {} card groups ({} total entries)",
+            groups.len(),
+            total_cards
+        );
     }
 
     fn load_csv(state: &mut SearchState) {
@@ -277,6 +461,7 @@ impl SearchScreen {
                 info!("Loaded {} cards for searching", cards.len());
                 state.cards = cards.clone();
                 state.filtered_cards = cards;
+                state.quantity_inputs.clear();
                 if !state.search_term.is_empty() {
                     Self::perform_search(state);
                 }
@@ -292,6 +477,7 @@ impl SearchScreen {
         if state.search_term.is_empty() {
             state.filtered_cards = state.cards.clone();
             state.current_page = 0; // Reset to first page
+            state.quantity_inputs.clear();
             return;
         }
 
@@ -311,6 +497,7 @@ impl SearchScreen {
             .collect();
 
         state.current_page = 0; // Reset to first page on new search
+        state.quantity_inputs.clear();
     }
 
     fn card_matches(card: &crate::models::Card, search_term: &str, state: &SearchState) -> bool {

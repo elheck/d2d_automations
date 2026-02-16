@@ -139,6 +139,11 @@ impl Default for StockListingState {
     }
 }
 
+pub struct SelectedSearchCard {
+    pub card: Card,
+    pub quantity: i32,
+}
+
 pub struct SearchState {
     pub csv_path: String,
     pub search_term: String,
@@ -152,6 +157,8 @@ pub struct SearchState {
     pub search_needs_update: bool,
     pub current_page: usize,
     pub results_per_page: usize,
+    pub selected_cards: Vec<SelectedSearchCard>,
+    pub quantity_inputs: std::collections::HashMap<usize, i32>,
 }
 
 #[derive(Default)]
@@ -198,6 +205,8 @@ impl Default for SearchState {
                 name_fr: true,
                 name_it: true,
             },
+            selected_cards: Vec::new(),
+            quantity_inputs: std::collections::HashMap::new(),
         }
     }
 }

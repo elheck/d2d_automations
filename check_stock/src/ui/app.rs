@@ -46,8 +46,9 @@ impl eframe::App for StockCheckerApp {
             Screen::Search => {
                 SearchScreen::show(
                     ctx,
-                    &mut self.app_state.current_screen,
+                    &mut self.app_state,
                     &mut self.search_state,
+                    &mut self.picking_state,
                 );
             }
             Screen::Picking => {
