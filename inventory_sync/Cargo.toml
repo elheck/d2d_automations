@@ -16,7 +16,8 @@ env_logger = "0.11"
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.36", features = ["bundled"] }
 dirs = "5.0"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["clock"] }
+chrono-tz = "0.10"
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "cors"] }

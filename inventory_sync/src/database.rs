@@ -237,9 +237,12 @@ pub fn get_latest_price_date(conn: &Connection) -> DbResult<Option<String>> {
     }
 }
 
-/// Check if price data exists for today's date
+/// Check if price data exists for today's date (Berlin timezone)
+///
+/// Uses Europe/Berlin timezone because Cardmarket timestamps are in Berlin time.
+/// The server may run in a different timezone, so we must be explicit.
 pub fn has_price_data_for_today(conn: &Connection) -> DbResult<bool> {
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let today = today_date();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM price_history WHERE price_date = ?1",
         params![&today],
@@ -248,9 +251,16 @@ pub fn has_price_data_for_today(conn: &Connection) -> DbResult<bool> {
     Ok(count > 0)
 }
 
-/// Get today's date as YYYY-MM-DD string
+/// Get today's date as YYYY-MM-DD string in Berlin timezone
+///
+/// Uses Europe/Berlin because Cardmarket data is timestamped in Berlin time.
 pub fn today_date() -> String {
-    chrono::Local::now().format("%Y-%m-%d").to_string()
+    use chrono::Utc;
+    use chrono_tz::Europe::Berlin;
+    Utc::now()
+        .with_timezone(&Berlin)
+        .format("%Y-%m-%d")
+        .to_string()
 }
 
 /// Get total count of products in database
