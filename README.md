@@ -13,7 +13,7 @@ d2d_automations is a monorepo containing Rust applications for Magic: The Gather
 |---------|-------------|--------|
 | [check_stock](check_stock/) | MTG Stock Checker & Analysis (egui desktop app) | ✅ Active |
 | [accounting](accounting/) | SevDesk Invoice Creator (egui desktop app, Cardmarket → SevDesk) | ✅ Active |
-| [inventory_sync](inventory_sync/) | Inventory Sync (CLI app, CSV → SQLite with price tracking) | 🚧 Planned |
+| [inventory_sync](inventory_sync/) | Inventory Sync (REST API server with web UI, price tracking & analysis) | ✅ Active |
 
 ## Quick Start
 
@@ -29,9 +29,9 @@ cd accounting
 export SEVDESK_API="your_token_here"
 cargo run
 
-# Inventory Sync (CLI)
+# Inventory Sync (server with web UI)
 cd inventory_sync
-cargo run
+cargo run -- --web-port 3000
 ```
 
 ## Development

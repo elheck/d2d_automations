@@ -34,7 +34,7 @@ This document contains feature requests for the SevDesk Invoicing Application.
 
 **Status**: ✅ **PRODUCTION READY**
 
-The accounting project is a well-structured, production-ready application with strong security practices and comprehensive testing (108 unit + 19 integration tests, all passing). Zero clippy warnings.
+The accounting project is a well-structured, production-ready application with strong security practices and comprehensive testing (146 unit + 19 integration tests, all passing). Zero clippy warnings.
 
 ### High Priority Improvements
 

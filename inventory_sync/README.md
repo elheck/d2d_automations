@@ -18,10 +18,12 @@ MTG inventory sync server that collects historical pricing data and syncs stock 
 
 ### Web UI
 - **🌐 Modern Web Interface**: Dark-themed, responsive UI built with modern CSS and Chart.js
-- **🔍 Card Search**: Real-time fuzzy search across all MTG products
+- **🔍 Card Search**: Real-time search across all MTG products (up to 100 results)
 - **📊 Price Charts**: Interactive line charts showing trend, average, and low prices over time
-- **🖼️ Card Images**: Automatic card image display from Scryfall API
-- **⚡ Image Caching**: Server-side persistent cache for fast repeated image loads
+- **📈 Technical Indicators**: EMA, SMA, Bollinger Bands, RSI, and MACD overlays
+- **🖼️ Card Images**: Automatic card image display from Scryfall API (by Cardmarket product ID)
+- **ℹ️ Card Metadata**: Set name, type, mana cost, rarity, and oracle text from Scryfall
+- **⚡ Image & Metadata Caching**: Server-side persistent cache for fast repeated loads
 - **📱 Mobile Responsive**: Works great on desktop, tablet, and mobile devices
 
 ## Database Schema
@@ -87,9 +89,10 @@ sqlite3 ~/.local/share/inventory_sync/inventory.db "
 The web server provides the following API endpoints:
 
 - `GET /` - Web UI (single-page application)
-- `GET /api/search?q={query}&limit={limit}` - Search for cards by name
-- `GET /api/prices/{id_product}` - Get price history for a specific product
-- `GET /api/card-image/{card_name}` - Fetch and cache card image from Scryfall
+- `GET /api/search?q={query}&limit={limit}` - Search for cards by name (default limit: 100)
+- `GET /api/prices/{id_product}` - Get price history with technical indicators for a specific product
+- `GET /api/card-image/{id_product}` - Fetch and cache card image from Scryfall by Cardmarket product ID
+- `GET /api/card-info/{id_product}` - Fetch and cache card metadata (set, type, rarity, oracle text) from Scryfall
 
 All responses are JSON with the format:
 ```json
@@ -108,9 +111,8 @@ Card images are fetched from Scryfall's API and cached locally in:
 ```
 
 Cache features:
-- **Persistent**: Images survive server restarts
-- **Case-insensitive**: "Black Lotus" = "black lotus"
-- **Safe filenames**: Handles special characters (`//`, `/`, etc.)
+- **Persistent**: Images and metadata survive server restarts
+- **ID-based**: Cached by Cardmarket product ID for exact printing match
 - **Automatic**: First request fetches from Scryfall, subsequent requests use cache
 - **Browser caching**: 24-hour cache headers for optimal performance
 
@@ -199,10 +201,15 @@ cargo build --release
 - **Database**: 14 tests covering schema, upserts, price history, queries
 - **Cardmarket API**: 2 tests for catalog and price guide parsing
 - **Scryfall API**: 6 tests for card deserialization and image URLs (2 integration tests)
-- **Image Cache**: 4 tests for sanitization, persistence, case-insensitivity
+- **Image Cache**: 3 tests for persistence and metadata caching
+- **Technical Indicators**: 7 tests for EMA, SMA, MACD, RSI, Bollinger Bands
 - **Web API**: 5 tests for router, state, serialization
 
-Total: **32 tests** (30 unit tests + 2 integration tests)
+Total: **38 tests** (36 unit + 2 integration tests)
+
+## Timezone Handling
+
+All date comparisons use **Europe/Berlin** timezone (via `chrono-tz`) because Cardmarket timestamps are in Berlin time (CET/CEST). This ensures correct "today" checks regardless of the server's local timezone.
 
 ## Security
 

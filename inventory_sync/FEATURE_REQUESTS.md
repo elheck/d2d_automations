@@ -18,10 +18,10 @@ inventory_sync is a standalone server application that runs continuously on a se
                                              │  - Scheduled price jobs │
                                              └─────────────────────────┘
                                                         │
-                                                        ▼ every 12h
+                                                        ▼ every 1h (configurable)
                                              ┌─────────────────────────┐
                                              │   Price Sources         │
-                                             │   (Scryfall, etc.)      │
+                                             │   (Cardmarket CDN)      │
                                              └─────────────────────────┘
 ```
 
@@ -57,18 +57,19 @@ inventory_sync is a standalone server application that runs continuously on a se
 **Status**: Planned
 
 ### 2. Automated Price Collection
-**Description**: Background job that fetches prices every 12 hours without intervention.
+**Description**: Background job that fetches prices on a configurable schedule without intervention.
 - Runs continuously as a server daemon
-- Scheduled price fetching (every 12 hours)
-- Support multiple price sources (Scryfall, Cardmarket, etc.)
+- Scheduled price fetching (default: every 1 hour, configurable via `--interval-hours`)
+- Fetches from Cardmarket CDN price guide
 - Store historical price data with timestamps
-- Graceful handling of API rate limits
+- Berlin timezone handling for correct date attribution (Cardmarket timestamps are CET/CEST)
 
-**Status**: Fully Implemented (2026-02-14)
+**Status**: Fully Implemented (2026-02-17)
 - ✅ Fetches Cardmarket price guide on startup (implemented 2026-02-01)
 - ✅ Historical price storage - one entry per product per day (implemented 2026-02-01)
 - ✅ Daemon mode with configurable check intervals (implemented 2026-02-14)
 - ✅ Daily deduplication prevents duplicate price entries (implemented 2026-02-01)
+- ✅ Berlin timezone-aware date handling for server-agnostic operation (implemented 2026-02-17)
 
 ### 3. Server Runtime
 **Description**: Long-running server process in Docker.
@@ -95,14 +96,16 @@ inventory_sync is a standalone server application that runs continuously on a se
 - Server-side image caching for performance
 - Mobile-responsive design
 
-**Status**: Fully Implemented (2026-02-14)
+**Status**: Fully Implemented (2026-02-17)
 - ✅ Modern dark-themed UI with responsive design (implemented 2026-02-14)
 - ✅ Real-time search API with debouncing (implemented 2026-02-14)
 - ✅ Chart.js integration for price visualization (implemented 2026-02-14)
-- ✅ Scryfall API integration for card images (implemented 2026-02-14)
-- ✅ Persistent server-side image cache (implemented 2026-02-14)
-- ✅ Case-insensitive filename handling (implemented 2026-02-14)
+- ✅ Scryfall API integration for card images and metadata (implemented 2026-02-14)
+- ✅ Persistent server-side image and metadata cache by product ID (implemented 2026-02-14)
 - ✅ 24-hour browser cache headers (implemented 2026-02-14)
+- ✅ Technical indicators: EMA, SMA, Bollinger Bands, RSI, MACD (implemented 2026-02-17)
+- ✅ Card metadata display: set name, type, mana cost, rarity, oracle text (implemented 2026-02-17)
+- ✅ Cardmarket purchase link on card titles (implemented 2026-02-17)
 
 ---
 
