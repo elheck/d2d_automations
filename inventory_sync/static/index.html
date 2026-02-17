@@ -511,7 +511,7 @@
             resultsDiv.classList.remove('hidden');
 
             try {
-                const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&limit=20`);
+                const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
                 const data = await response.json();
 
                 if (data.success && data.data.length > 0) {
