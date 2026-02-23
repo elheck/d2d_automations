@@ -51,14 +51,14 @@ impl SearchScreen {
             ui.add_space(10.0);
 
             // File picker for CSV
-            FilePicker::new("CSV File:", &mut state.csv_path)
+            let browsed = FilePicker::new("CSV File:", &mut state.csv_path)
                 .with_filter("CSV", &["csv"])
                 .show(ui);
 
             ui.add_space(10.0);
 
-            // Load CSV button
-            if ui.button("Load CSV").clicked() && !state.csv_path.is_empty() {
+            // Load CSV button (also triggered automatically when a file is browsed)
+            if (ui.button("Load CSV").clicked() || browsed) && !state.csv_path.is_empty() {
                 Self::load_csv(state);
             }
 
@@ -459,6 +459,9 @@ impl SearchScreen {
         match read_csv(&state.csv_path) {
             Ok(cards) => {
                 info!("Loaded {} cards for searching", cards.len());
+                if let Err(e) = crate::inventory_db::sync_inventory(&cards) {
+                    log::warn!("Inventory DB sync failed: {}", e);
+                }
                 state.cards = cards.clone();
                 state.filtered_cards = cards;
                 state.quantity_inputs.clear();

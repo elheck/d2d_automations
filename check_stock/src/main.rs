@@ -3,6 +3,7 @@ mod cache;
 mod card_matching;
 mod error;
 mod formatters;
+mod inventory_db;
 mod io;
 mod models;
 mod stock_analysis;

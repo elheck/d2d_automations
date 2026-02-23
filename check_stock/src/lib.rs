@@ -3,6 +3,7 @@ pub mod cache;
 pub mod card_matching;
 pub mod error;
 pub mod formatters;
+pub mod inventory_db;
 pub mod io;
 pub mod models;
 pub mod stock_analysis;

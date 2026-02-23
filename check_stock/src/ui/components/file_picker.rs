@@ -23,7 +23,9 @@ impl<'a> FilePicker<'a> {
         self
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui) {
+    /// Shows the file picker widget. Returns `true` if a file was just selected.
+    pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut picked = false;
         ui.horizontal(|ui| {
             ui.label(self.label);
             if ui.button("Browse").clicked() {
@@ -35,9 +37,11 @@ impl<'a> FilePicker<'a> {
 
                 if let Some(path) = dialog.pick_file() {
                     *self.path = path.display().to_string();
+                    picked = true;
                 }
             }
             ui.text_edit_singleline(self.path);
         });
+        picked
     }
 }
