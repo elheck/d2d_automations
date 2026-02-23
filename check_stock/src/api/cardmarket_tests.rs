@@ -207,3 +207,107 @@ fn len_and_is_empty() {
     assert_eq!(empty_guide.len(), 0);
     assert!(empty_guide.is_empty());
 }
+
+// ── Async PriceGuide::fetch_from_async ───────────────────────────────
+
+#[tokio::test]
+async fn fetch_from_async_success() {
+    let mock_server = MockServer::start().await;
+
+    let json = price_guide_json(&[(100, 10.0, 11.0)]);
+
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(json))
+        .mount(&mock_server)
+        .await;
+
+    let guide = PriceGuide::fetch_from_async(&mock_server.uri())
+        .await
+        .unwrap();
+
+    assert_eq!(guide.len(), 1);
+    assert!(guide.get(100).is_some());
+}
+
+#[tokio::test]
+async fn fetch_from_async_404() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&mock_server)
+        .await;
+
+    let result = PriceGuide::fetch_from_async(&mock_server.uri()).await;
+
+    match result {
+        Err(ApiError::HttpStatus(status)) => {
+            assert_eq!(status, reqwest::StatusCode::NOT_FOUND);
+        }
+        other => panic!("Expected ApiError::HttpStatus(404), got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn fetch_from_async_500() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock_server)
+        .await;
+
+    let result = PriceGuide::fetch_from_async(&mock_server.uri()).await;
+
+    match result {
+        Err(ApiError::HttpStatus(status)) => {
+            assert_eq!(status, reqwest::StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        other => panic!("Expected ApiError::HttpStatus(500), got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn fetch_from_async_creates_correct_hashmap() {
+    let mock_server = MockServer::start().await;
+
+    let json = price_guide_json(&[(111, 10.0, 11.0), (222, 20.0, 21.0), (333, 30.0, 31.0)]);
+
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(json))
+        .mount(&mock_server)
+        .await;
+
+    let guide = PriceGuide::fetch_from_async(&mock_server.uri())
+        .await
+        .unwrap();
+
+    assert_eq!(guide.len(), 3);
+    assert!(guide.get(111).is_some());
+    assert!(guide.get(222).is_some());
+    assert!(guide.get(333).is_some());
+    assert!(guide.get(999).is_none());
+
+    let entry = guide.get(111).unwrap();
+    assert!((entry.avg.unwrap() - 10.0).abs() < 0.001);
+    assert!((entry.trend.unwrap() - 11.0).abs() < 0.001);
+}
+
+#[tokio::test]
+async fn fetch_from_async_empty_guide() {
+    let mock_server = MockServer::start().await;
+
+    let json = price_guide_json(&[]);
+
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(json))
+        .mount(&mock_server)
+        .await;
+
+    let guide = PriceGuide::fetch_from_async(&mock_server.uri())
+        .await
+        .unwrap();
+
+    assert_eq!(guide.len(), 0);
+    assert!(guide.is_empty());
+}

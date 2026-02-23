@@ -112,4 +112,39 @@ impl PriceGuide {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Fetch price guide from Cardmarket's CDN (async)
+    pub async fn fetch_async() -> ApiResult<Self> {
+        Self::fetch_from_async(
+            "https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_1.json",
+        )
+        .await
+    }
+
+    /// Fetches price guide from the given URL (async, for testing with mock servers).
+    pub(crate) async fn fetch_from_async(url: &str) -> ApiResult<Self> {
+        log::info!("Fetching price guide from: {}", url);
+
+        let response = reqwest::Client::new()
+            .get(url)
+            .header("User-Agent", "D2D-Automations/1.0")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(ApiError::HttpStatus(response.status()));
+        }
+
+        let file: PriceGuideFile = response.json().await?;
+
+        let entries: HashMap<u64, PriceGuideEntry> = file
+            .price_guides
+            .into_iter()
+            .map(|e| (e.id_product, e))
+            .collect();
+
+        log::info!("Fetched {} price entries", entries.len());
+
+        Ok(Self { entries })
+    }
 }

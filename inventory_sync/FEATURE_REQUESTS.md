@@ -56,57 +56,6 @@ inventory_sync is a standalone server application that runs continuously on a se
 
 **Status**: Planned
 
-### 2. Automated Price Collection
-**Description**: Background job that fetches prices on a configurable schedule without intervention.
-- Runs continuously as a server daemon
-- Scheduled price fetching (default: every 1 hour, configurable via `--interval-hours`)
-- Fetches from Cardmarket CDN price guide
-- Store historical price data with timestamps
-- Berlin timezone handling for correct date attribution (Cardmarket timestamps are CET/CEST)
-
-**Status**: Fully Implemented (2026-02-17)
-- ✅ Fetches Cardmarket price guide on startup (implemented 2026-02-01)
-- ✅ Historical price storage - one entry per product per day (implemented 2026-02-01)
-- ✅ Daemon mode with configurable check intervals (implemented 2026-02-14)
-- ✅ Daily deduplication prevents duplicate price entries (implemented 2026-02-01)
-- ✅ Berlin timezone-aware date handling for server-agnostic operation (implemented 2026-02-17)
-
-### 3. Server Runtime
-**Description**: Long-running server process in Docker.
-- HTTP server (axum or actix-web)
-- Background task scheduler for price collection
-- Graceful shutdown handling (responds to SIGTERM)
-- Configurable via environment variables
-- Dockerfile for building the container image
-- docker-compose.yml for local development
-
-**Status**: Fully Implemented (2026-02-14)
-- ✅ Axum HTTP server (implemented 2026-02-14)
-- ✅ Background daemon mode with configurable intervals (implemented 2026-02-14)
-- ✅ Atomic database writes for safe shutdown (implemented 2026-02-01)
-- ✅ CLI configuration via clap (implemented 2026-02-01)
-- ✅ Dockerfile with multi-stage build (implemented 2026-02-01)
-- ✅ docker-compose.yml (implemented 2026-02-01)
-
-### 4. Web UI for Price Tracking
-**Description**: Modern web interface for browsing card data and viewing price history.
-- Real-time card search with fuzzy matching
-- Interactive price charts showing trend/avg/low prices
-- Card image display from Scryfall API
-- Server-side image caching for performance
-- Mobile-responsive design
-
-**Status**: Fully Implemented (2026-02-17)
-- ✅ Modern dark-themed UI with responsive design (implemented 2026-02-14)
-- ✅ Real-time search API with debouncing (implemented 2026-02-14)
-- ✅ Chart.js integration for price visualization (implemented 2026-02-14)
-- ✅ Scryfall API integration for card images and metadata (implemented 2026-02-14)
-- ✅ Persistent server-side image and metadata cache by product ID (implemented 2026-02-14)
-- ✅ 24-hour browser cache headers (implemented 2026-02-14)
-- ✅ Technical indicators: EMA, SMA, Bollinger Bands, RSI, MACD (implemented 2026-02-17)
-- ✅ Card metadata display: set name, type, mana cost, rarity, oracle text (implemented 2026-02-17)
-- ✅ Cardmarket purchase link on card titles (implemented 2026-02-17)
-
 ---
 
 ## How to Request Features

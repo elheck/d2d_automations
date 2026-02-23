@@ -3,6 +3,7 @@
 //! Displays cards to pick with images, allowing users to mark items as picked.
 //! Cards are grouped by location for efficient warehouse picking.
 
+use crate::api::scryfall::{fetch_card_async, fetch_image_async};
 use crate::cache::ImageCache;
 use crate::card_matching::{get_card_name, MatchedCard};
 use crate::models::Language;
@@ -506,119 +507,70 @@ impl PickingScreen {
         image_key: String,
         ctx: egui::Context,
     ) {
-        let api_url = format!(
-            "https://api.scryfall.com/cards/{}/{}",
-            set_code.to_lowercase(),
-            collector_number
+        debug!(
+            "Async: Fetching card data for {}/{}",
+            set_code, collector_number
         );
 
-        debug!("Async: Fetching card data from: {}", api_url);
-
-        let client = match reqwest::Client::builder()
-            .user_agent("d2d_automations/1.0")
-            .build()
-        {
+        // Fetch card metadata to get the image URL (handles DFCs via ScryfallCard::image_url())
+        let card = match fetch_card_async(&set_code, &collector_number).await {
             Ok(c) => c,
-            Err(e) => {
-                error!("Failed to create HTTP client: {}", e);
-                return;
-            }
-        };
-
-        match client.get(&api_url).send().await {
-            Ok(response) => {
-                if !response.status().is_success() {
-                    warn!(
-                        "Async: Scryfall API returned {} for {}/{}",
-                        response.status(),
-                        set_code,
-                        collector_number
-                    );
-                    ctx.request_repaint();
-                    return;
-                }
-
-                match response.json::<serde_json::Value>().await {
-                    Ok(card) => {
-                        // Try to get image URL (handle double-faced cards too)
-                        let image_url = card
-                            .get("image_uris")
-                            .and_then(|u| u.get("normal"))
-                            .and_then(|u| u.as_str())
-                            .or_else(|| {
-                                // For double-faced cards, image is in card_faces
-                                card.get("card_faces")
-                                    .and_then(|faces| faces.get(0))
-                                    .and_then(|face| face.get("image_uris"))
-                                    .and_then(|u| u.get("normal"))
-                                    .and_then(|u| u.as_str())
-                            });
-
-                        if let Some(image_url) = image_url {
-                            debug!("Async: Fetching image from: {}", image_url);
-
-                            // Fetch the image
-                            match client.get(image_url).send().await {
-                                Ok(img_response) => {
-                                    if let Ok(bytes) = img_response.bytes().await {
-                                        // Save to disk cache
-                                        let cache_path = cache_dir.join(format!(
-                                            "{}_{}.jpg",
-                                            set_code.to_lowercase(),
-                                            collector_number
-                                        ));
-                                        if let Err(e) = std::fs::write(&cache_path, &bytes) {
-                                            warn!("Failed to cache image: {}", e);
-                                        }
-
-                                        info!(
-                                            "Async: Fetched image for {}/{}",
-                                            set_code, collector_number
-                                        );
-
-                                        // Send to main thread
-                                        let _ = sender.send(LoadedImage {
-                                            image_key,
-                                            set_code,
-                                            collector_number,
-                                            image_data: bytes.to_vec(),
-                                        });
-
-                                        // Request UI repaint
-                                        ctx.request_repaint();
-                                        return;
-                                    }
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "Async: Failed to fetch image for {}/{}: {}",
-                                        set_code, collector_number, e
-                                    );
-                                }
-                            }
-                        } else {
-                            warn!(
-                                "Async: No image URL found for {}/{}",
-                                set_code, collector_number
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        error!(
-                            "Async: Failed to parse Scryfall response for {}/{}: {}",
-                            set_code, collector_number, e
-                        );
-                    }
-                }
-            }
             Err(e) => {
                 error!(
                     "Async: Failed to fetch card data for {}/{}: {}",
                     set_code, collector_number, e
                 );
+                ctx.request_repaint();
+                return;
             }
+        };
+
+        let image_url = match card.image_url() {
+            Some(url) => url.to_string(),
+            None => {
+                warn!(
+                    "Async: No image URL found for {}/{}",
+                    set_code, collector_number
+                );
+                ctx.request_repaint();
+                return;
+            }
+        };
+
+        debug!("Async: Fetching image from: {}", image_url);
+
+        // Fetch the image bytes
+        let bytes = match fetch_image_async(&image_url).await {
+            Ok(b) => b,
+            Err(e) => {
+                error!(
+                    "Async: Failed to fetch image for {}/{}: {}",
+                    set_code, collector_number, e
+                );
+                ctx.request_repaint();
+                return;
+            }
+        };
+
+        // Save to disk cache
+        let cache_path = cache_dir.join(format!(
+            "{}_{}.jpg",
+            set_code.to_lowercase(),
+            collector_number
+        ));
+        if let Err(e) = std::fs::write(&cache_path, &bytes) {
+            warn!("Failed to cache image: {}", e);
         }
 
+        info!("Async: Fetched image for {}/{}", set_code, collector_number);
+
+        // Send to main thread and request repaint
+        let _ = sender.send(LoadedImage {
+            image_key,
+            set_code,
+            collector_number,
+            image_data: bytes,
+        });
         ctx.request_repaint();
     }
 }
