@@ -77,6 +77,10 @@ pub struct StockAnalysisState {
     pub output: String,
     pub free_slots: i32,
     pub sort_order: SortOrder,
+    pub db_stats: Option<crate::inventory_db::DbStats>,
+    pub db_stats_error: Option<String>,
+    /// Set to true after the first stats load attempt so we don't query on every frame.
+    pub stats_loaded: bool,
 }
 
 impl Default for StockAnalysisState {
@@ -86,6 +90,9 @@ impl Default for StockAnalysisState {
             output: String::new(),
             free_slots: 5,
             sort_order: SortOrder::ByFreeSlots,
+            db_stats: None,
+            db_stats_error: None,
+            stats_loaded: false,
         }
     }
 }

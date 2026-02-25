@@ -14,6 +14,8 @@ The check_stock project demonstrates professional-grade Rust development with ex
 
 ### High Priority Improvements
 
+#### 0. Use a GUI framework that is multiplatform
+
 #### 1. Implement Rate Limiting for Scryfall API
 **Issue**: Semaphore limits concurrency but not requests/second (Scryfall limit: 10 req/s)
 - **Location**: [src/ui/screens/picking.rs:105](src/ui/screens/picking.rs#L105)
