@@ -47,9 +47,6 @@ inventory_sync is a standalone server application that runs continuously on a se
 
 ## Features
 
-### 0. Fix epansion only shown as numeber
-![alt text](image.png)
-
 ### 1. REST API for Card Sync
 **Description**: Expose an HTTP API that check_stock can call to sync cards.
 - `POST /sync` - Accept CSV data or card list, store in SQLite

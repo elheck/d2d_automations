@@ -13,8 +13,8 @@ pub mod web;
 
 pub use cardmarket::{PriceGuide, PriceGuideEntry, ProductCatalog, ProductEntry};
 pub use database::{
-    get_price_history, get_product_by_id, has_price_data_for_today, init_schema,
-    insert_price_history, search_products_by_name, upsert_products, InsertResult,
-    PriceHistoryPoint, ProductSearchResult,
+    get_id_expansion_for_product, get_price_history, get_product_by_id, has_price_data_for_today,
+    init_schema, insert_price_history, search_products_by_name, upsert_expansion_name,
+    upsert_products, InsertResult, PriceHistoryPoint, ProductSearchResult,
 };
 pub use error::{Error, Result};

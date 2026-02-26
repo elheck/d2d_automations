@@ -14,7 +14,10 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
-use crate::database::{get_price_history, get_product_by_id, search_products_by_name};
+use crate::database::{
+    get_id_expansion_for_product, get_price_history, get_product_by_id, search_products_by_name,
+    upsert_expansion_name,
+};
 use crate::database::{PriceHistoryPoint, ProductSearchResult};
 use crate::image_cache::{fetch_card_info_cached, fetch_image_cached, ImageCache};
 use crate::indicators::{calculate_all_indicators, TechnicalIndicators};
@@ -153,11 +156,20 @@ async fn card_info_handler(
     Path(id_product): Path<u64>,
 ) -> Result<Json<ApiResponse<CardInfo>>, StatusCode> {
     match fetch_card_info_cached(&state.image_cache, id_product).await {
-        Ok(info) => Ok(Json(ApiResponse {
-            success: true,
-            data: Some(info),
-            error: None,
-        })),
+        Ok(info) => {
+            // Populate expansion name cache from successful Scryfall lookup
+            if let Some(ref set_name) = info.set_name {
+                let conn = state.db.lock().unwrap();
+                if let Ok(Some(id_expansion)) = get_id_expansion_for_product(&conn, id_product) {
+                    let _ = upsert_expansion_name(&conn, id_expansion, set_name);
+                }
+            }
+            Ok(Json(ApiResponse {
+                success: true,
+                data: Some(info),
+                error: None,
+            }))
+        }
         Err(e) => {
             log::warn!(
                 "Failed to fetch card info for product {}: {}",

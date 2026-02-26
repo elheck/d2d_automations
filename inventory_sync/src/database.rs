@@ -60,6 +60,12 @@ pub fn init_schema(conn: &Connection) -> DbResult<()> {
 
         CREATE INDEX IF NOT EXISTS idx_price_history_date ON price_history(price_date);
         CREATE INDEX IF NOT EXISTS idx_price_history_product ON price_history(id_product);
+
+        -- Expansion name cache populated from Scryfall lookups
+        CREATE TABLE IF NOT EXISTS expansion_names (
+            id_expansion INTEGER PRIMARY KEY,
+            name TEXT NOT NULL
+        );
         ",
     )?;
 
@@ -101,6 +107,27 @@ fn upsert_products_tx(tx: &Transaction<'_>, catalog: &ProductCatalog) -> DbResul
 
     log::info!("Upserted {} products into database", count);
     Ok(count)
+}
+
+/// Store an expansion name learned from a Scryfall lookup.
+///
+/// Uses INSERT OR IGNORE — first name wins, existing entries are not overwritten.
+pub fn upsert_expansion_name(conn: &Connection, id_expansion: u64, name: &str) -> DbResult<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO expansion_names (id_expansion, name) VALUES (?1, ?2)",
+        params![id_expansion, name],
+    )?;
+    Ok(())
+}
+
+/// Look up the expansion ID for a given product.
+pub fn get_id_expansion_for_product(conn: &Connection, id_product: u64) -> DbResult<Option<u64>> {
+    let mut stmt = conn.prepare("SELECT id_expansion FROM products WHERE id_product = ?1")?;
+    let mut rows = stmt.query(params![id_product])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(row.get(0)?)),
+        None => Ok(None),
+    }
 }
 
 /// Insert price history for a specific date
@@ -282,6 +309,7 @@ pub struct ProductSearchResult {
     pub name: String,
     pub category_name: String,
     pub id_expansion: u64,
+    pub expansion_name: Option<String>,
 }
 
 /// Price history data point (for charting)
@@ -313,15 +341,16 @@ pub fn search_products_by_name(
 ) -> DbResult<Vec<ProductSearchResult>> {
     let pattern = format!("%{}%", query);
     let mut stmt = conn.prepare(
-        "SELECT id_product, name, category_name, id_expansion
-         FROM products
-         WHERE name LIKE ?1 COLLATE NOCASE
+        "SELECT p.id_product, p.name, p.category_name, p.id_expansion, e.name
+         FROM products p
+         LEFT JOIN expansion_names e ON p.id_expansion = e.id_expansion
+         WHERE p.name LIKE ?1 COLLATE NOCASE
          ORDER BY
-             CASE WHEN name = ?2 COLLATE NOCASE THEN 0
-                  WHEN name LIKE ?2 COLLATE NOCASE THEN 1
+             CASE WHEN p.name = ?2 COLLATE NOCASE THEN 0
+                  WHEN p.name LIKE ?2 COLLATE NOCASE THEN 1
                   ELSE 2
              END,
-             name
+             p.name
          LIMIT ?3",
     )?;
 
@@ -332,6 +361,7 @@ pub fn search_products_by_name(
                 name: row.get(1)?,
                 category_name: row.get(2)?,
                 id_expansion: row.get(3)?,
+                expansion_name: row.get(4)?,
             })
         })?
         .collect();
@@ -376,9 +406,10 @@ pub fn get_product_by_id(
     id_product: u64,
 ) -> DbResult<Option<ProductSearchResult>> {
     let mut stmt = conn.prepare(
-        "SELECT id_product, name, category_name, id_expansion
-         FROM products
-         WHERE id_product = ?1",
+        "SELECT p.id_product, p.name, p.category_name, p.id_expansion, e.name
+         FROM products p
+         LEFT JOIN expansion_names e ON p.id_expansion = e.id_expansion
+         WHERE p.id_product = ?1",
     )?;
 
     let mut rows = stmt.query(params![id_product])?;
@@ -388,6 +419,7 @@ pub fn get_product_by_id(
             name: row.get(1)?,
             category_name: row.get(2)?,
             id_expansion: row.get(3)?,
+            expansion_name: row.get(4)?,
         })),
         None => Ok(None),
     }
@@ -695,5 +727,68 @@ mod tests {
             )
             .unwrap();
         assert!(trend.is_none());
+    }
+
+    #[test]
+    fn upsert_expansion_name_stores_and_ignores_duplicates() {
+        let conn = test_db();
+
+        upsert_expansion_name(&conn, 1, "Alpha").unwrap();
+
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM expansion_names WHERE id_expansion = ?1",
+                params![1],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "Alpha");
+
+        // INSERT OR IGNORE: second insert with different name should be ignored
+        upsert_expansion_name(&conn, 1, "Beta").unwrap();
+
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM expansion_names WHERE id_expansion = ?1",
+                params![1],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "Alpha");
+    }
+
+    #[test]
+    fn get_id_expansion_for_product_returns_correct_value() {
+        let mut conn = test_db();
+
+        let catalog = ProductCatalog::from_entries(vec![make_test_product(42, "Lightning Bolt")]);
+        upsert_products(&mut conn, &catalog).unwrap();
+
+        // make_test_product sets id_expansion = 1
+        let result = get_id_expansion_for_product(&conn, 42).unwrap();
+        assert_eq!(result, Some(1));
+
+        let missing = get_id_expansion_for_product(&conn, 999).unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn search_products_by_name_includes_expansion_name_when_known() {
+        let mut conn = test_db();
+
+        let catalog = ProductCatalog::from_entries(vec![make_test_product(1, "Black Lotus")]);
+        upsert_products(&mut conn, &catalog).unwrap();
+
+        // No expansion name stored yet — should be None
+        let results = search_products_by_name(&conn, "Black Lotus", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].expansion_name.is_none());
+
+        // Store expansion name
+        upsert_expansion_name(&conn, 1, "Alpha").unwrap();
+
+        // Now the expansion name should be joined in
+        let results = search_products_by_name(&conn, "Black Lotus", 10).unwrap();
+        assert_eq!(results[0].expansion_name.as_deref(), Some("Alpha"));
     }
 }
