@@ -41,6 +41,7 @@ impl<'a> OutputWindow<'a> {
                     if ui.button("Close").clicked() {
                         *self.show = false;
                     }
+                    #[cfg(not(target_os = "android"))]
                     if ui.button("Save to File").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
                             .set_file_name(format!("output.{}", self.default_extension))

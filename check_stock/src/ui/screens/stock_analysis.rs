@@ -103,6 +103,7 @@ impl StockAnalysisScreen {
 
                     if !state.output.is_empty() {
                         ui.add_space(4.0);
+                        #[cfg(not(target_os = "android"))]
                         if ui.button("Save Analysis to File").clicked() {
                             if let Some(path) = rfd::FileDialog::new()
                                 .set_file_name("stock_analysis.txt")
