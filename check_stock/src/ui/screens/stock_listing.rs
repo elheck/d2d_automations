@@ -1,6 +1,7 @@
-use crate::api::cardmarket::PriceGuide;
-use crate::cache::{fetch_card_cached, fetch_image_cached};
-use crate::ui::state::{FocusRequest, Screen, StockListingState};
+use crate::api::scryfall::{fetch_card_async, fetch_image_async};
+use crate::ui::state::{
+    CardFetchMessage, CardFetchResult, FocusRequest, PriceGuideMessage, Screen, StockListingState,
+};
 use eframe::egui;
 use log::{error, info};
 
@@ -47,6 +48,10 @@ fn parse_card_input(input: &str) -> Option<(String, String)> {
 
 impl StockListingScreen {
     pub fn show(ctx: &egui::Context, current_screen: &mut Screen, state: &mut StockListingState) {
+        // Drain background channels every frame — no blocking on UI thread.
+        Self::poll_card_result(ctx, state);
+        Self::poll_price_guide(state);
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("← Back to Welcome Screen").clicked() {
@@ -58,21 +63,25 @@ impl StockListingScreen {
             ui.heading("Magic Singles Listing");
             ui.add_space(10.0);
 
-            // Price guide - fetch from Cardmarket once
+            // Price guide — fetch from Cardmarket once, non-blocking
             if state.price_guide.is_none() && !state.price_guide_loading {
                 ui.horizontal(|ui| {
                     if ui.button("Load Cardmarket Prices").clicked() {
                         state.error = None;
-                        match PriceGuide::fetch() {
-                            Ok(guide) => {
-                                info!("Fetched price guide with {} entries", guide.len());
-                                state.price_guide = Some(guide);
+                        state.price_guide_loading = true;
+                        let tx = state.price_guide_tx.clone();
+                        let ctx_clone = ctx.clone();
+                        state.runtime.spawn(async move {
+                            match crate::api::cardmarket::PriceGuide::fetch_async().await {
+                                Ok(guide) => {
+                                    tx.send(PriceGuideMessage::Success(guide)).ok();
+                                }
+                                Err(e) => {
+                                    tx.send(PriceGuideMessage::Error(e.to_string())).ok();
+                                }
                             }
-                            Err(e) => {
-                                error!("Failed to fetch price guide: {}", e);
-                                state.error = Some(format!("Price guide error: {}", e));
-                            }
-                        }
+                            ctx_clone.request_repaint();
+                        });
                     }
                     ui.label("(Downloads ~50MB price data from Cardmarket)");
                 });
@@ -177,7 +186,7 @@ impl StockListingScreen {
                         .clicked()
                 {
                     if let Some((ref set_code, ref collector_number)) = parsed {
-                        Self::fetch_card_data(ctx, state, set_code, collector_number);
+                        Self::trigger_card_fetch(ctx, state, set_code, collector_number);
                         complete_entry = true;
                         fetched_set = Some(set_code.clone());
                     }
@@ -206,6 +215,12 @@ impl StockListingScreen {
                 state.card_input.clear();
                 state.quantity_input = String::from("1");
                 state.focus_request = FocusRequest::Card;
+            }
+
+            // Loading indicator
+            if state.image_loading {
+                ui.add_space(10.0);
+                ui.label("⏳ Fetching card...");
             }
 
             // Error display
@@ -249,7 +264,13 @@ impl StockListingScreen {
         parse_card_input(input)
     }
 
-    fn fetch_card_data(
+    /// Trigger a non-blocking card + image fetch.
+    ///
+    /// Checks in-memory and disk caches synchronously first (fast).
+    /// If either card or image is missing from cache, spawns a Tokio task
+    /// that fetches asynchronously and sends the result back through a channel.
+    /// The result is consumed each frame by `poll_card_result`.
+    fn trigger_card_fetch(
         ctx: &egui::Context,
         state: &mut StockListingState,
         set_code: &str,
@@ -260,49 +281,161 @@ impl StockListingScreen {
         state.card_image = None;
         state.image_loading = true;
 
-        // Fetch card data (uses cache if available)
-        match fetch_card_cached(&mut state.card_cache, set_code, collector_number) {
-            Ok(card) => {
-                info!("Fetched card: {} ({})", card.name, card.set_name);
+        // Fast synchronous in-memory cache check (no I/O)
+        if let Some(cached_card) = state.card_cache.get(set_code, collector_number) {
+            let cached_card = cached_card.clone();
 
-                // Fetch image if available (uses cache if available)
-                if let Some(image_url) = card.image_url() {
-                    match fetch_image_cached(
-                        &state.image_cache,
+            // Also check image cache (disk read, fast)
+            if let Some(image_bytes) = state.image_cache.get(set_code, collector_number) {
+                // Both fully cached — resolve immediately, no background task needed
+                Self::apply_card_result(
+                    ctx,
+                    state,
+                    CardFetchResult {
+                        set_code: set_code.to_string(),
+                        collector_number: collector_number.to_string(),
+                        card: cached_card,
+                        image_bytes: Some(image_bytes),
+                    },
+                );
+                return;
+            }
+
+            // Card cached, image not — spawn only the image fetch
+            let image_url = cached_card.image_url().map(|u| u.to_string());
+            let tx = state.card_tx.clone();
+            let ctx_clone = ctx.clone();
+            let set_code = set_code.to_string();
+            let collector_number = collector_number.to_string();
+            state.runtime.spawn(async move {
+                let image_bytes = if let Some(url) = image_url {
+                    fetch_image_async(&url).await.ok()
+                } else {
+                    None
+                };
+                tx.send(CardFetchMessage::Success(Box::new(CardFetchResult {
+                    set_code,
+                    collector_number,
+                    card: cached_card,
+                    image_bytes,
+                })))
+                .ok();
+                ctx_clone.request_repaint();
+            });
+            return;
+        }
+
+        // Neither cached — fetch card + image fully in background
+        let tx = state.card_tx.clone();
+        let ctx_clone = ctx.clone();
+        let set_code = set_code.to_string();
+        let collector_number = collector_number.to_string();
+        state.runtime.spawn(async move {
+            match fetch_card_async(&set_code, &collector_number).await {
+                Ok(card) => {
+                    let image_bytes = if let Some(url) = card.image_url() {
+                        fetch_image_async(url).await.ok()
+                    } else {
+                        None
+                    };
+                    tx.send(CardFetchMessage::Success(Box::new(CardFetchResult {
                         set_code,
                         collector_number,
-                        image_url,
-                    ) {
-                        Ok(bytes) => {
-                            if let Ok(image) = image::load_from_memory(&bytes) {
-                                let rgba = image.to_rgba8();
-                                let size = [rgba.width() as usize, rgba.height() as usize];
-                                let pixels = rgba.into_raw();
-                                let color_image =
-                                    egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
-
-                                state.card_image = Some(ctx.load_texture(
-                                    format!("card_{}_{}", set_code, collector_number),
-                                    color_image,
-                                    egui::TextureOptions::LINEAR,
-                                ));
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to fetch image: {}", e);
-                        }
-                    }
+                        card,
+                        image_bytes,
+                    })))
+                    .ok();
                 }
-
-                state.card = Some(card);
+                Err(e) => {
+                    tx.send(CardFetchMessage::Error(e.to_string())).ok();
+                }
             }
-            Err(e) => {
-                error!("Failed to fetch card: {}", e);
-                state.error = Some(e.to_string());
+            ctx_clone.request_repaint();
+        });
+    }
+
+    /// Drain the card result channel. Called every frame — never blocks.
+    fn poll_card_result(ctx: &egui::Context, state: &mut StockListingState) {
+        while let Ok(msg) = state.card_rx.try_recv() {
+            match msg {
+                CardFetchMessage::Success(result) => {
+                    let result = *result;
+                    info!(
+                        "Fetched card: {} ({})",
+                        result.card.name, result.card.set_name
+                    );
+
+                    // Persist card to in-memory + disk cache
+                    state.card_cache.insert(
+                        &result.set_code,
+                        &result.collector_number,
+                        result.card.clone(),
+                    );
+                    if let Err(e) = state.card_cache.save() {
+                        error!("Failed to save card cache: {}", e);
+                    }
+
+                    // Persist image to disk cache and convert to texture
+                    if let Some(ref bytes) = result.image_bytes {
+                        state
+                            .image_cache
+                            .insert(&result.set_code, &result.collector_number, bytes);
+                    }
+
+                    Self::apply_card_result(ctx, state, result);
+                }
+                CardFetchMessage::Error(e) => {
+                    error!("Failed to fetch card: {}", e);
+                    state.error = Some(e);
+                    state.image_loading = false;
+                }
             }
         }
 
+        // Keep repainting while a fetch is in flight
+        if state.image_loading {
+            ctx.request_repaint();
+        }
+    }
+
+    /// Apply a completed card result to state (shared by cache-hit and channel paths).
+    fn apply_card_result(
+        ctx: &egui::Context,
+        state: &mut StockListingState,
+        result: CardFetchResult,
+    ) {
+        if let Some(ref bytes) = result.image_bytes {
+            if let Ok(image) = image::load_from_memory(bytes) {
+                let rgba = image.to_rgba8();
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba.into_raw());
+                state.card_image = Some(ctx.load_texture(
+                    format!("card_{}_{}", result.set_code, result.collector_number),
+                    color_image,
+                    egui::TextureOptions::LINEAR,
+                ));
+            }
+        }
+        state.card = Some(result.card);
         state.image_loading = false;
+    }
+
+    /// Drain the price guide result channel. Called every frame — never blocks.
+    fn poll_price_guide(state: &mut StockListingState) {
+        while let Ok(msg) = state.price_guide_rx.try_recv() {
+            match msg {
+                PriceGuideMessage::Success(guide) => {
+                    info!("Fetched price guide with {} entries", guide.len());
+                    state.price_guide = Some(guide);
+                    state.price_guide_loading = false;
+                }
+                PriceGuideMessage::Error(e) => {
+                    error!("Failed to fetch price guide: {}", e);
+                    state.error = Some(format!("Price guide error: {}", e));
+                    state.price_guide_loading = false;
+                }
+            }
+        }
     }
 
     fn show_card_details(

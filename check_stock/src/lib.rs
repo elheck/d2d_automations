@@ -18,3 +18,13 @@ pub use formatters::{format_picking_list, format_regular_output};
 pub use io::{read_csv, read_wantslist};
 pub use models::{Card, Language, WantsEntry};
 pub use stock_analysis::{format_stock_analysis_with_sort, SortOrder, StockAnalysis, StockStats};
+
+/// Android entry point. Called by the NativeActivity runtime instead of main().
+/// The `android-native-activity` feature in eframe wires this into the Android
+/// activity lifecycle automatically.
+#[cfg(target_os = "android")]
+#[no_mangle]
+fn android_main(app: android_activity::AndroidApp) {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    ui::launch_gui_android(app);
+}

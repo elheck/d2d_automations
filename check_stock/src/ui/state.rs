@@ -100,6 +100,8 @@ impl Default for StockAnalysisState {
 use crate::api::cardmarket::PriceGuide;
 use crate::api::scryfall::ScryfallCard;
 use crate::cache::{CardCache, ImageCache};
+use tokio::runtime::Runtime;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 /// Which input field to focus next (consumed after use)
 #[derive(Default, PartialEq, Clone, Copy)]
@@ -108,6 +110,24 @@ pub enum FocusRequest {
     None,
     Card,
     Quantity,
+}
+
+/// Result of a background card + image fetch.
+pub struct CardFetchResult {
+    pub set_code: String,
+    pub collector_number: String,
+    pub card: ScryfallCard,
+    pub image_bytes: Option<Vec<u8>>,
+}
+
+pub enum CardFetchMessage {
+    Success(Box<CardFetchResult>),
+    Error(String),
+}
+
+pub enum PriceGuideMessage {
+    Success(PriceGuide),
+    Error(String),
 }
 
 pub struct StockListingState {
@@ -124,10 +144,18 @@ pub struct StockListingState {
     pub price_guide_loading: bool,
     pub card_cache: CardCache,
     pub image_cache: ImageCache,
+    // Async runtime + channels — private, mirroring the PickingState pattern
+    pub(super) runtime: Runtime,
+    pub(super) card_tx: UnboundedSender<CardFetchMessage>,
+    pub(super) card_rx: UnboundedReceiver<CardFetchMessage>,
+    pub(super) price_guide_tx: UnboundedSender<PriceGuideMessage>,
+    pub(super) price_guide_rx: UnboundedReceiver<PriceGuideMessage>,
 }
 
 impl Default for StockListingState {
     fn default() -> Self {
+        let (card_tx, card_rx) = unbounded_channel();
+        let (price_guide_tx, price_guide_rx) = unbounded_channel();
         Self {
             default_set: String::new(),
             default_language: String::from("EN"),
@@ -142,6 +170,11 @@ impl Default for StockListingState {
             price_guide_loading: false,
             card_cache: CardCache::load(), // Load from disk on startup
             image_cache: ImageCache::new(),
+            runtime: Runtime::new().expect("Failed to create Tokio runtime for StockListing"),
+            card_tx,
+            card_rx,
+            price_guide_tx,
+            price_guide_rx,
         }
     }
 }
