@@ -25,19 +25,6 @@ impl<'a> FilePicker<'a> {
 
     /// Shows the file picker widget. Returns `true` if a file was just selected.
     pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
-        #[cfg(not(target_os = "android"))]
-        {
-            self.show_desktop(ui)
-        }
-        #[cfg(target_os = "android")]
-        {
-            self.show_android(ui)
-        }
-    }
-
-    /// Desktop implementation: native OS file dialog via rfd.
-    #[cfg(not(target_os = "android"))]
-    fn show_desktop(&mut self, ui: &mut egui::Ui) -> bool {
         let mut picked = false;
         ui.horizontal(|ui| {
             ui.label(self.label);
@@ -56,16 +43,5 @@ impl<'a> FilePicker<'a> {
             ui.text_edit_singleline(self.path);
         });
         picked
-    }
-
-    /// Android implementation: text field only (no native file dialog available).
-    #[cfg(target_os = "android")]
-    fn show_android(&mut self, ui: &mut egui::Ui) -> bool {
-        let mut changed = false;
-        ui.horizontal(|ui| {
-            ui.label(self.label);
-            changed = ui.text_edit_singleline(self.path).changed();
-        });
-        changed
     }
 }

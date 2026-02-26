@@ -74,19 +74,3 @@ pub fn launch_gui() -> Result<(), eframe::Error> {
         Box::new(|_cc| Ok(Box::new(StockCheckerApp::default()))),
     )
 }
-
-/// Android entry point — called from `android_main` in lib.rs.
-/// eframe takes ownership of the `AndroidApp` and drives the event loop.
-#[cfg(target_os = "android")]
-pub fn launch_gui_android(app: android_activity::AndroidApp) {
-    let options = eframe::NativeOptions {
-        android_app: Some(app),
-        ..Default::default()
-    };
-    eframe::run_native(
-        "MTG Stock Checker",
-        options,
-        Box::new(|_cc| Ok(Box::new(StockCheckerApp::default()))),
-    )
-    .expect("Failed to run Android app");
-}

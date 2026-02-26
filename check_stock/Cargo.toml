@@ -5,12 +5,6 @@ edition = "2021"
 authors = ["Your Name"]
 description = "MTG Stock Checker and Analysis Tool"
 
-# cdylib is required for Android (.so shared library loaded by NativeActivity).
-# The rlib is used by the desktop binary and for tests.
-[lib]
-name = "d2d_automations"
-crate-type = ["lib", "cdylib"]
-
 [profile.release]
 opt-level = 3
 lto = true
@@ -29,16 +23,12 @@ regex = "1.10.3"
 lazy_static = "1.4.0"
 log = "0.4"
 env_logger = "0.11"
-# rustls-tls: pure-Rust TLS, no OpenSSL system dependency — required for Android cross-compilation
 reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"], default-features = false }
 image = "0.25"
 egui_extras = { version = "0.31", features = ["image"] }
 dirs = "5.0"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
-
-# Desktop GUI (Linux, macOS, Windows)
-[target.'cfg(not(target_os = "android"))'.dependencies]
 eframe = { version = "0.31.1", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 rfd = { version = "0.15.3" }
 
@@ -46,27 +36,9 @@ rfd = { version = "0.15.3" }
 [target.'cfg(target_os = "linux")'.dependencies]
 rfd = { version = "0.15.3", features = ["xdg-portal"] }
 
-# Unix desktop (Linux + macOS): explicit winit for window system integration
-[target.'cfg(all(unix, not(target_os = "android")))'.dependencies]
+# Unix (Linux + macOS): explicit winit for window system integration
+[target.'cfg(unix)'.dependencies]
 winit = { version = "0.30.9", features = ["x11", "wayland"] }
-
-# Android
-[target.'cfg(target_os = "android")'.dependencies]
-eframe = { version = "0.31.1", default-features = false, features = ["default_fonts", "glow", "android-native-activity"] }
-android-activity = { version = "0.6", features = ["native-activity"] }
-
-# Android APK metadata for cargo-apk
-[package.metadata.android]
-package = "com.d2d.automations"
-label = "D2D Check Stock"
-
-[package.metadata.android.sdk]
-min_sdk_version = 26
-target_sdk_version = 34
-build_sdk_version = 34
-
-[[package.metadata.android.uses_permission]]
-name = "android.permission.INTERNET"
 
 [dev-dependencies]
 tempfile = "3.12.0"
