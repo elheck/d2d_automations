@@ -21,109 +21,108 @@ impl StockAnalysisScreen {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("← Back to Welcome Screen").clicked() {
-                    *current_screen = Screen::Welcome;
-                }
-            });
-            ui.add_space(10.0);
-
-            ui.heading("Stock Analysis");
-            ui.add_space(10.0);
-
-            if FilePicker::new("Inventory CSV:", &mut state.inventory_path)
-                .with_filter("CSV", &["csv"])
-                .show(ui)
-            {
-                if let Ok(inventory) = read_csv(&state.inventory_path) {
-                    if let Err(e) = crate::inventory_db::sync_inventory(&inventory) {
-                        log::warn!("Inventory DB sync failed: {}", e);
-                    }
-                }
-                Self::refresh_stats(state);
-            }
-
-            ui.add_space(10.0);
-
-            // Database stats panel
-            if let Some(stats) = &state.db_stats {
-                Self::show_db_stats(ui, stats);
-                ui.add_space(10.0);
-            } else if let Some(err) = &state.db_stats_error {
-                ui.colored_label(egui::Color32::RED, format!("Stats error: {err}"));
-                ui.add_space(10.0);
-            }
-
-            ui.separator();
-            ui.add_space(8.0);
-
-            ui.label(egui::RichText::new("Bin Capacity Analysis").strong());
-            ui.add_space(6.0);
-
-            ui.horizontal(|ui| {
-                ui.label("Minimum Free Slots:");
-                ui.add(egui::Slider::new(&mut state.free_slots, 1..=30).text("slots"));
-            });
-
-            ui.add_space(5.0);
-
-            ui.horizontal(|ui| {
-                ui.label("Sort by:");
-                egui::ComboBox::from_label("")
-                    .selected_text(match state.sort_order {
-                        SortOrder::ByFreeSlots => "Free Slots (Descending)",
-                        SortOrder::ByLocation => "Location (Ascending)",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut state.sort_order,
-                            SortOrder::ByFreeSlots,
-                            "Free Slots (Descending)",
-                        );
-                        ui.selectable_value(
-                            &mut state.sort_order,
-                            SortOrder::ByLocation,
-                            "Location (Ascending)",
-                        );
+            egui::ScrollArea::vertical()
+                .id_salt("stock_analysis_scroll")
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("← Back to Welcome Screen").clicked() {
+                            *current_screen = Screen::Welcome;
+                        }
                     });
-            });
+                    ui.add_space(10.0);
 
-            ui.add_space(10.0);
+                    ui.heading("Stock Analysis");
+                    ui.add_space(10.0);
 
-            if ui.button("Analyze Stock").clicked() {
-                if let Err(e) = Self::analyze_stock(state) {
-                    state.output = format!("Error: {e}");
-                }
-            }
+                    if FilePicker::new("Inventory CSV:", &mut state.inventory_path)
+                        .with_filter("CSV", &["csv"])
+                        .show(ui)
+                    {
+                        if let Ok(inventory) = read_csv(&state.inventory_path) {
+                            if let Err(e) = crate::inventory_db::sync_inventory(&inventory) {
+                                log::warn!("Inventory DB sync failed: {}", e);
+                            }
+                        }
+                        Self::refresh_stats(state);
+                    }
 
-            ui.separator();
+                    ui.add_space(10.0);
 
-            if !state.output.is_empty() {
-                egui::ScrollArea::vertical()
-                    .max_height(ui.available_height())
-                    .show(ui, |ui| {
+                    // Database stats panel
+                    if let Some(stats) = &state.db_stats {
+                        Self::show_db_stats(ui, stats);
+                        ui.add_space(10.0);
+                    } else if let Some(err) = &state.db_stats_error {
+                        ui.colored_label(egui::Color32::RED, format!("Stats error: {err}"));
+                        ui.add_space(10.0);
+                    }
+
+                    ui.separator();
+                    ui.add_space(8.0);
+
+                    ui.label(egui::RichText::new("Bin Capacity Analysis").strong());
+                    ui.add_space(6.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Minimum Free Slots:");
+                        ui.add(egui::Slider::new(&mut state.free_slots, 1..=30).text("slots"));
+                    });
+
+                    ui.add_space(5.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Sort by:");
+                        egui::ComboBox::from_label("")
+                            .selected_text(match state.sort_order {
+                                SortOrder::ByFreeSlots => "Free Slots (Descending)",
+                                SortOrder::ByLocation => "Location (Ascending)",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut state.sort_order,
+                                    SortOrder::ByFreeSlots,
+                                    "Free Slots (Descending)",
+                                );
+                                ui.selectable_value(
+                                    &mut state.sort_order,
+                                    SortOrder::ByLocation,
+                                    "Location (Ascending)",
+                                );
+                            });
+                    });
+
+                    ui.add_space(10.0);
+
+                    if ui.button("Analyze Stock").clicked() {
+                        if let Err(e) = Self::analyze_stock(state) {
+                            state.output = format!("Error: {e}");
+                        }
+                    }
+
+                    ui.separator();
+
+                    if !state.output.is_empty() {
+                        ui.add_space(4.0);
+                        if ui.button("Save Analysis to File").clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .set_file_name("stock_analysis.txt")
+                                .add_filter("Text Files", &["txt"])
+                                .save_file()
+                            {
+                                if let Err(e) = std::fs::write(&path, &state.output) {
+                                    state.output = format!("Error saving file: {e}");
+                                }
+                            }
+                        }
+                        ui.add_space(4.0);
                         ui.add(
                             egui::TextEdit::multiline(&mut state.output)
                                 .desired_width(f32::INFINITY)
                                 .desired_rows(20)
                                 .font(egui::TextStyle::Monospace),
                         );
-                    });
-
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                    if ui.button("Save Analysis to File").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_file_name("stock_analysis.txt")
-                            .add_filter("Text Files", &["txt"])
-                            .save_file()
-                        {
-                            if let Err(e) = std::fs::write(&path, &state.output) {
-                                state.output = format!("Error saving file: {e}");
-                            }
-                        }
                     }
                 });
-            }
         });
     }
 
