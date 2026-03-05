@@ -14,7 +14,7 @@ The check_stock project demonstrates professional-grade Rust development with ex
 
 ### High Priority Improvements
 
-#### 0. Use a GUI framework that is multiplatform
+#### 0. Use a GUI framework that is multiplatform ✅ Done — eframe/egui targets Linux, macOS, Windows; CI builds all three
 
 #### 1. Implement Rate Limiting for Scryfall API
 **Issue**: Semaphore limits concurrency but not requests/second (Scryfall limit: 10 req/s)
@@ -24,14 +24,6 @@ The check_stock project demonstrates professional-grade Rust development with ex
 - **Priority**: MEDIUM
 
 ### Medium Priority Improvements
-
-#### 3. Extract UI Business Logic for Testing
-**Issue**: Large UI functions mix rendering + logic
-- **Location**: [src/ui/screens/stock_checker.rs](src/ui/screens/stock_checker.rs) (480 lines)
-- **Good Example**: picking.rs has 572 lines of tests
-- **Fix**: Extract testable functions from UI screens
-- **Effort**: 1-2 days
-- **Priority**: MEDIUM
 
 ### Low Priority
 

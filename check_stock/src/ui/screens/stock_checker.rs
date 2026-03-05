@@ -4,6 +4,7 @@ use crate::{
         format_invoice_list, format_picking_list, format_regular_output, format_update_stock_csv,
     },
     io::{read_csv, read_wantslist},
+    models::{Card, WantsEntry},
     ui::{
         components::{FilePicker, OutputWindow},
         language::Language,
@@ -13,6 +14,133 @@ use crate::{
 };
 use eframe::egui;
 use log::{debug, error, info};
+
+// ============================================================================
+// Business logic — free functions, no egui dependency, fully testable
+// ============================================================================
+
+/// (card, quantity, set_name)
+type CardMatch = (Card, i32, String);
+/// (card_name, needed_quantity, matched_cards)
+type CardMatchGroup = (String, i32, Vec<CardMatch>);
+
+pub struct StockCheckResult {
+    pub all_matches: Vec<CardMatchGroup>,
+    pub total_found: i32,
+    pub total_wanted: i32,
+    pub missing_cards: Vec<(String, i32)>,
+}
+
+/// Pure matching logic — no file I/O, no app state.
+/// Takes already-loaded data and returns the structured match results.
+pub(super) fn perform_stock_check(
+    inventory: &[Card],
+    wantslist: &[WantsEntry],
+    language: Language,
+    language_only: bool,
+) -> StockCheckResult {
+    let mut all_matches = Vec::new();
+    let mut total_found = 0;
+    let mut total_wanted = 0;
+    let mut missing_cards = Vec::new();
+
+    for wants_entry in wantslist {
+        let matched_cards = find_matching_cards(
+            &wants_entry.name,
+            wants_entry.quantity,
+            inventory,
+            Some(language),
+            language_only,
+        );
+
+        let found_qty: i32 = matched_cards.iter().map(|mc| mc.quantity).sum();
+        total_found += found_qty;
+        total_wanted += wants_entry.quantity;
+
+        if found_qty < wants_entry.quantity {
+            missing_cards.push((wants_entry.name.clone(), wants_entry.quantity - found_qty));
+        }
+
+        debug!(
+            "Card '{}': wanted {}, found {}",
+            wants_entry.name, wants_entry.quantity, found_qty
+        );
+
+        let owned_cards = matched_cards
+            .into_iter()
+            .map(|mc| {
+                let card = (*mc.card).clone();
+                (card, mc.quantity, mc.set_name)
+            })
+            .collect();
+
+        all_matches.push((wants_entry.name.clone(), wants_entry.quantity, owned_cards));
+    }
+
+    StockCheckResult {
+        all_matches,
+        total_found,
+        total_wanted,
+        missing_cards,
+    }
+}
+
+/// Maps all match groups into MatchedCard references without filtering.
+pub(super) fn all_as_matched_cards<'a>(
+    all_matches: &'a [CardMatchGroup],
+) -> Vec<(String, i32, Vec<MatchedCard<'a>>)> {
+    all_matches
+        .iter()
+        .map(|(name, needed_qty, cards)| {
+            let group_cards = cards
+                .iter()
+                .map(|(card, quantity, set_name)| MatchedCard {
+                    card,
+                    quantity: *quantity,
+                    set_name: set_name.clone(),
+                })
+                .collect();
+            (name.clone(), *needed_qty, group_cards)
+        })
+        .collect()
+}
+
+/// Filters match groups to only the cards marked in the flat `selected` index.
+/// Groups with no selected cards are omitted from the result.
+pub(super) fn collect_selected_matched_cards<'a>(
+    all_matches: &'a [CardMatchGroup],
+    selected: &[bool],
+) -> Vec<(String, i32, Vec<MatchedCard<'a>>)> {
+    let mut idx = 0;
+    let mut result = Vec::new();
+    for (name, needed_qty, cards) in all_matches {
+        let mut group_cards = Vec::new();
+        for (card, quantity, set_name) in cards {
+            if selected[idx] {
+                group_cards.push(MatchedCard {
+                    card,
+                    quantity: *quantity,
+                    set_name: set_name.clone(),
+                });
+            }
+            idx += 1;
+        }
+        if !group_cards.is_empty() {
+            result.push((name.clone(), *needed_qty, group_cards));
+        }
+    }
+    result
+}
+
+/// Total number of individual card rows across all match groups.
+/// Used to size the flat `selected` checkbox vector.
+pub(super) fn total_card_count(all_matches: &[CardMatchGroup]) -> usize {
+    all_matches.iter().map(|(_, _, cards)| cards.len()).sum()
+}
+
+// ============================================================================
+// UI — egui rendering only, delegates logic to the functions above
+// ============================================================================
 
 pub struct StockCheckerScreen;
 
@@ -134,63 +262,32 @@ impl StockCheckerScreen {
 
         let inventory = read_csv(&state.inventory_path)?;
         let wantslist = read_wantslist(&state.wantslist_path)?;
+
         state.all_matches.clear();
-        // Reset selection to avoid mismatches when card count changes
         state.selected.clear();
         state.show_selection = false;
         state.selection_mode = false;
 
-        let mut total_found = 0;
-        let mut total_wanted = 0;
-        let mut missing_cards = Vec::new();
-
-        for wants_entry in wantslist {
-            let matched_cards = find_matching_cards(
-                &wants_entry.name,
-                wants_entry.quantity,
-                &inventory,
-                Some(state.preferred_language),
-                state.preferred_language_only,
-            );
-
-            let found_qty: i32 = matched_cards.iter().map(|mc| mc.quantity).sum();
-            total_found += found_qty;
-            total_wanted += wants_entry.quantity;
-
-            if found_qty < wants_entry.quantity {
-                missing_cards.push((wants_entry.name.clone(), wants_entry.quantity - found_qty));
-            }
-
-            debug!(
-                "Card '{}': wanted {}, found {}",
-                wants_entry.name, wants_entry.quantity, found_qty
-            );
-
-            let owned_cards = matched_cards
-                .into_iter()
-                .map(|mc| {
-                    let card = (*mc.card).clone();
-                    (card, mc.quantity, mc.set_name)
-                })
-                .collect();
-
-            state
-                .all_matches
-                .push((wants_entry.name, wants_entry.quantity, owned_cards));
-        }
+        let result = perform_stock_check(
+            &inventory,
+            &wantslist,
+            state.preferred_language,
+            state.preferred_language_only,
+        );
 
         info!(
             "Stock check complete: found {} of {} cards ({} card types checked)",
-            total_found,
-            total_wanted,
-            state.all_matches.len()
+            result.total_found,
+            result.total_wanted,
+            result.all_matches.len()
         );
 
-        if !missing_cards.is_empty() {
+        if !result.missing_cards.is_empty() {
             info!(
                 "Missing {} card types: {:?}",
-                missing_cards.len(),
-                missing_cards
+                result.missing_cards.len(),
+                result
+                    .missing_cards
                     .iter()
                     .take(5)
                     .map(|(name, qty)| format!("{} ({})", name, qty))
@@ -198,6 +295,7 @@ impl StockCheckerScreen {
             );
         }
 
+        state.all_matches = result.all_matches;
         Self::generate_regular_output(state);
         Ok(())
     }
@@ -247,7 +345,6 @@ impl StockCheckerScreen {
         ui.separator();
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
             ui.horizontal(|ui| {
-                // Interactive picking list button (with images)
                 if ui
                     .button("🎴 Interactive Picking List")
                     .on_hover_text("Open visual picking list with card images")
@@ -293,7 +390,6 @@ impl StockCheckerScreen {
             ui.separator();
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                 ui.horizontal(|ui| {
-                    // Interactive picking list button (with images)
                     if ui
                         .button("🎴 Interactive Picking List")
                         .on_hover_text("Open visual picking list with card images")
@@ -326,66 +422,20 @@ impl StockCheckerScreen {
 
     fn start_selection(state: &mut AppState) {
         if state.selected.is_empty() {
-            state.selected = std::iter::repeat_n(
-                true,
-                state
-                    .all_matches
-                    .iter()
-                    .map(|(_, _, cards)| cards.len())
-                    .sum(),
-            )
-            .collect();
+            state.selected = vec![true; total_card_count(&state.all_matches)];
         }
         state.show_selection = true;
         state.selection_mode = true;
     }
 
     fn start_interactive_picking(state: &mut AppState, picking_state: &mut PickingState) {
-        // Build the list of selected cards for the picking screen
-        let selected_matches: Vec<_> = if state.selected.is_empty() {
-            // No selection made yet, use all matches
-            state
-                .all_matches
-                .iter()
-                .map(|(name, needed_qty, cards)| {
-                    let group_cards: Vec<_> = cards
-                        .iter()
-                        .map(|(card, quantity, set_name)| MatchedCard {
-                            card,
-                            quantity: *quantity,
-                            set_name: set_name.clone(),
-                        })
-                        .collect();
-                    (name.clone(), *needed_qty, group_cards)
-                })
-                .collect()
+        let selected_matches = if state.selected.is_empty() {
+            all_as_matched_cards(&state.all_matches)
         } else {
-            // Use only selected cards
-            let mut idx = 0;
-            let mut matches = Vec::new();
-            for (name, needed_qty, cards) in &state.all_matches {
-                let mut group_cards = Vec::new();
-                for (card, quantity, set_name) in cards {
-                    if state.selected[idx] {
-                        group_cards.push(MatchedCard {
-                            card,
-                            quantity: *quantity,
-                            set_name: set_name.clone(),
-                        });
-                    }
-                    idx += 1;
-                }
-                if !group_cards.is_empty() {
-                    matches.push((name.clone(), *needed_qty, group_cards));
-                }
-            }
-            matches
+            collect_selected_matched_cards(&state.all_matches, &state.selected)
         };
 
-        // Initialize picking state with the selected cards
         *picking_state = PickingState::from_matched_cards(&selected_matches);
-
-        // Navigate to the picking screen
         state.current_screen = Screen::Picking;
         info!(
             "Starting interactive picking with {} items",
@@ -394,47 +444,14 @@ impl StockCheckerScreen {
     }
 
     fn generate_regular_output(state: &mut AppState) {
-        let selected_matches: Vec<_> = state
-            .all_matches
-            .iter()
-            .map(|(name, needed_qty, cards)| {
-                let group_cards: Vec<_> = cards
-                    .iter()
-                    .map(|(card, quantity, set_name)| MatchedCard {
-                        card,
-                        quantity: *quantity,
-                        set_name: set_name.clone(),
-                    })
-                    .collect();
-                (name.clone(), *needed_qty, group_cards)
-            })
-            .collect();
-
-        state.output = format_regular_output(&selected_matches, state.discount_percent);
+        let matched = all_as_matched_cards(&state.all_matches);
+        state.output = format_regular_output(&matched, state.discount_percent);
     }
 
     fn generate_selected_output(state: &mut AppState, format: OutputFormat) {
-        let mut selected_matches = Vec::new();
-        let mut idx = 0;
-
-        for (name, needed_qty, cards) in &state.all_matches {
-            let mut group_cards = Vec::new();
-            for (card, quantity, set_name) in cards {
-                if state.selected[idx] {
-                    group_cards.push(MatchedCard {
-                        card,
-                        quantity: *quantity,
-                        set_name: set_name.clone(),
-                    });
-                }
-                idx += 1;
-            }
-            if !group_cards.is_empty() {
-                selected_matches.push((name.clone(), *needed_qty, group_cards));
-            }
-        }
-
+        let selected_matches = collect_selected_matched_cards(&state.all_matches, &state.selected);
         let discount_percent = state.discount_percent;
+
         state.output_window_content = match format {
             OutputFormat::PickingList => {
                 let all_cards: Vec<_> = selected_matches
@@ -485,3 +502,7 @@ impl StockCheckerScreen {
         state.show_output_window = true;
     }
 }
+
+#[cfg(test)]
+#[path = "stock_checker_tests.rs"]
+mod stock_checker_tests;
