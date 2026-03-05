@@ -471,6 +471,64 @@
             </div>
             <div class="chart-wrapper">
                 <canvas id="priceChart"></canvas>
+                <div id="chartLegend" style="display:flex; flex-wrap:wrap; gap:0.4rem 0.75rem; margin-top:1rem; padding-top:0.75rem; border-top:1px solid var(--border);"></div>
+            </div>
+        </div>
+
+        <div class="chart-container" style="margin-top: 1.5rem;">
+            <h3 style="font-size: 1rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 1.25rem;">Indicator Reference</h3>
+
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1.25rem;">
+                Pricing Signals are shown above the chart automatically. Toggle additional lines in the chart legend to overlay them.
+            </p>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem;">
+
+                <div style="background: var(--bg-tertiary); padding: 0.875rem 1rem; border-radius: 0.5rem; border-left: 3px solid #10b981;">
+                    <div style="font-weight: 600; color: #10b981; margin-bottom: 0.25rem; font-size: 0.875rem;">1d/7d Momentum</div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary);">avg1 − avg7. Positive = short-term spike, negative = recent drop. Best signal for whether a card is actively moving right now.</div>
+                </div>
+
+                <div style="background: var(--bg-tertiary); padding: 0.875rem 1rem; border-radius: 0.5rem; border-left: 3px solid #fb923c;">
+                    <div style="font-weight: 600; color: #fb923c; margin-bottom: 0.25rem; font-size: 0.875rem;">7d/30d Momentum</div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary);">avg7 − avg30. Positive = trending up vs last month, negative = cooling off. Use to confirm if short-term momentum has legs.</div>
+                </div>
+
+                <div style="background: var(--bg-tertiary); padding: 0.875rem 1rem; border-radius: 0.5rem; border-left: 3px solid #f59e0b;">
+                    <div style="font-weight: 600; color: #f59e0b; margin-bottom: 0.25rem; font-size: 0.875rem;">Floor Ratio</div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary);">low ÷ trend. Above 0.9 = healthy, listings close to trend. Below 0.8 = heavy undercutting. If floor is low, price near it or wait.</div>
+                </div>
+
+                <div style="background: var(--bg-tertiary); padding: 0.875rem 1rem; border-radius: 0.5rem; border-left: 3px solid #fbbf24;">
+                    <div style="font-weight: 600; color: #fbbf24; margin-bottom: 0.25rem; font-size: 0.875rem;">Price Position (BB %B)</div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary);">Where current price sits in its historical range. 0% = at lower band (cheap vs history), 100% = at upper band (expensive). Above 80% = consider pricing high. Below 20% = suppressed, may recover.</div>
+                </div>
+
+                <div style="background: var(--bg-tertiary); padding: 0.875rem 1rem; border-radius: 0.5rem; border-left: 3px solid #38bdf8;">
+                    <div style="font-weight: 600; color: #38bdf8; margin-bottom: 0.25rem; font-size: 0.875rem;">ROC 7d / ROC 30d</div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary);">Rate of Change — the % price move over 7 or 30 days. Directly answers "how much has this moved?" Positive = gained, negative = lost.</div>
+                </div>
+
+                <div style="background: var(--bg-tertiary); padding: 0.875rem 1rem; border-radius: 0.5rem; border-left: 3px solid #f97316;">
+                    <div style="font-weight: 600; color: #f97316; margin-bottom: 0.25rem; font-size: 0.875rem;">RSI (chart toggle)</div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary);">Relative Strength Index (0–100). Above 70 = overbought (price may drop soon). Below 30 = oversold (may recover). Useful for timing. Needs 14+ data points.</div>
+                </div>
+
+                <div style="background: var(--bg-tertiary); padding: 0.875rem 1rem; border-radius: 0.5rem; border-left: 3px solid #06b6d4;">
+                    <div style="font-weight: 600; color: #06b6d4; margin-bottom: 0.25rem; font-size: 0.875rem;">MACD / Signal (chart toggle)</div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary);">Momentum crossover. When MACD crosses above Signal = bullish. Below = bearish. Needs 26+ data points to produce values.</div>
+                </div>
+
+                <div style="background: var(--bg-tertiary); padding: 0.875rem 1rem; border-radius: 0.5rem; border-left: 3px solid #94a3b8;">
+                    <div style="font-weight: 600; color: #94a3b8; margin-bottom: 0.25rem; font-size: 0.875rem;">Bollinger Bands (chart toggle)</div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary);">Upper/Lower bands show ±2 standard deviations from the 20-day average. Price touching lower band = historically cheap. Touching upper = expensive. Needs 20+ data points.</div>
+                </div>
+
+                <div style="background: var(--bg-tertiary); padding: 0.875rem 1rem; border-radius: 0.5rem; border-left: 3px solid #8b5cf6;">
+                    <div style="font-weight: 600; color: #8b5cf6; margin-bottom: 0.25rem; font-size: 0.875rem;">EMA 7 / EMA 30 (chart toggle)</div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary);">Exponential Moving Averages. EMA 7 reacts fast to recent changes. EMA 30 shows the longer trend. When EMA 7 crosses above EMA 30 = bullish signal.</div>
+                </div>
+
             </div>
         </div>
     </div>
@@ -622,6 +680,55 @@
             }
         }
 
+        const legendDescriptions = {
+            'Trend Price':   'Cardmarket trend price — smoothed fair value that filters listing spikes. Use as your pricing anchor.',
+            'Average Price': 'Average of all current listings at this moment.',
+            'Low Price':     'Cheapest available listing. Low vs trend = floor ratio signal.',
+            'Avg 1d':        'Yesterday\'s average. Compare with Avg 7d to spot a very recent move.',
+            'Avg 7d':        '7-day rolling average. Compare with Avg 30d to see short-term direction.',
+            'Avg 30d':       '30-day rolling average. Medium-term price baseline.',
+            'EMA 7':         '7-day Exponential Moving Average — reacts quickly to recent changes. Rising = short-term momentum is up.',
+            'EMA 30':        '30-day EMA — slower, shows the longer-term trend. EMA 7 crossing above EMA 30 = bullish signal.',
+            'BB Upper':      'Upper Bollinger Band (20-day avg + 2σ). Price touching here = historically expensive.',
+            'BB Middle':     '20-day Simple Moving Average, center line of the Bollinger Bands.',
+            'BB Lower':      'Lower Bollinger Band (20-day avg − 2σ). Price touching here = historically cheap.',
+            'RSI':           'Relative Strength Index (0–100). Above 70 = overbought, may drop soon. Below 30 = oversold, may recover. Needs 14+ data points.',
+            'MACD':          'MACD line (EMA 12 − EMA 26). Positive = bullish momentum. Negative = bearish. Needs 26+ data points.',
+            'MACD Signal':   '9-day EMA of MACD. MACD crossing above Signal = bullish entry. Needs 35+ data points.',
+        };
+
+        function buildLegend(chartInstance) {
+            const legendDiv = document.getElementById('chartLegend');
+            if (!legendDiv) return;
+            legendDiv.innerHTML = chartInstance.data.datasets.map((ds, i) => {
+                const visible = chartInstance.isDatasetVisible(i);
+                const color = ds.borderColor;
+                const desc = legendDescriptions[ds.label] || '';
+                return `<span
+                    title="${desc}"
+                    onclick="toggleDataset(${i})"
+                    style="cursor:pointer; display:inline-flex; align-items:center; gap:0.35rem; padding:0.2rem 0.55rem; border-radius:0.25rem; background:var(--bg-primary); border:1px solid ${visible ? color + '66' : 'transparent'}; font-size:0.78rem; color:${visible ? 'var(--text-secondary)' : 'var(--text-muted)'}; transition:all 0.15s; user-select:none;">
+                    <span style="width:14px; height:2px; background:${visible ? color : 'var(--text-muted)'}; border-radius:1px; flex-shrink:0; display:inline-block;"></span>
+                    <span style="${visible ? '' : 'text-decoration:line-through; opacity:0.5;'}">${ds.label}</span>
+                </span>`;
+            }).join('');
+        }
+
+        function toggleDataset(index) {
+            if (!chart) return;
+            chart.setDatasetVisibility(index, !chart.isDatasetVisible(index));
+            chart.update();
+            buildLegend(chart);
+        }
+
+        function lastNonNull(arr) {
+            if (!arr) return null;
+            for (let i = arr.length - 1; i >= 0; i--) {
+                if (arr[i] !== null && arr[i] !== undefined) return arr[i];
+            }
+            return null;
+        }
+
         // Render Chart.js chart
         function renderChart(priceData) {
             chartTitle.textContent = priceData.product.name;
@@ -645,6 +752,17 @@
             const priceChangePercent = ((priceChange / oldestPrice.trend) * 100).toFixed(1);
 
             const hasFoil = latestPrice.avg_foil != null || latestPrice.trend_foil != null;
+
+            // Pricing signals — latest values
+            const signals = priceData.cardmarket_signals;
+            const lastIdx = priceData.history.length - 1;
+            const m17 = signals.momentum_1_7[lastIdx];
+            const m730 = signals.momentum_7_30[lastIdx];
+            const floorR = signals.floor_ratio[lastIdx];
+            const percentB = lastNonNull(priceData.indicators.bb_percent_b);
+            const roc7 = lastNonNull(priceData.indicators.roc_7);
+            const roc30 = lastNonNull(priceData.indicators.roc_30);
+            const hasSignals = m17 !== null || m730 !== null || floorR !== null || percentB !== null || roc7 !== null || roc30 !== null;
 
             chartMeta.innerHTML = `
                 <div class="chart-stat">
@@ -691,6 +809,19 @@
                     <div class="chart-stat">
                         <span class="stat-label">Foil Avg 30d:</span>
                         <span class="stat-value">${latestPrice.avg30_foil != null ? '€' + latestPrice.avg30_foil.toFixed(2) : '—'}</span>
+                    </div>
+                </div>
+                ` : ''}
+                ${hasSignals ? `
+                <div style="width: 100%; border-top: 1px solid var(--border); margin-top: 0.5rem; padding-top: 0.5rem;">
+                    <div style="color: var(--text-muted); font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.5rem;">Pricing Signals</div>
+                    <div style="display: flex; gap: 1.5rem; flex-wrap: wrap;">
+                        ${m17 !== null ? `<div class="chart-stat"><span class="stat-label">1d/7d momentum:</span><span class="stat-value" style="color:${m17 >= 0 ? 'var(--success)' : 'var(--danger)'}">${m17 >= 0 ? '+' : ''}€${m17.toFixed(3)}</span></div>` : ''}
+                        ${m730 !== null ? `<div class="chart-stat"><span class="stat-label">7d/30d momentum:</span><span class="stat-value" style="color:${m730 >= 0 ? 'var(--success)' : 'var(--danger)'}">${m730 >= 0 ? '+' : ''}€${m730.toFixed(3)}</span></div>` : ''}
+                        ${floorR !== null ? `<div class="chart-stat"><span class="stat-label">Floor ratio:</span><span class="stat-value" style="color:${floorR >= 0.9 ? 'var(--success)' : floorR >= 0.75 ? 'var(--warning)' : 'var(--danger)'}" title="low/trend — below 0.8 means heavy undercutting">${floorR.toFixed(2)}${floorR < 0.8 ? ' ⚠' : ''}</span></div>` : ''}
+                        ${percentB !== null ? `<div class="chart-stat"><span class="stat-label">Price position:</span><span class="stat-value" style="color:${percentB > 0.8 ? 'var(--danger)' : percentB < 0.2 ? 'var(--success)' : 'var(--text-primary)'}" title="Bollinger %B — 0% = at lower band (cheap), 100% = at upper band (expensive)">${(percentB * 100).toFixed(0)}%${percentB > 0.8 ? ' (near high)' : percentB < 0.2 ? ' (near low)' : ''}</span></div>` : ''}
+                        ${roc7 !== null ? `<div class="chart-stat"><span class="stat-label">ROC 7d:</span><span class="stat-value" style="color:${roc7 >= 0 ? 'var(--success)' : 'var(--danger)'}">${roc7 >= 0 ? '+' : ''}${roc7.toFixed(1)}%</span></div>` : ''}
+                        ${roc30 !== null ? `<div class="chart-stat"><span class="stat-label">ROC 30d:</span><span class="stat-value" style="color:${roc30 >= 0 ? 'var(--success)' : 'var(--danger)'}">${roc30 >= 0 ? '+' : ''}${roc30.toFixed(1)}%</span></div>` : ''}
                     </div>
                 </div>
                 ` : ''}
@@ -900,20 +1031,7 @@
                         intersect: false,
                     },
                     plugins: {
-                        legend: {
-                            position: 'top',
-                            labels: {
-                                color: '#cbd5e1',
-                                font: {
-                                    size: 13,
-                                    family: 'Inter',
-                                    weight: '500'
-                                },
-                                padding: 15,
-                                usePointStyle: true,
-                                pointStyle: 'circle'
-                            }
-                        },
+                        legend: { display: false },
                         title: {
                             display: true,
                             text: 'Price History (EUR)',
@@ -940,8 +1058,12 @@
                                 label: function(context) {
                                     if (context.parsed.y === null) return null;
                                     const label = context.dataset.label;
-                                    if (label === 'RSI') return label + ': ' + context.parsed.y.toFixed(1);
+                                    if (label === 'RSI') return label + ': ' + context.parsed.y.toFixed(1) + '%';
                                     if (label === 'MACD' || label === 'MACD Signal') return label + ': ' + context.parsed.y.toFixed(4);
+                                    if (label === 'Momentum 1d/7d' || label === 'Momentum 7d/30d') return label + ': ' + (context.parsed.y >= 0 ? '+' : '') + '€' + context.parsed.y.toFixed(3);
+                                    if (label === 'ROC 7d' || label === 'ROC 30d') return label + ': ' + (context.parsed.y >= 0 ? '+' : '') + context.parsed.y.toFixed(1) + '%';
+                                    if (label === 'BB %B') return label + ': ' + (context.parsed.y * 100).toFixed(0) + '%';
+                                    if (label === 'Floor Ratio') return label + ': ' + context.parsed.y.toFixed(2);
                                     return label + ': €' + context.parsed.y.toFixed(2);
                                 }
                             }
@@ -980,42 +1102,13 @@
                                 }
                             }
                         },
-                        y2: {
-                            type: 'linear',
-                            position: 'right',
-                            min: 0,
-                            max: 100,
-                            grid: { display: false },
-                            ticks: {
-                                color: '#f97316',
-                                font: { size: 11, family: 'Inter' },
-                                callback: function(value) { return value + '%'; }
-                            },
-                            title: {
-                                display: true,
-                                text: 'RSI',
-                                color: '#f97316',
-                                font: { size: 11, family: 'Inter' }
-                            }
-                        },
-                        y3: {
-                            type: 'linear',
-                            position: 'right',
-                            grid: { display: false },
-                            ticks: {
-                                color: '#06b6d4',
-                                font: { size: 11, family: 'Inter' }
-                            },
-                            title: {
-                                display: true,
-                                text: 'MACD',
-                                color: '#06b6d4',
-                                font: { size: 11, family: 'Inter' }
-                            }
-                        }
+                        y2: { display: false, min: 0, max: 100 },
+                        y3: { display: false }
                     }
                 }
             });
+
+            buildLegend(chart);
 
             // Scroll to chart
             chartContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });

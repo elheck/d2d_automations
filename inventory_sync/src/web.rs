@@ -20,7 +20,9 @@ use crate::database::{
 };
 use crate::database::{PriceHistoryPoint, ProductSearchResult};
 use crate::image_cache::{fetch_card_info_cached, fetch_image_cached, ImageCache};
-use crate::indicators::{calculate_all_indicators, TechnicalIndicators};
+use crate::indicators::{
+    calculate_all_indicators, calculate_cardmarket_signals, CardmarketSignals, TechnicalIndicators,
+};
 use crate::scryfall::CardInfo;
 
 /// Shared application state (thread-safe database connection + image cache)
@@ -58,6 +60,7 @@ struct PriceData {
     product: ProductSearchResult,
     history: Vec<PriceHistoryPoint>,
     indicators: TechnicalIndicators,
+    cardmarket_signals: CardmarketSignals,
 }
 
 /// GET / - Serve the web UI (single HTML page)
@@ -115,12 +118,21 @@ async fn prices_handler(
     let trend_prices: Vec<f64> = history.iter().filter_map(|p| p.trend).collect();
     let indicators = calculate_all_indicators(&trend_prices);
 
+    // Cardmarket-native signals — operate on the full history (preserving None alignment)
+    let avg1: Vec<Option<f64>> = history.iter().map(|p| p.avg1).collect();
+    let avg7: Vec<Option<f64>> = history.iter().map(|p| p.avg7).collect();
+    let avg30: Vec<Option<f64>> = history.iter().map(|p| p.avg30).collect();
+    let low: Vec<Option<f64>> = history.iter().map(|p| p.low).collect();
+    let trend: Vec<Option<f64>> = history.iter().map(|p| p.trend).collect();
+    let cardmarket_signals = calculate_cardmarket_signals(&avg1, &avg7, &avg30, &low, &trend);
+
     Ok(Json(ApiResponse {
         success: true,
         data: Some(PriceData {
             product,
             history,
             indicators,
+            cardmarket_signals,
         }),
         error: None,
     }))

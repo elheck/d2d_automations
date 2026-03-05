@@ -6,24 +6,6 @@ This document tracks feature requests for the inventory_sync service.
 
 inventory_sync is a standalone server application that runs continuously on a separate server in a Docker container. It provides an API for syncing card inventory to a SQLite database and automatically collects prices on a schedule.
 
-## Architecture
-
-```
-┌─────────────────┐         HTTP API         ┌─────────────────────────┐
-│   check_stock   │ ──────────────────────▶  │    inventory_sync       │
-│   (desktop)     │    POST /sync            │    (server)             │
-└─────────────────┘                          │                         │
-                                             │  - REST API             │
-                                             │  - SQLite database      │
-                                             │  - Scheduled price jobs │
-                                             └─────────────────────────┘
-                                                        │
-                                                        ▼ every 1h (configurable)
-                                             ┌─────────────────────────┐
-                                             │   Price Sources         │
-                                             │   (Cardmarket CDN)      │
-                                             └─────────────────────────┘
-```
 
 ## Requirements
 

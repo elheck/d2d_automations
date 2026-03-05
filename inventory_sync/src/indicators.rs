@@ -23,6 +23,28 @@ pub struct TechnicalIndicators {
     pub bb_upper: Vec<Option<f64>>,
     pub bb_middle: Vec<Option<f64>>,
     pub bb_lower: Vec<Option<f64>>,
+    /// Rate of Change over 7 days: (price - price_7ago) / price_7ago * 100
+    pub roc_7: Vec<Option<f64>>,
+    /// Rate of Change over 30 days: (price - price_30ago) / price_30ago * 100
+    pub roc_30: Vec<Option<f64>>,
+    /// Bollinger %B: where price sits within the bands (0.0 = lower band, 1.0 = upper band)
+    pub bb_percent_b: Vec<Option<f64>>,
+    /// Bollinger Band Width: (upper - lower) / middle — low = stable market, high = volatile
+    pub bb_width: Vec<Option<f64>>,
+}
+
+/// Cardmarket-native pricing signals derived from Cardmarket's own rolling averages.
+///
+/// These don't need a long price history — they use avg1/avg7/avg30 already
+/// computed by Cardmarket, making them available from day one.
+#[derive(Debug, Serialize)]
+pub struct CardmarketSignals {
+    /// avg1 - avg7: positive = recent price spike, negative = recent drop
+    pub momentum_1_7: Vec<Option<f64>>,
+    /// avg7 - avg30: positive = week trending up vs month, negative = cooling off
+    pub momentum_7_30: Vec<Option<f64>>,
+    /// low / trend: how far below trend the cheapest listing is (< 0.8 = heavy undercutting)
+    pub floor_ratio: Vec<Option<f64>>,
 }
 
 /// Calculate all technical indicators for a price series
@@ -33,6 +55,10 @@ pub fn calculate_all_indicators(prices: &[f64]) -> TechnicalIndicators {
     let rsi = calculate_rsi(prices, 14);
     let (macd, macd_signal, macd_histogram) = calculate_macd(prices);
     let (bb_upper, bb_middle, bb_lower) = calculate_bollinger_bands(prices, 20, 2.0);
+    let roc_7 = calculate_roc(prices, 7);
+    let roc_30 = calculate_roc(prices, 30);
+    let bb_percent_b = calculate_bb_percent_b(prices, &bb_upper, &bb_lower);
+    let bb_width = calculate_bb_width(&bb_upper, &bb_middle, &bb_lower);
 
     TechnicalIndicators {
         ema_7,
@@ -45,7 +71,113 @@ pub fn calculate_all_indicators(prices: &[f64]) -> TechnicalIndicators {
         bb_upper,
         bb_middle,
         bb_lower,
+        roc_7,
+        roc_30,
+        bb_percent_b,
+        bb_width,
     }
+}
+
+/// Calculate Cardmarket-native pricing signals from Cardmarket's rolling averages.
+///
+/// Pass aligned slices from price history (all the same length, one entry per date).
+pub fn calculate_cardmarket_signals(
+    avg1: &[Option<f64>],
+    avg7: &[Option<f64>],
+    avg30: &[Option<f64>],
+    low: &[Option<f64>],
+    trend: &[Option<f64>],
+) -> CardmarketSignals {
+    let len = avg1.len();
+
+    let momentum_1_7 = (0..len)
+        .map(|i| match (avg1[i], avg7[i]) {
+            (Some(a1), Some(a7)) => Some(a1 - a7),
+            _ => None,
+        })
+        .collect();
+
+    let momentum_7_30 = (0..len)
+        .map(|i| match (avg7[i], avg30[i]) {
+            (Some(a7), Some(a30)) => Some(a7 - a30),
+            _ => None,
+        })
+        .collect();
+
+    let floor_ratio = (0..len)
+        .map(|i| match (low[i], trend[i]) {
+            (Some(l), Some(t)) if t.abs() > 1e-10 => Some(l / t),
+            _ => None,
+        })
+        .collect();
+
+    CardmarketSignals {
+        momentum_1_7,
+        momentum_7_30,
+        floor_ratio,
+    }
+}
+
+/// Calculate Rate of Change (ROC)
+///
+/// ROC = (price[i] - price[i - period]) / price[i - period] * 100
+/// Positive = price up, negative = price down over the period.
+pub fn calculate_roc(prices: &[f64], period: usize) -> Vec<Option<f64>> {
+    let len = prices.len();
+    if len == 0 || period == 0 || period >= len {
+        return vec![None; len];
+    }
+
+    let mut result = vec![None; len];
+    for i in period..len {
+        let base = prices[i - period];
+        if base.abs() > 1e-10 {
+            result[i] = Some((prices[i] - base) / base * 100.0);
+        }
+    }
+    result
+}
+
+/// Calculate Bollinger %B
+///
+/// %B = (price - lower) / (upper - lower)
+/// 0.0 = price at lower band (cheap), 1.0 = price at upper band (expensive).
+/// Values outside [0, 1] indicate price has broken out of the bands.
+pub fn calculate_bb_percent_b(
+    prices: &[f64],
+    upper: &[Option<f64>],
+    lower: &[Option<f64>],
+) -> Vec<Option<f64>> {
+    prices
+        .iter()
+        .zip(upper.iter())
+        .zip(lower.iter())
+        .map(|((price, u), l)| match (u, l) {
+            (Some(u), Some(l)) if (u - l).abs() > 1e-10 => Some((price - l) / (u - l)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Calculate Bollinger Band Width (normalized)
+///
+/// Width = (upper - lower) / middle
+/// Low values = price is stable and easy to price confidently.
+/// High values = high volatility, harder to price.
+pub fn calculate_bb_width(
+    upper: &[Option<f64>],
+    middle: &[Option<f64>],
+    lower: &[Option<f64>],
+) -> Vec<Option<f64>> {
+    upper
+        .iter()
+        .zip(middle.iter())
+        .zip(lower.iter())
+        .map(|((u, m), l)| match (u, m, l) {
+            (Some(u), Some(m), Some(l)) if m.abs() > 1e-10 => Some((u - l) / m),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Calculate Exponential Moving Average (EMA)
