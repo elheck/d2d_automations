@@ -44,6 +44,33 @@ fn default_limit() -> usize {
     100
 }
 
+/// Price history query parameters
+///
+/// Supports two optional filters (if both provided, `since` takes precedence):
+/// - `days=N` — last N days of history
+/// - `since=YYYY-MM-DD` — history on or after this date
+#[derive(Deserialize, Default)]
+struct PriceParams {
+    days: Option<u32>,
+    since: Option<String>,
+}
+
+impl PriceParams {
+    /// Resolve to an ISO date string cut-off, or `None` for full history.
+    fn since_date(&self) -> Option<String> {
+        if let Some(ref date) = self.since {
+            return Some(date.clone());
+        }
+        if let Some(days) = self.days {
+            let cutoff = chrono::Utc::now()
+                .date_naive()
+                .checked_sub_days(chrono::Days::new(u64::from(days)))?;
+            return Some(cutoff.format("%Y-%m-%d").to_string());
+        }
+        None
+    }
+}
+
 /// API response wrapper
 #[derive(Serialize)]
 struct ApiResponse<T> {
@@ -88,10 +115,12 @@ async fn search_handler(
     }
 }
 
-/// GET /api/prices/{id_product}
+/// GET /api/prices/{id_product}?days=90
+/// GET /api/prices/{id_product}?since=2025-01-01
 async fn prices_handler(
     State(state): State<AppState>,
     Path(id_product): Path<u64>,
+    Query(params): Query<PriceParams>,
 ) -> Result<Json<ApiResponse<PriceData>>, StatusCode> {
     let conn = state.db.lock().unwrap();
 
@@ -105,8 +134,10 @@ async fn prices_handler(
         }
     };
 
+    let since_date = params.since_date();
+
     // Get price history
-    let history = match get_price_history(&conn, id_product) {
+    let history = match get_price_history(&conn, id_product, since_date.as_deref()) {
         Ok(h) => h,
         Err(e) => {
             log::error!("Database error: {}", e);

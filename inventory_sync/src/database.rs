@@ -368,36 +368,56 @@ pub fn search_products_by_name(
     results
 }
 
-/// Get price history for a product (all dates, ordered chronologically)
-pub fn get_price_history(conn: &Connection, id_product: u64) -> DbResult<Vec<PriceHistoryPoint>> {
-    let mut stmt = conn.prepare(
-        "SELECT price_date, avg, low, trend, avg1, avg7, avg30,
-                avg_foil, low_foil, trend_foil, avg1_foil, avg7_foil, avg30_foil
-         FROM price_history
-         WHERE id_product = ?1
-         ORDER BY price_date ASC",
-    )?;
+/// Get price history for a product, optionally filtered to dates on or after `since_date`.
+///
+/// `since_date` must be an ISO date string (`YYYY-MM-DD`). Pass `None` to return all history.
+pub fn get_price_history(
+    conn: &Connection,
+    id_product: u64,
+    since_date: Option<&str>,
+) -> DbResult<Vec<PriceHistoryPoint>> {
+    let map_row = |row: &rusqlite::Row| {
+        Ok(PriceHistoryPoint {
+            price_date: row.get(0)?,
+            avg: row.get(1)?,
+            low: row.get(2)?,
+            trend: row.get(3)?,
+            avg1: row.get(4)?,
+            avg7: row.get(5)?,
+            avg30: row.get(6)?,
+            avg_foil: row.get(7)?,
+            low_foil: row.get(8)?,
+            trend_foil: row.get(9)?,
+            avg1_foil: row.get(10)?,
+            avg7_foil: row.get(11)?,
+            avg30_foil: row.get(12)?,
+        })
+    };
 
-    let results: DbResult<Vec<PriceHistoryPoint>> = stmt
-        .query_map(params![id_product], |row| {
-            Ok(PriceHistoryPoint {
-                price_date: row.get(0)?,
-                avg: row.get(1)?,
-                low: row.get(2)?,
-                trend: row.get(3)?,
-                avg1: row.get(4)?,
-                avg7: row.get(5)?,
-                avg30: row.get(6)?,
-                avg_foil: row.get(7)?,
-                low_foil: row.get(8)?,
-                trend_foil: row.get(9)?,
-                avg1_foil: row.get(10)?,
-                avg7_foil: row.get(11)?,
-                avg30_foil: row.get(12)?,
-            })
-        })?
-        .collect();
-    results
+    match since_date {
+        Some(date) => {
+            let mut stmt = conn.prepare(
+                "SELECT price_date, avg, low, trend, avg1, avg7, avg30,
+                        avg_foil, low_foil, trend_foil, avg1_foil, avg7_foil, avg30_foil
+                 FROM price_history
+                 WHERE id_product = ?1 AND price_date >= ?2
+                 ORDER BY price_date ASC",
+            )?;
+            let rows = stmt.query_map(params![id_product, date], map_row)?;
+            rows.collect()
+        }
+        None => {
+            let mut stmt = conn.prepare(
+                "SELECT price_date, avg, low, trend, avg1, avg7, avg30,
+                        avg_foil, low_foil, trend_foil, avg1_foil, avg7_foil, avg30_foil
+                 FROM price_history
+                 WHERE id_product = ?1
+                 ORDER BY price_date ASC",
+            )?;
+            let rows = stmt.query_map(params![id_product], map_row)?;
+            rows.collect()
+        }
+    }
 }
 
 /// Get product details by ID
@@ -790,5 +810,61 @@ mod tests {
         // Now the expansion name should be joined in
         let results = search_products_by_name(&conn, "Black Lotus", 10).unwrap();
         assert_eq!(results[0].expansion_name.as_deref(), Some("Alpha"));
+    }
+
+    #[test]
+    fn get_price_history_returns_all_when_no_filter() {
+        let mut conn = test_db();
+        let catalog = ProductCatalog::from_entries(vec![make_test_product(1, "Black Lotus")]);
+        upsert_products(&mut conn, &catalog).unwrap();
+
+        for (date, price) in [
+            ("2026-01-01T10:00:00+0100", 100.0),
+            ("2026-02-01T10:00:00+0100", 110.0),
+            ("2026-03-01T10:00:00+0100", 120.0),
+        ] {
+            let guide = PriceGuide::from_entries(vec![make_test_price_entry(1, Some(price))], date);
+            insert_price_history(&mut conn, &guide, &catalog).unwrap();
+        }
+
+        let history = get_price_history(&conn, 1, None).unwrap();
+        assert_eq!(history.len(), 3);
+    }
+
+    #[test]
+    fn get_price_history_filters_by_since_date() {
+        let mut conn = test_db();
+        let catalog = ProductCatalog::from_entries(vec![make_test_product(1, "Black Lotus")]);
+        upsert_products(&mut conn, &catalog).unwrap();
+
+        for (date, price) in [
+            ("2026-01-01T10:00:00+0100", 100.0),
+            ("2026-02-01T10:00:00+0100", 110.0),
+            ("2026-03-01T10:00:00+0100", 120.0),
+        ] {
+            let guide = PriceGuide::from_entries(vec![make_test_price_entry(1, Some(price))], date);
+            insert_price_history(&mut conn, &guide, &catalog).unwrap();
+        }
+
+        let history = get_price_history(&conn, 1, Some("2026-02-01")).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].price_date, "2026-02-01");
+        assert_eq!(history[1].price_date, "2026-03-01");
+    }
+
+    #[test]
+    fn get_price_history_returns_empty_when_since_date_is_future() {
+        let mut conn = test_db();
+        let catalog = ProductCatalog::from_entries(vec![make_test_product(1, "Black Lotus")]);
+        upsert_products(&mut conn, &catalog).unwrap();
+
+        let guide = PriceGuide::from_entries(
+            vec![make_test_price_entry(1, Some(100.0))],
+            "2026-01-01T10:00:00+0100",
+        );
+        insert_price_history(&mut conn, &guide, &catalog).unwrap();
+
+        let history = get_price_history(&conn, 1, Some("2030-01-01")).unwrap();
+        assert!(history.is_empty());
     }
 }
