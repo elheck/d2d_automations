@@ -53,15 +53,6 @@ The check_stock project demonstrates professional-grade Rust development with ex
 - **No Unsafe Code**: ✅ Zero unsafe blocks
 - **API Security**: User-Agent headers set, proper error handling
 
-### Test Coverage
-
-| Component | Coverage | Tests |
-|-----------|----------|-------|
-| Core Logic | ~95% | 127 tests |
-| API Layer | ~80% | 19 tests |
-| UI Screens | <5% | 1 screen tested (picking.rs) |
-| Integration | - | 22 tests |
-| **Total** | **176 tests** | **All passing** |
 
 ### Strengths to Maintain
 
@@ -70,14 +61,3 @@ The check_stock project demonstrates professional-grade Rust development with ex
 - Perfect architecture adherence to CLAUDE.md
 - Comprehensive performance tests
 - Zero clippy warnings
-
----
-
-## How to Contribute
-
-If you have additional feature requests:
-
-1. Create an issue in the repository
-2. Use the "feature request" label
-3. Provide detailed description and use case
-4. Include mockups or examples if applicable
