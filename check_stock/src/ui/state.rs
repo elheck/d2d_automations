@@ -350,6 +350,10 @@ pub enum NodeKind {
     FilterName { term: String },
     FilterSet { term: String },
     FilterLocation { term: String },
+    // Logic
+    LogicalAnd,
+    LogicalOr,
+    LogicalNot,
 }
 
 impl NodeKind {
@@ -365,6 +369,9 @@ impl NodeKind {
             Self::FilterName { .. } => "Filter Name",
             Self::FilterSet { .. } => "Filter Set",
             Self::FilterLocation { .. } => "Filter Location",
+            Self::LogicalAnd => "AND",
+            Self::LogicalOr => "OR",
+            Self::LogicalNot => "NOT",
         }
     }
 
@@ -380,12 +387,16 @@ impl NodeKind {
             Self::FilterName { .. } => egui::Color32::from_rgb(35, 148, 125),
             Self::FilterSet { .. } => egui::Color32::from_rgb(45, 115, 155),
             Self::FilterLocation { .. } => egui::Color32::from_rgb(140, 80, 45),
+            Self::LogicalAnd => egui::Color32::from_rgb(100, 60, 160),
+            Self::LogicalOr => egui::Color32::from_rgb(60, 130, 80),
+            Self::LogicalNot => egui::Color32::from_rgb(170, 55, 55),
         }
     }
 
     pub fn input_count(&self) -> usize {
         match self {
             Self::CsvSource => 0,
+            Self::LogicalAnd | Self::LogicalOr => 2,
             _ => 1,
         }
     }
@@ -400,6 +411,7 @@ impl NodeKind {
     pub fn param_count(&self) -> usize {
         match self {
             Self::CsvSource | Self::Output => 0,
+            Self::LogicalAnd | Self::LogicalOr | Self::LogicalNot => 0,
             Self::FilterPrice { .. } => 2,
             _ => 1,
         }

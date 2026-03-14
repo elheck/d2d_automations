@@ -1115,9 +1115,7 @@ fn round_trip_preserves_all_node_kinds() {
         NodeKind::FilterName {
             term: "bolt".into(),
         },
-        NodeKind::FilterSet {
-            term: "lea".into(),
-        },
+        NodeKind::FilterSet { term: "lea".into() },
         NodeKind::FilterLocation {
             term: "A1_S2".into(),
         },

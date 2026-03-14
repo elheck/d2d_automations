@@ -8,8 +8,20 @@ use crate::{
     ui::{
         components::FilePicker,
         state::{
-            AppState, ConditionFilter, FoilFilter, GraphNode, LanguageFilter, NodeGraph, NodeId,
-            NodeKind, PricingState, RarityFilter, SavedGraph, Screen, Wire,
+            AppState,
+            ConditionFilter,
+            FoilFilter,
+            GraphNode,
+            LanguageFilter,
+            NodeGraph,
+            NodeId,
+            NodeKind,
+            PricingState,
+            RarityFilter,
+            SavedGraph,
+            Screen,
+            Wire,
+            // logical nodes have no extra fields; imported via NodeKind
         },
         style,
     },
@@ -260,6 +272,31 @@ fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
                 },
                 free_pos(graph),
             );
+        }
+
+        ui.add_space(16.0);
+        ui.label(
+            egui::RichText::new("Logic:")
+                .color(style::TEXT_MUTED)
+                .size(12.0),
+        );
+        if style::secondary_button(ui, "⊓ AND")
+            .on_hover_text("Intersection: outputs only cards present in ALL connected inputs")
+            .clicked()
+        {
+            graph.add_node(NodeKind::LogicalAnd, free_pos(graph));
+        }
+        if style::secondary_button(ui, "⊔ OR")
+            .on_hover_text("Union: outputs cards present in ANY connected input")
+            .clicked()
+        {
+            graph.add_node(NodeKind::LogicalOr, free_pos(graph));
+        }
+        if style::secondary_button(ui, "¬ NOT")
+            .on_hover_text("Complement: outputs all cards NOT in the connected input")
+            .clicked()
+        {
+            graph.add_node(NodeKind::LogicalNot, free_pos(graph));
         }
 
         ui.add_space(16.0);
@@ -653,7 +690,11 @@ fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect, z
             );
         }
 
-        NodeKind::CsvSource | NodeKind::Output => {}
+        NodeKind::CsvSource
+        | NodeKind::Output
+        | NodeKind::LogicalAnd
+        | NodeKind::LogicalOr
+        | NodeKind::LogicalNot => {}
     }
 }
 
@@ -865,17 +906,62 @@ fn evaluate_counts(
             None => continue,
         };
 
-        let input: Vec<usize> = if node.kind.input_count() == 0 {
-            all_indices.clone()
+        let output = if node.kind.input_count() == 0 {
+            filter_indices(&node.kind, all_indices.clone(), all_cards)
         } else {
-            incoming
-                .get(&(id, 0))
-                .and_then(|&from| outputs.get(&from))
-                .cloned()
-                .unwrap_or_default()
+            // Collect one index set per input port (empty vec if port unconnected)
+            let inputs: Vec<Vec<usize>> = (0..node.kind.input_count())
+                .map(|port| {
+                    incoming
+                        .get(&(id, port))
+                        .and_then(|&from| outputs.get(&from))
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .collect();
+
+            match &node.kind {
+                NodeKind::LogicalAnd => {
+                    // Intersection: start from first input, keep only elements present in all others
+                    let mut result = inputs[0].clone();
+                    for other in &inputs[1..] {
+                        let set: std::collections::HashSet<usize> = other.iter().copied().collect();
+                        result.retain(|i| set.contains(i));
+                    }
+                    result
+                }
+                NodeKind::LogicalOr => {
+                    // Union: merge all inputs, deduplicate, sort
+                    let mut seen = std::collections::HashSet::new();
+                    let mut result = Vec::new();
+                    for input in &inputs {
+                        for &i in input {
+                            if seen.insert(i) {
+                                result.push(i);
+                            }
+                        }
+                    }
+                    result.sort_unstable();
+                    result
+                }
+                NodeKind::LogicalNot => {
+                    // Complement: all cards minus whatever comes in on port 0
+                    let excluded: std::collections::HashSet<usize> =
+                        inputs[0].iter().copied().collect();
+                    all_indices
+                        .iter()
+                        .copied()
+                        .filter(|i| !excluded.contains(i))
+                        .collect()
+                }
+                _ => filter_indices(
+                    &node.kind,
+                    inputs.into_iter().next().unwrap_or_default(),
+                    all_cards,
+                ),
+            }
         };
 
-        let output = filter_indices(&node.kind, input, all_cards);
         outputs.insert(id, output);
     }
 
@@ -883,10 +969,15 @@ fn evaluate_counts(
 }
 
 /// Apply a node's filtering logic to a set of card indices.
-/// Price-transform nodes pass indices unchanged (counts are unaffected by price edits).
+/// Logical nodes (AND/OR/NOT) are handled in evaluate_counts; this function is only
+/// called for source/sink and filter nodes.
 fn filter_indices(kind: &NodeKind, indices: Vec<usize>, cards: &[Card]) -> Vec<usize> {
     match kind {
-        NodeKind::CsvSource | NodeKind::Output => indices,
+        NodeKind::CsvSource
+        | NodeKind::Output
+        | NodeKind::LogicalAnd
+        | NodeKind::LogicalOr
+        | NodeKind::LogicalNot => indices,
 
         NodeKind::FilterCondition { condition } => {
             if matches!(condition, ConditionFilter::Any) {
