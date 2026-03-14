@@ -9,7 +9,7 @@ use crate::{
         components::FilePicker,
         state::{
             AppState, ConditionFilter, FoilFilter, GraphNode, LanguageFilter, NodeGraph, NodeId,
-            NodeKind, PricingState, RarityFilter, Screen, Wire,
+            NodeKind, PricingState, RarityFilter, SavedGraph, Screen, Wire,
         },
         style,
     },
@@ -76,6 +76,11 @@ impl PricingScreen {
 
             ui.add_space(6.0);
 
+            // ── Graph save / load ────────────────────────────────────────────
+            show_save_load_toolbar(ui, state);
+
+            ui.add_space(2.0);
+
             // ── Add-node toolbar (only when CSV loaded) ──────────────────────
             ui.add_enabled_ui(!state.cards.is_empty(), |ui| {
                 show_add_toolbar(ui, &mut state.graph);
@@ -105,6 +110,60 @@ impl PricingScreen {
 }
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────
+
+fn show_save_load_toolbar(ui: &mut egui::Ui, state: &mut PricingState) {
+    ui.horizontal(|ui| {
+        if style::secondary_button(ui, "Save Graph").clicked() {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_title("Save node graph")
+                .add_filter("JSON", &["json"])
+                .set_file_name("node_graph.json")
+                .save_file()
+            {
+                match serde_json::to_string_pretty(&state.graph.save()) {
+                    Ok(json) => {
+                        if let Err(e) = std::fs::write(&path, json) {
+                            error!("Failed to save graph: {e}");
+                            state.load_error = Some(format!("Save failed: {e}"));
+                        } else {
+                            info!("Saved graph to {}", path.display());
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to serialize graph: {e}");
+                        state.load_error = Some(format!("Serialize failed: {e}"));
+                    }
+                }
+            }
+        }
+
+        if style::secondary_button(ui, "Load Graph").clicked() {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_title("Load node graph")
+                .add_filter("JSON", &["json"])
+                .pick_file()
+            {
+                match std::fs::read_to_string(&path) {
+                    Ok(json) => match serde_json::from_str::<SavedGraph>(&json) {
+                        Ok(saved) => {
+                            state.graph = NodeGraph::load(saved);
+                            state.load_error = None;
+                            info!("Loaded graph from {}", path.display());
+                        }
+                        Err(e) => {
+                            error!("Failed to parse graph file: {e}");
+                            state.load_error = Some(format!("Load failed: {e}"));
+                        }
+                    },
+                    Err(e) => {
+                        error!("Failed to read graph file: {e}");
+                        state.load_error = Some(format!("Load failed: {e}"));
+                    }
+                }
+            }
+        }
+    });
+}
 
 fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
     ui.horizontal_wrapped(|ui| {

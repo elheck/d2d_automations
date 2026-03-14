@@ -2,6 +2,7 @@ use super::language::Language;
 use crate::models::Card;
 use crate::stock_analysis::SortOrder;
 use eframe::egui;
+use serde::{Deserialize, Serialize};
 
 type CardMatch = (Card, i32, String);
 /// (card_name, needed_quantity, matched_cards)
@@ -224,7 +225,7 @@ pub type NodeId = usize;
 
 // ── Filter parameter enums ────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ConditionFilter {
     Any,
     Nm,
@@ -250,7 +251,7 @@ impl ConditionFilter {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum LanguageFilter {
     Any,
     English,
@@ -283,7 +284,7 @@ impl LanguageFilter {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum FoilFilter {
     Any,
     FoilOnly,
@@ -303,7 +304,7 @@ impl FoilFilter {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum RarityFilter {
     Any,
     Common,
@@ -335,7 +336,7 @@ impl RarityFilter {
 
 // ── Node kinds ────────────────────────────────────────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum NodeKind {
     // Source / sink
     CsvSource,
@@ -411,7 +412,7 @@ pub struct GraphNode {
     pub pos: egui::Pos2,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Wire {
     pub from_node: NodeId,
     pub from_port: usize,
@@ -464,6 +465,63 @@ impl NodeGraph {
     pub fn node_mut(&mut self, id: NodeId) -> Option<&mut GraphNode> {
         self.nodes.iter_mut().find(|n| n.id == id)
     }
+
+    pub fn save(&self) -> SavedGraph {
+        SavedGraph {
+            nodes: self
+                .nodes
+                .iter()
+                .map(|n| SavedNode {
+                    id: n.id,
+                    kind: n.kind.clone(),
+                    x: n.pos.x,
+                    y: n.pos.y,
+                })
+                .collect(),
+            wires: self.wires.clone(),
+            canvas_offset_x: self.canvas_offset.x,
+            canvas_offset_y: self.canvas_offset.y,
+            canvas_zoom: self.canvas_zoom,
+        }
+    }
+
+    pub fn load(saved: SavedGraph) -> Self {
+        let max_id = saved.nodes.iter().map(|n| n.id).max().unwrap_or(0);
+        Self {
+            nodes: saved
+                .nodes
+                .into_iter()
+                .map(|n| GraphNode {
+                    id: n.id,
+                    kind: n.kind,
+                    pos: egui::pos2(n.x, n.y),
+                })
+                .collect(),
+            wires: saved.wires,
+            next_id: max_id + 1,
+            canvas_offset: egui::vec2(saved.canvas_offset_x, saved.canvas_offset_y),
+            canvas_zoom: saved.canvas_zoom,
+            drag: None,
+            pending_wire: None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SavedNode {
+    pub id: NodeId,
+    pub kind: NodeKind,
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SavedGraph {
+    pub nodes: Vec<SavedNode>,
+    pub wires: Vec<Wire>,
+    pub canvas_offset_x: f32,
+    pub canvas_offset_y: f32,
+    pub canvas_zoom: f32,
 }
 
 #[derive(Default)]
