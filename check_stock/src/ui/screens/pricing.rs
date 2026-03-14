@@ -172,7 +172,10 @@ fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
                 .color(style::TEXT_MUTED)
                 .size(12.0),
         );
-        if style::secondary_button(ui, "▼ Condition").clicked() {
+        if style::secondary_button(ui, "▼ Condition")
+            .on_hover_text("Filter cards by condition (NM, EX, GD, LP, PL)")
+            .clicked()
+        {
             graph.add_node(
                 NodeKind::FilterCondition {
                     condition: ConditionFilter::Any,
@@ -180,7 +183,10 @@ fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
                 free_pos(graph),
             );
         }
-        if style::secondary_button(ui, "▼ Language").clicked() {
+        if style::secondary_button(ui, "▼ Language")
+            .on_hover_text("Filter cards by language (English, German, French, …)")
+            .clicked()
+        {
             graph.add_node(
                 NodeKind::FilterLanguage {
                     language: LanguageFilter::Any,
@@ -188,7 +194,10 @@ fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
                 free_pos(graph),
             );
         }
-        if style::secondary_button(ui, "▼ Foil").clicked() {
+        if style::secondary_button(ui, "▼ Foil")
+            .on_hover_text("Filter to foil-only or non-foil-only cards")
+            .clicked()
+        {
             graph.add_node(
                 NodeKind::FilterFoil {
                     mode: FoilFilter::Any,
@@ -196,7 +205,10 @@ fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
                 free_pos(graph),
             );
         }
-        if style::secondary_button(ui, "▼ Price Range").clicked() {
+        if style::secondary_button(ui, "▼ Price Range")
+            .on_hover_text("Filter cards whose price falls within a min–max range (€)")
+            .clicked()
+        {
             graph.add_node(
                 NodeKind::FilterPrice {
                     min: 0.0,
@@ -205,7 +217,10 @@ fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
                 free_pos(graph),
             );
         }
-        if style::secondary_button(ui, "▼ Rarity").clicked() {
+        if style::secondary_button(ui, "▼ Rarity")
+            .on_hover_text("Filter cards by rarity (Common, Uncommon, Rare, Mythic)")
+            .clicked()
+        {
             graph.add_node(
                 NodeKind::FilterRarity {
                     rarity: RarityFilter::Any,
@@ -213,7 +228,10 @@ fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
                 free_pos(graph),
             );
         }
-        if style::secondary_button(ui, "▼ Name").clicked() {
+        if style::secondary_button(ui, "▼ Name")
+            .on_hover_text("Filter cards whose name contains a search term (case-insensitive)")
+            .clicked()
+        {
             graph.add_node(
                 NodeKind::FilterName {
                     term: String::new(),
@@ -221,7 +239,10 @@ fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
                 free_pos(graph),
             );
         }
-        if style::secondary_button(ui, "▼ Set").clicked() {
+        if style::secondary_button(ui, "▼ Set")
+            .on_hover_text("Filter cards by set name or set code (case-insensitive)")
+            .clicked()
+        {
             graph.add_node(
                 NodeKind::FilterSet {
                     term: String::new(),
@@ -229,7 +250,10 @@ fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
                 free_pos(graph),
             );
         }
-        if style::secondary_button(ui, "▼ Location").clicked() {
+        if style::secondary_button(ui, "▼ Location")
+            .on_hover_text("Filter cards by storage location (e.g. A1_S1_R1_C1)")
+            .clicked()
+        {
             graph.add_node(
                 NodeKind::FilterLocation {
                     term: String::new(),
