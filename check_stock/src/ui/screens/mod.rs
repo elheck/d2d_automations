@@ -1,4 +1,5 @@
 mod picking;
+mod pricing;
 mod search;
 mod stock_analysis;
 mod stock_checker;
@@ -6,6 +7,7 @@ mod stock_listing;
 mod welcome;
 
 pub use picking::{PickingScreen, PickingState};
+pub use pricing::PricingScreen;
 pub use search::SearchScreen;
 pub use stock_analysis::StockAnalysisScreen;
 pub use stock_checker::StockCheckerScreen;

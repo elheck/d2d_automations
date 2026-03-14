@@ -15,6 +15,7 @@ pub enum Screen {
     StockListing,
     Search,
     Picking,
+    Pricing,
 }
 
 #[derive(PartialEq)]
@@ -215,6 +216,13 @@ pub struct SearchFields {
     pub name_es: bool,
     pub name_fr: bool,
     pub name_it: bool,
+}
+
+#[derive(Default)]
+pub struct PricingState {
+    pub csv_path: String,
+    pub cards: Vec<crate::models::Card>,
+    pub load_error: Option<String>,
 }
 
 impl Default for SearchState {
