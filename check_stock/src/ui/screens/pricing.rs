@@ -1,5 +1,6 @@
 use crate::{
     io::read_csv,
+    models::Card,
     ui::{
         components::FilePicker,
         state::{
@@ -11,6 +12,7 @@ use crate::{
 };
 use eframe::egui;
 use log::{error, info};
+use std::collections::{HashMap, VecDeque};
 
 // ── Visual constants ──────────────────────────────────────────────────────────
 
@@ -172,6 +174,30 @@ fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
                 free_pos(graph),
             );
         }
+        if style::secondary_button(ui, "▼ Name").clicked() {
+            graph.add_node(
+                NodeKind::FilterName {
+                    term: String::new(),
+                },
+                free_pos(graph),
+            );
+        }
+        if style::secondary_button(ui, "▼ Set").clicked() {
+            graph.add_node(
+                NodeKind::FilterSet {
+                    term: String::new(),
+                },
+                free_pos(graph),
+            );
+        }
+        if style::secondary_button(ui, "▼ Location").clicked() {
+            graph.add_node(
+                NodeKind::FilterLocation {
+                    term: String::new(),
+                },
+                free_pos(graph),
+            );
+        }
 
         ui.add_space(16.0);
         ui.label(
@@ -214,6 +240,9 @@ fn show_canvas(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut PricingState)
         })
         .collect();
 
+    // Evaluate graph to get output card counts for every node
+    let counts = evaluate_counts(&state.graph.nodes, &state.graph.wires, &state.cards);
+
     // Draw committed wires (behind nodes)
     for wire in &state.graph.wires {
         let fr = rects
@@ -245,10 +274,10 @@ fn show_canvas(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut PricingState)
         }
     }
 
-    // Draw node chrome (background, header, port circles, labels)
+    // Draw node chrome (background, header, port circles, labels + count)
     for node in &state.graph.nodes {
         if let Some(rect) = rects.iter().find(|(id, _)| *id == node.id).map(|(_, r)| *r) {
-            draw_node_chrome(&painter, node, rect);
+            draw_node_chrome(&painter, node, rect, counts.get(&node.id).copied());
         }
     }
 
@@ -334,7 +363,12 @@ fn draw_bezier(
     }
 }
 
-fn draw_node_chrome(painter: &egui::Painter, node: &GraphNode, rect: egui::Rect) {
+fn draw_node_chrome(
+    painter: &egui::Painter,
+    node: &GraphNode,
+    rect: egui::Rect,
+    output_count: Option<usize>,
+) {
     let accent = node.kind.accent_color();
 
     // Node body
@@ -388,7 +422,7 @@ fn draw_node_chrome(painter: &egui::Painter, node: &GraphNode, rect: egui::Rect)
         );
     }
 
-    // Output ports (right edge)
+    // Output ports (right edge) — label shows card count when available
     for i in 0..node.kind.output_count() {
         let pos = out_port_pos(rect, i);
         painter.circle(
@@ -397,12 +431,34 @@ fn draw_node_chrome(painter: &egui::Painter, node: &GraphNode, rect: egui::Rect)
             PORT_OUT_COLOR,
             egui::Stroke::new(1.5, egui::Color32::WHITE),
         );
+        let (count_text, count_color) = match output_count {
+            None => ("—".to_string(), egui::Color32::from_rgb(100, 110, 140)),
+            Some(0) => ("0".to_string(), egui::Color32::from_rgb(220, 120, 60)),
+            Some(n) => (format!("{n}"), egui::Color32::from_rgb(190, 215, 255)),
+        };
         painter.text(
             pos - egui::vec2(PORT_R + 5.0, 0.0),
             egui::Align2::RIGHT_CENTER,
-            "out",
-            egui::FontId::proportional(10.0),
-            egui::Color32::from_rgb(155, 170, 200),
+            &count_text,
+            egui::FontId::proportional(11.0),
+            count_color,
+        );
+    }
+
+    // Output node: show incoming count prominently in the body (no output port)
+    if matches!(node.kind, NodeKind::Output) {
+        let body_center = egui::pos2(rect.center().x, rect.min.y + HEADER_H + PORT_ROW_H * 0.5);
+        let (text, color) = match output_count {
+            None => ("—".to_string(), egui::Color32::from_rgb(100, 110, 140)),
+            Some(0) => ("0 cards".to_string(), egui::Color32::from_rgb(220, 120, 60)),
+            Some(n) => (format!("{n} cards"), egui::Color32::from_rgb(255, 215, 80)),
+        };
+        painter.text(
+            body_center,
+            egui::Align2::CENTER_CENTER,
+            &text,
+            egui::FontId::proportional(13.0),
+            color,
         );
     }
 }
@@ -535,6 +591,25 @@ fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect) {
             });
         }
 
+        NodeKind::FilterName { term } => {
+            ui.put(
+                param_row_rect(rect, port_rows, 0),
+                egui::TextEdit::singleline(term).hint_text("name contains…"),
+            );
+        }
+        NodeKind::FilterSet { term } => {
+            ui.put(
+                param_row_rect(rect, port_rows, 0),
+                egui::TextEdit::singleline(term).hint_text("set name or code…"),
+            );
+        }
+        NodeKind::FilterLocation { term } => {
+            ui.put(
+                param_row_rect(rect, port_rows, 0),
+                egui::TextEdit::singleline(term).hint_text("location contains…"),
+            );
+        }
+
         NodeKind::CsvSource | NodeKind::Output => {}
     }
 }
@@ -662,5 +737,198 @@ fn handle_interactions(
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         graph.pending_wire = None;
         graph.drag = None;
+    }
+}
+
+// ── Graph evaluation ──────────────────────────────────────────────────────────
+
+/// Returns the output card count for every node, evaluated in topological order.
+/// Uses card indices (not clones) for efficiency. Price-modifying nodes do not
+/// affect downstream filter counts (acceptable approximation for display).
+fn evaluate_counts(
+    nodes: &[GraphNode],
+    wires: &[Wire],
+    all_cards: &[Card],
+) -> HashMap<NodeId, usize> {
+    if all_cards.is_empty() {
+        return HashMap::new();
+    }
+
+    // incoming[(to_node, to_port)] = from_node
+    let incoming: HashMap<(NodeId, usize), NodeId> = wires
+        .iter()
+        .map(|w| ((w.to_node, w.to_port), w.from_node))
+        .collect();
+
+    // Topological sort (Kahn's algorithm)
+    let mut adj: HashMap<NodeId, Vec<NodeId>> = nodes.iter().map(|n| (n.id, vec![])).collect();
+    let mut in_deg: HashMap<NodeId, usize> = nodes.iter().map(|n| (n.id, 0)).collect();
+    for w in wires {
+        adj.entry(w.from_node).or_default().push(w.to_node);
+        *in_deg.entry(w.to_node).or_insert(0) += 1;
+    }
+    let mut queue: VecDeque<NodeId> = in_deg
+        .iter()
+        .filter(|(_, &d)| d == 0)
+        .map(|(&id, _)| id)
+        .collect();
+    let mut topo: Vec<NodeId> = Vec::with_capacity(nodes.len());
+    let mut deg = in_deg.clone();
+    while let Some(id) = queue.pop_front() {
+        topo.push(id);
+        if let Some(neighbors) = adj.get(&id) {
+            for &next in neighbors {
+                let d = deg.entry(next).or_insert(1);
+                *d -= 1;
+                if *d == 0 {
+                    queue.push_back(next);
+                }
+            }
+        }
+    }
+
+    // Evaluate: propagate index sets through the graph
+    let all_indices: Vec<usize> = (0..all_cards.len()).collect();
+    let mut outputs: HashMap<NodeId, Vec<usize>> = HashMap::new();
+
+    for id in topo {
+        let node = match nodes.iter().find(|n| n.id == id) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        let input: Vec<usize> = if node.kind.input_count() == 0 {
+            all_indices.clone()
+        } else {
+            incoming
+                .get(&(id, 0))
+                .and_then(|&from| outputs.get(&from))
+                .cloned()
+                .unwrap_or_default()
+        };
+
+        let output = filter_indices(&node.kind, input, all_cards);
+        outputs.insert(id, output);
+    }
+
+    outputs.into_iter().map(|(id, v)| (id, v.len())).collect()
+}
+
+/// Apply a node's filtering logic to a set of card indices.
+/// Price-transform nodes pass indices unchanged (counts are unaffected by price edits).
+fn filter_indices(kind: &NodeKind, indices: Vec<usize>, cards: &[Card]) -> Vec<usize> {
+    match kind {
+        NodeKind::CsvSource
+        | NodeKind::Output
+        | NodeKind::PriceMultiply { .. }
+        | NodeKind::PriceFloor { .. }
+        | NodeKind::PriceCap { .. }
+        | NodeKind::PriceRound { .. } => indices,
+
+        NodeKind::FilterCondition { condition } => {
+            if matches!(condition, ConditionFilter::Any) {
+                return indices;
+            }
+            let min = condition_rank(condition.as_str());
+            indices
+                .into_iter()
+                .filter(|&i| condition_rank(&cards[i].condition) >= min)
+                .collect()
+        }
+
+        NodeKind::FilterLanguage { language } => {
+            if matches!(language, LanguageFilter::Any) {
+                return indices;
+            }
+            let t = language.as_str();
+            indices
+                .into_iter()
+                .filter(|&i| cards[i].language.eq_ignore_ascii_case(t))
+                .collect()
+        }
+
+        NodeKind::FilterFoil { mode } => match mode {
+            FoilFilter::Any => indices,
+            FoilFilter::FoilOnly => indices
+                .into_iter()
+                .filter(|&i| cards[i].is_foil_card())
+                .collect(),
+            FoilFilter::NonFoilOnly => indices
+                .into_iter()
+                .filter(|&i| !cards[i].is_foil_card())
+                .collect(),
+        },
+
+        NodeKind::FilterPrice { min, max } => indices
+            .into_iter()
+            .filter(|&i| {
+                let p = cards[i].price.parse::<f64>().unwrap_or(0.0);
+                p >= *min && p <= *max
+            })
+            .collect(),
+
+        NodeKind::FilterRarity { rarity } => {
+            if matches!(rarity, RarityFilter::Any) {
+                return indices;
+            }
+            let t = rarity.as_str();
+            indices
+                .into_iter()
+                .filter(|&i| cards[i].rarity.eq_ignore_ascii_case(t))
+                .collect()
+        }
+
+        NodeKind::FilterName { term } => {
+            if term.is_empty() {
+                return indices;
+            }
+            let t = term.to_lowercase();
+            indices
+                .into_iter()
+                .filter(|&i| cards[i].name.to_lowercase().contains(&t))
+                .collect()
+        }
+
+        NodeKind::FilterSet { term } => {
+            if term.is_empty() {
+                return indices;
+            }
+            let t = term.to_lowercase();
+            indices
+                .into_iter()
+                .filter(|&i| {
+                    cards[i].set.to_lowercase().contains(&t)
+                        || cards[i].set_code.to_lowercase().contains(&t)
+                })
+                .collect()
+        }
+
+        NodeKind::FilterLocation { term } => {
+            if term.is_empty() {
+                return indices;
+            }
+            let t = term.to_lowercase();
+            indices
+                .into_iter()
+                .filter(|&i| {
+                    cards[i]
+                        .location
+                        .as_deref()
+                        .map(|l| l.to_lowercase().contains(&t))
+                        .unwrap_or(false)
+                })
+                .collect()
+        }
+    }
+}
+
+fn condition_rank(condition: &str) -> u8 {
+    match condition.to_uppercase().as_str() {
+        "MT" | "NM" => 5,
+        "EX" => 4,
+        "GD" => 3,
+        "LP" => 2,
+        "PL" => 1,
+        _ => 0,
     }
 }

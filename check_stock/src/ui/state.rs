@@ -351,6 +351,9 @@ pub enum NodeKind {
     FilterFoil { mode: FoilFilter },
     FilterPrice { min: f64, max: f64 },
     FilterRarity { rarity: RarityFilter },
+    FilterName { term: String },
+    FilterSet { term: String },
+    FilterLocation { term: String },
 }
 
 impl NodeKind {
@@ -367,6 +370,9 @@ impl NodeKind {
             Self::FilterFoil { .. } => "Filter Foil",
             Self::FilterPrice { .. } => "Filter Price",
             Self::FilterRarity { .. } => "Filter Rarity",
+            Self::FilterName { .. } => "Filter Name",
+            Self::FilterSet { .. } => "Filter Set",
+            Self::FilterLocation { .. } => "Filter Location",
         }
     }
 
@@ -383,6 +389,9 @@ impl NodeKind {
             Self::FilterFoil { .. } => egui::Color32::from_rgb(110, 70, 155),
             Self::FilterPrice { .. } => egui::Color32::from_rgb(30, 140, 110),
             Self::FilterRarity { .. } => egui::Color32::from_rgb(155, 90, 40),
+            Self::FilterName { .. } => egui::Color32::from_rgb(35, 148, 125),
+            Self::FilterSet { .. } => egui::Color32::from_rgb(45, 115, 155),
+            Self::FilterLocation { .. } => egui::Color32::from_rgb(140, 80, 45),
         }
     }
 
