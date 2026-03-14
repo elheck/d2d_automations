@@ -3,7 +3,7 @@ use crate::{
     models::Card,
     ui::state::{
         ConditionFilter, FoilFilter, GraphNode, LanguageFilter, NodeGraph, NodeKind, RarityFilter,
-        Wire,
+        SavedGraph, Wire,
     },
 };
 
@@ -959,4 +959,213 @@ fn rarity_filter_all_covered() {
     let all = crate::ui::state::RarityFilter::all();
     assert!(all.contains(&RarityFilter::Any));
     assert!(all.contains(&RarityFilter::Mythic));
+}
+
+// ── NodeGraph::save / NodeGraph::load ─────────────────────────────────────────
+
+fn make_graph_with_filter() -> (NodeGraph, usize, usize, usize) {
+    let mut g = NodeGraph::default();
+    let csv_id = g
+        .nodes
+        .iter()
+        .find(|n| matches!(n.kind, NodeKind::CsvSource))
+        .unwrap()
+        .id;
+    let out_id = g
+        .nodes
+        .iter()
+        .find(|n| matches!(n.kind, NodeKind::Output))
+        .unwrap()
+        .id;
+    let filter_id = g.add_node(
+        NodeKind::FilterCondition {
+            condition: ConditionFilter::Nm,
+        },
+        eframe::egui::pos2(200.0, 50.0),
+    );
+    g.wires.push(Wire {
+        from_node: csv_id,
+        from_port: 0,
+        to_node: filter_id,
+        to_port: 0,
+    });
+    g.wires.push(Wire {
+        from_node: filter_id,
+        from_port: 0,
+        to_node: out_id,
+        to_port: 0,
+    });
+    (g, csv_id, filter_id, out_id)
+}
+
+#[test]
+fn save_captures_node_count_and_positions() {
+    let (g, _, filter_id, _) = make_graph_with_filter();
+    let saved = g.save();
+    assert_eq!(saved.nodes.len(), 3);
+    let saved_filter = saved.nodes.iter().find(|n| n.id == filter_id).unwrap();
+    assert!((saved_filter.x - 200.0).abs() < f32::EPSILON);
+    assert!((saved_filter.y - 50.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn save_captures_wires() {
+    let (g, csv_id, filter_id, out_id) = make_graph_with_filter();
+    let saved = g.save();
+    assert_eq!(saved.wires.len(), 2);
+    assert!(saved
+        .wires
+        .iter()
+        .any(|w| w.from_node == csv_id && w.to_node == filter_id));
+    assert!(saved
+        .wires
+        .iter()
+        .any(|w| w.from_node == filter_id && w.to_node == out_id));
+}
+
+#[test]
+fn save_captures_canvas_state() {
+    let mut g = NodeGraph::default();
+    g.canvas_offset = eframe::egui::vec2(42.0, -7.5);
+    g.canvas_zoom = 1.5;
+    let saved = g.save();
+    assert!((saved.canvas_offset_x - 42.0).abs() < f32::EPSILON);
+    assert!((saved.canvas_offset_y - (-7.5)).abs() < f32::EPSILON);
+    assert!((saved.canvas_zoom - 1.5).abs() < f32::EPSILON);
+}
+
+#[test]
+fn load_restores_nodes_and_wires() {
+    let (original, csv_id, filter_id, out_id) = make_graph_with_filter();
+    let saved = original.save();
+    let restored = NodeGraph::load(saved);
+
+    assert_eq!(restored.nodes.len(), 3);
+    assert!(restored.nodes.iter().any(|n| n.id == csv_id));
+    assert!(restored.nodes.iter().any(|n| n.id == filter_id));
+    assert!(restored.nodes.iter().any(|n| n.id == out_id));
+    assert_eq!(restored.wires.len(), 2);
+}
+
+#[test]
+fn load_restores_node_positions() {
+    let (original, _, filter_id, _) = make_graph_with_filter();
+    let saved = original.save();
+    let restored = NodeGraph::load(saved);
+    let node = restored.nodes.iter().find(|n| n.id == filter_id).unwrap();
+    assert!((node.pos.x - 200.0).abs() < f32::EPSILON);
+    assert!((node.pos.y - 50.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn load_restores_canvas_state() {
+    let mut g = NodeGraph::default();
+    g.canvas_offset = eframe::egui::vec2(100.0, 30.0);
+    g.canvas_zoom = 0.75;
+    let restored = NodeGraph::load(g.save());
+    assert!((restored.canvas_offset.x - 100.0).abs() < f32::EPSILON);
+    assert!((restored.canvas_offset.y - 30.0).abs() < f32::EPSILON);
+    assert!((restored.canvas_zoom - 0.75).abs() < f32::EPSILON);
+}
+
+#[test]
+fn load_sets_next_id_beyond_max_existing() {
+    let (original, _, _, _) = make_graph_with_filter();
+    let max_id = original.nodes.iter().map(|n| n.id).max().unwrap();
+    let mut restored = NodeGraph::load(original.save());
+    // Adding a new node must get an id higher than all restored ids
+    let new_id = restored.add_node(NodeKind::CsvSource, eframe::egui::pos2(0.0, 0.0));
+    assert!(new_id > max_id);
+}
+
+#[test]
+fn load_then_add_node_ids_are_unique() {
+    let (original, _, _, _) = make_graph_with_filter();
+    let mut restored = NodeGraph::load(original.save());
+    let id_a = restored.add_node(NodeKind::Output, eframe::egui::pos2(0.0, 0.0));
+    let id_b = restored.add_node(NodeKind::Output, eframe::egui::pos2(0.0, 0.0));
+    let all_ids: Vec<usize> = restored.nodes.iter().map(|n| n.id).collect();
+    assert_ne!(id_a, id_b);
+    // All ids in the graph are unique
+    let unique: std::collections::HashSet<usize> = all_ids.iter().copied().collect();
+    assert_eq!(unique.len(), restored.nodes.len());
+}
+
+#[test]
+fn round_trip_preserves_all_node_kinds() {
+    use crate::ui::state::{FoilFilter, LanguageFilter, RarityFilter};
+    let mut g = NodeGraph::default();
+    let kinds = vec![
+        NodeKind::FilterCondition {
+            condition: ConditionFilter::Gd,
+        },
+        NodeKind::FilterLanguage {
+            language: LanguageFilter::German,
+        },
+        NodeKind::FilterFoil {
+            mode: FoilFilter::FoilOnly,
+        },
+        NodeKind::FilterPrice {
+            min: 1.5,
+            max: 9.99,
+        },
+        NodeKind::FilterRarity {
+            rarity: RarityFilter::Mythic,
+        },
+        NodeKind::FilterName {
+            term: "bolt".into(),
+        },
+        NodeKind::FilterSet {
+            term: "lea".into(),
+        },
+        NodeKind::FilterLocation {
+            term: "A1_S2".into(),
+        },
+    ];
+    for kind in &kinds {
+        g.add_node(kind.clone(), eframe::egui::pos2(0.0, 0.0));
+    }
+    let restored = NodeGraph::load(g.save());
+
+    // Spot-check a few variants survive the round-trip
+    assert!(restored.nodes.iter().any(
+        |n| matches!(&n.kind, NodeKind::FilterLanguage { language } if *language == LanguageFilter::German)
+    ));
+    assert!(restored.nodes.iter().any(
+        |n| matches!(&n.kind, NodeKind::FilterPrice { min, .. } if (*min - 1.5).abs() < 1e-6)
+    ));
+    assert!(restored
+        .nodes
+        .iter()
+        .any(|n| matches!(&n.kind, NodeKind::FilterName { term } if term == "bolt")));
+    assert!(restored
+        .nodes
+        .iter()
+        .any(|n| matches!(&n.kind, NodeKind::FilterLocation { term } if term == "A1_S2")));
+}
+
+#[test]
+fn json_round_trip_is_valid() {
+    let (g, _, _, _) = make_graph_with_filter();
+    let saved = g.save();
+    let json = serde_json::to_string(&saved).expect("serialize failed");
+    let deserialized: SavedGraph = serde_json::from_str(&json).expect("deserialize failed");
+    let restored = NodeGraph::load(deserialized);
+    assert_eq!(restored.nodes.len(), 3);
+    assert_eq!(restored.wires.len(), 2);
+}
+
+#[test]
+fn json_is_human_readable() {
+    let mut g = NodeGraph::default();
+    g.add_node(
+        NodeKind::FilterName {
+            term: "Jace".into(),
+        },
+        eframe::egui::pos2(0.0, 0.0),
+    );
+    let json = serde_json::to_string_pretty(&g.save()).expect("serialize failed");
+    assert!(json.contains("FilterName"));
+    assert!(json.contains("Jace"));
+    assert!(json.contains("canvas_zoom"));
 }
