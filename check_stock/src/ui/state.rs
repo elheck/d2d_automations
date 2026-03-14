@@ -222,36 +222,167 @@ pub struct SearchFields {
 
 pub type NodeId = usize;
 
+// ── Filter parameter enums ────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum ConditionFilter {
+    Any,
+    Nm,
+    Ex,
+    Gd,
+    Lp,
+    Pl,
+}
+
+impl ConditionFilter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Any => "Any",
+            Self::Nm => "NM",
+            Self::Ex => "EX",
+            Self::Gd => "GD",
+            Self::Lp => "LP",
+            Self::Pl => "PL",
+        }
+    }
+    pub fn all() -> &'static [Self] {
+        &[Self::Any, Self::Nm, Self::Ex, Self::Gd, Self::Lp, Self::Pl]
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum LanguageFilter {
+    Any,
+    English,
+    German,
+    French,
+    Spanish,
+    Italian,
+}
+
+impl LanguageFilter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Any => "Any",
+            Self::English => "English",
+            Self::German => "German",
+            Self::French => "French",
+            Self::Spanish => "Spanish",
+            Self::Italian => "Italian",
+        }
+    }
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::Any,
+            Self::English,
+            Self::German,
+            Self::French,
+            Self::Spanish,
+            Self::Italian,
+        ]
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum FoilFilter {
+    Any,
+    FoilOnly,
+    NonFoilOnly,
+}
+
+impl FoilFilter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Any => "Any",
+            Self::FoilOnly => "Foil only",
+            Self::NonFoilOnly => "Non-foil only",
+        }
+    }
+    pub fn all() -> &'static [Self] {
+        &[Self::Any, Self::FoilOnly, Self::NonFoilOnly]
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum RarityFilter {
+    Any,
+    Common,
+    Uncommon,
+    Rare,
+    Mythic,
+}
+
+impl RarityFilter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Any => "Any",
+            Self::Common => "Common",
+            Self::Uncommon => "Uncommon",
+            Self::Rare => "Rare",
+            Self::Mythic => "Mythic",
+        }
+    }
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::Any,
+            Self::Common,
+            Self::Uncommon,
+            Self::Rare,
+            Self::Mythic,
+        ]
+    }
+}
+
+// ── Node kinds ────────────────────────────────────────────────────────────────
+
 #[derive(Clone)]
 pub enum NodeKind {
+    // Source / sink
     CsvSource,
+    Output,
+    // Price transforms
     PriceMultiply { factor: f64 },
     PriceFloor { min: f64 },
     PriceCap { max: f64 },
     PriceRound { step: f64 },
-    Output,
+    // Filters
+    FilterCondition { condition: ConditionFilter },
+    FilterLanguage { language: LanguageFilter },
+    FilterFoil { mode: FoilFilter },
+    FilterPrice { min: f64, max: f64 },
+    FilterRarity { rarity: RarityFilter },
 }
 
 impl NodeKind {
     pub fn title(&self) -> &'static str {
         match self {
             Self::CsvSource => "CSV Source",
+            Self::Output => "Output",
             Self::PriceMultiply { .. } => "Multiply Price",
             Self::PriceFloor { .. } => "Price Floor",
             Self::PriceCap { .. } => "Price Cap",
             Self::PriceRound { .. } => "Round Price",
-            Self::Output => "Output",
+            Self::FilterCondition { .. } => "Filter Condition",
+            Self::FilterLanguage { .. } => "Filter Language",
+            Self::FilterFoil { .. } => "Filter Foil",
+            Self::FilterPrice { .. } => "Filter Price",
+            Self::FilterRarity { .. } => "Filter Rarity",
         }
     }
 
     pub fn accent_color(&self) -> egui::Color32 {
         match self {
             Self::CsvSource => egui::Color32::from_rgb(50, 100, 170),
+            Self::Output => egui::Color32::from_rgb(150, 115, 40),
             Self::PriceMultiply { .. } => egui::Color32::from_rgb(60, 140, 80),
             Self::PriceFloor { .. } => egui::Color32::from_rgb(140, 100, 50),
             Self::PriceCap { .. } => egui::Color32::from_rgb(140, 55, 90),
             Self::PriceRound { .. } => egui::Color32::from_rgb(90, 80, 155),
-            Self::Output => egui::Color32::from_rgb(150, 115, 40),
+            Self::FilterCondition { .. } => egui::Color32::from_rgb(30, 125, 140),
+            Self::FilterLanguage { .. } => egui::Color32::from_rgb(40, 105, 160),
+            Self::FilterFoil { .. } => egui::Color32::from_rgb(110, 70, 155),
+            Self::FilterPrice { .. } => egui::Color32::from_rgb(30, 140, 110),
+            Self::FilterRarity { .. } => egui::Color32::from_rgb(155, 90, 40),
         }
     }
 
@@ -272,6 +403,7 @@ impl NodeKind {
     pub fn param_count(&self) -> usize {
         match self {
             Self::CsvSource | Self::Output => 0,
+            Self::FilterPrice { .. } => 2,
             _ => 1,
         }
     }

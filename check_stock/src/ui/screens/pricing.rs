@@ -2,7 +2,10 @@ use crate::{
     io::read_csv,
     ui::{
         components::FilePicker,
-        state::{AppState, GraphNode, NodeGraph, NodeId, NodeKind, PricingState, Screen, Wire},
+        state::{
+            AppState, ConditionFilter, FoilFilter, GraphNode, LanguageFilter, NodeGraph, NodeId,
+            NodeKind, PricingState, RarityFilter, Screen, Wire,
+        },
         style,
     },
 };
@@ -100,9 +103,9 @@ impl PricingScreen {
 // ── Toolbar ───────────────────────────────────────────────────────────────────
 
 fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(
-            egui::RichText::new("Add node:")
+            egui::RichText::new("Price:")
                 .color(style::TEXT_MUTED)
                 .size(12.0),
         );
@@ -118,10 +121,62 @@ fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
         if style::secondary_button(ui, "○ Round").clicked() {
             graph.add_node(NodeKind::PriceRound { step: 0.5 }, free_pos(graph));
         }
+
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(4.0);
+
+        ui.label(
+            egui::RichText::new("Filter:")
+                .color(style::TEXT_MUTED)
+                .size(12.0),
+        );
+        if style::secondary_button(ui, "▼ Condition").clicked() {
+            graph.add_node(
+                NodeKind::FilterCondition {
+                    condition: ConditionFilter::Any,
+                },
+                free_pos(graph),
+            );
+        }
+        if style::secondary_button(ui, "▼ Language").clicked() {
+            graph.add_node(
+                NodeKind::FilterLanguage {
+                    language: LanguageFilter::Any,
+                },
+                free_pos(graph),
+            );
+        }
+        if style::secondary_button(ui, "▼ Foil").clicked() {
+            graph.add_node(
+                NodeKind::FilterFoil {
+                    mode: FoilFilter::Any,
+                },
+                free_pos(graph),
+            );
+        }
+        if style::secondary_button(ui, "▼ Price Range").clicked() {
+            graph.add_node(
+                NodeKind::FilterPrice {
+                    min: 0.0,
+                    max: 999.0,
+                },
+                free_pos(graph),
+            );
+        }
+        if style::secondary_button(ui, "▼ Rarity").clicked() {
+            graph.add_node(
+                NodeKind::FilterRarity {
+                    rarity: RarityFilter::Any,
+                },
+                free_pos(graph),
+            );
+        }
+
         ui.add_space(16.0);
         ui.label(
             egui::RichText::new(
-                "Right-click node to remove  |  Drag header to move  |  Drag output port to wire",
+                "Right-click to remove  |  Drag header to move  |  Drag output port to wire",
             )
             .color(style::TEXT_MUTED)
             .size(11.0),
@@ -354,18 +409,23 @@ fn draw_node_chrome(painter: &egui::Painter, node: &GraphNode, rect: egui::Rect)
 
 // ── Parameter widgets ─────────────────────────────────────────────────────────
 
+/// Absolute screen-space rect for one parameter row inside a node.
+fn param_row_rect(rect: egui::Rect, port_rows: usize, row: usize) -> egui::Rect {
+    let y = rect.min.y + HEADER_H + port_rows as f32 * PORT_ROW_H + 4.0 + row as f32 * PARAM_H;
+    egui::Rect::from_min_size(
+        egui::pos2(rect.min.x + 8.0, y),
+        egui::vec2(NODE_W - 16.0, PARAM_H - 8.0),
+    )
+}
+
 fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect) {
     let port_rows = node.kind.input_count().max(node.kind.output_count());
-    let param_top = rect.min.y + HEADER_H + port_rows as f32 * PORT_ROW_H + 4.0;
-    let param_rect = egui::Rect::from_min_size(
-        egui::pos2(rect.min.x + 8.0, param_top),
-        egui::vec2(NODE_W - 16.0, PARAM_H - 8.0),
-    );
 
     match &mut node.kind {
+        // ── Price transforms ─────────────────────────────────────────────────
         NodeKind::PriceMultiply { factor } => {
             ui.put(
-                param_rect,
+                param_row_rect(rect, port_rows, 0),
                 egui::DragValue::new(factor)
                     .prefix("× ")
                     .speed(0.01)
@@ -374,7 +434,7 @@ fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect) {
         }
         NodeKind::PriceFloor { min } => {
             ui.put(
-                param_rect,
+                param_row_rect(rect, port_rows, 0),
                 egui::DragValue::new(min)
                     .prefix("min ")
                     .suffix(" €")
@@ -384,7 +444,7 @@ fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect) {
         }
         NodeKind::PriceCap { max } => {
             ui.put(
-                param_rect,
+                param_row_rect(rect, port_rows, 0),
                 egui::DragValue::new(max)
                     .prefix("max ")
                     .suffix(" €")
@@ -394,7 +454,7 @@ fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect) {
         }
         NodeKind::PriceRound { step } => {
             ui.put(
-                param_rect,
+                param_row_rect(rect, port_rows, 0),
                 egui::DragValue::new(step)
                     .prefix("step ")
                     .suffix(" €")
@@ -402,6 +462,79 @@ fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect) {
                     .range(0.01..=100.0),
             );
         }
+
+        // ── Filters ──────────────────────────────────────────────────────────
+        NodeKind::FilterCondition { condition } => {
+            let r = param_row_rect(rect, port_rows, 0);
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(r), |ui| {
+                egui::ComboBox::from_id_salt(("fcond", node.id))
+                    .selected_text(condition.as_str())
+                    .width(r.width())
+                    .show_ui(ui, |ui| {
+                        for &c in ConditionFilter::all() {
+                            ui.selectable_value(condition, c, c.as_str());
+                        }
+                    });
+            });
+        }
+        NodeKind::FilterLanguage { language } => {
+            let r = param_row_rect(rect, port_rows, 0);
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(r), |ui| {
+                egui::ComboBox::from_id_salt(("flang", node.id))
+                    .selected_text(language.as_str())
+                    .width(r.width())
+                    .show_ui(ui, |ui| {
+                        for &l in LanguageFilter::all() {
+                            ui.selectable_value(language, l, l.as_str());
+                        }
+                    });
+            });
+        }
+        NodeKind::FilterFoil { mode } => {
+            let r = param_row_rect(rect, port_rows, 0);
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(r), |ui| {
+                egui::ComboBox::from_id_salt(("ffoil", node.id))
+                    .selected_text(mode.as_str())
+                    .width(r.width())
+                    .show_ui(ui, |ui| {
+                        for &m in FoilFilter::all() {
+                            ui.selectable_value(mode, m, m.as_str());
+                        }
+                    });
+            });
+        }
+        NodeKind::FilterPrice { min, max } => {
+            ui.put(
+                param_row_rect(rect, port_rows, 0),
+                egui::DragValue::new(min)
+                    .prefix("≥ ")
+                    .suffix(" €")
+                    .speed(0.05)
+                    .range(0.0..=99999.0),
+            );
+            ui.put(
+                param_row_rect(rect, port_rows, 1),
+                egui::DragValue::new(max)
+                    .prefix("≤ ")
+                    .suffix(" €")
+                    .speed(0.5)
+                    .range(0.0..=99999.0),
+            );
+        }
+        NodeKind::FilterRarity { rarity } => {
+            let r = param_row_rect(rect, port_rows, 0);
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(r), |ui| {
+                egui::ComboBox::from_id_salt(("frare", node.id))
+                    .selected_text(rarity.as_str())
+                    .width(r.width())
+                    .show_ui(ui, |ui| {
+                        for &rv in RarityFilter::all() {
+                            ui.selectable_value(rarity, rv, rv.as_str());
+                        }
+                    });
+            });
+        }
+
         NodeKind::CsvSource | NodeKind::Output => {}
     }
 }
