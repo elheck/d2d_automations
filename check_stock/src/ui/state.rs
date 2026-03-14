@@ -218,11 +218,130 @@ pub struct SearchFields {
     pub name_it: bool,
 }
 
+// ── Node graph types ─────────────────────────────────────────────────────────
+
+pub type NodeId = usize;
+
+#[derive(Clone)]
+pub enum NodeKind {
+    CsvSource,
+    PriceMultiply { factor: f64 },
+    PriceFloor { min: f64 },
+    PriceCap { max: f64 },
+    PriceRound { step: f64 },
+    Output,
+}
+
+impl NodeKind {
+    pub fn title(&self) -> &'static str {
+        match self {
+            Self::CsvSource => "CSV Source",
+            Self::PriceMultiply { .. } => "Multiply Price",
+            Self::PriceFloor { .. } => "Price Floor",
+            Self::PriceCap { .. } => "Price Cap",
+            Self::PriceRound { .. } => "Round Price",
+            Self::Output => "Output",
+        }
+    }
+
+    pub fn accent_color(&self) -> egui::Color32 {
+        match self {
+            Self::CsvSource => egui::Color32::from_rgb(50, 100, 170),
+            Self::PriceMultiply { .. } => egui::Color32::from_rgb(60, 140, 80),
+            Self::PriceFloor { .. } => egui::Color32::from_rgb(140, 100, 50),
+            Self::PriceCap { .. } => egui::Color32::from_rgb(140, 55, 90),
+            Self::PriceRound { .. } => egui::Color32::from_rgb(90, 80, 155),
+            Self::Output => egui::Color32::from_rgb(150, 115, 40),
+        }
+    }
+
+    pub fn input_count(&self) -> usize {
+        match self {
+            Self::CsvSource => 0,
+            _ => 1,
+        }
+    }
+
+    pub fn output_count(&self) -> usize {
+        match self {
+            Self::Output => 0,
+            _ => 1,
+        }
+    }
+
+    pub fn param_count(&self) -> usize {
+        match self {
+            Self::CsvSource | Self::Output => 0,
+            _ => 1,
+        }
+    }
+}
+
+pub struct GraphNode {
+    pub id: NodeId,
+    pub kind: NodeKind,
+    pub pos: egui::Pos2,
+}
+
+#[derive(Clone)]
+pub struct Wire {
+    pub from_node: NodeId,
+    pub from_port: usize,
+    pub to_node: NodeId,
+    pub to_port: usize,
+}
+
+pub struct NodeGraph {
+    pub nodes: Vec<GraphNode>,
+    pub wires: Vec<Wire>,
+    next_id: NodeId,
+    pub canvas_offset: egui::Vec2,
+    /// (node_id, unused) — drag delta applied each frame via response.drag_delta()
+    pub drag: Option<(NodeId, egui::Vec2)>,
+    /// Started wiring from this output port; wire follows cursor until released
+    pub pending_wire: Option<(NodeId, usize)>,
+}
+
+impl Default for NodeGraph {
+    fn default() -> Self {
+        let mut g = Self {
+            nodes: Vec::new(),
+            wires: Vec::new(),
+            next_id: 0,
+            canvas_offset: egui::vec2(0.0, 0.0),
+            drag: None,
+            pending_wire: None,
+        };
+        g.add_node(NodeKind::CsvSource, egui::pos2(40.0, 100.0));
+        g.add_node(NodeKind::Output, egui::pos2(460.0, 100.0));
+        g
+    }
+}
+
+impl NodeGraph {
+    pub fn add_node(&mut self, kind: NodeKind, pos: egui::Pos2) -> NodeId {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.nodes.push(GraphNode { id, kind, pos });
+        id
+    }
+
+    pub fn remove_node(&mut self, id: NodeId) {
+        self.nodes.retain(|n| n.id != id);
+        self.wires.retain(|w| w.from_node != id && w.to_node != id);
+    }
+
+    pub fn node_mut(&mut self, id: NodeId) -> Option<&mut GraphNode> {
+        self.nodes.iter_mut().find(|n| n.id == id)
+    }
+}
+
 #[derive(Default)]
 pub struct PricingState {
     pub csv_path: String,
     pub cards: Vec<crate::models::Card>,
     pub load_error: Option<String>,
+    pub graph: NodeGraph,
 }
 
 impl Default for SearchState {
