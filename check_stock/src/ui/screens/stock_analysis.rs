@@ -5,6 +5,7 @@ use crate::{
     ui::{
         components::FilePicker,
         state::{Screen, StockAnalysisState},
+        style,
     },
 };
 use eframe::egui;
@@ -24,86 +25,93 @@ impl StockAnalysisScreen {
             egui::ScrollArea::vertical()
                 .id_salt("stock_analysis_scroll")
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if ui.button("← Back to Welcome Screen").clicked() {
-                            *current_screen = Screen::Welcome;
+                    if style::back_button(ui, "Back") {
+                        *current_screen = Screen::Welcome;
+                    }
+                    ui.add_space(8.0);
+
+                    style::screen_heading(ui, "Stock Analysis");
+
+                    // ── File picker ─────────────────────────────────────────
+                    style::section_frame().show(ui, |ui| {
+                        if FilePicker::new("Inventory CSV:", &mut state.inventory_path)
+                            .with_filter("CSV", &["csv"])
+                            .show(ui)
+                        {
+                            if let Ok(inventory) = read_csv(&state.inventory_path) {
+                                if let Err(e) = crate::inventory_db::sync_inventory(&inventory) {
+                                    log::warn!("Inventory DB sync failed: {}", e);
+                                }
+                            }
+                            Self::refresh_stats(state);
                         }
                     });
-                    ui.add_space(10.0);
-
-                    ui.heading("Stock Analysis");
-                    ui.add_space(10.0);
-
-                    if FilePicker::new("Inventory CSV:", &mut state.inventory_path)
-                        .with_filter("CSV", &["csv"])
-                        .show(ui)
-                    {
-                        if let Ok(inventory) = read_csv(&state.inventory_path) {
-                            if let Err(e) = crate::inventory_db::sync_inventory(&inventory) {
-                                log::warn!("Inventory DB sync failed: {}", e);
-                            }
-                        }
-                        Self::refresh_stats(state);
-                    }
 
                     ui.add_space(10.0);
 
-                    // Database stats panel
+                    // ── Database stats panel ────────────────────────────────
                     if let Some(stats) = &state.db_stats {
                         Self::show_db_stats(ui, stats);
                         ui.add_space(10.0);
                     } else if let Some(err) = &state.db_stats_error {
-                        ui.colored_label(egui::Color32::RED, format!("Stats error: {err}"));
+                        style::status_error(ui, &format!("Stats error: {err}"));
                         ui.add_space(10.0);
                     }
 
-                    ui.separator();
-                    ui.add_space(8.0);
+                    ui.add_space(2.0);
 
-                    ui.label(egui::RichText::new("Bin Capacity Analysis").strong());
-                    ui.add_space(6.0);
+                    // ── Bin analysis controls ───────────────────────────────
+                    style::section_frame().show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new("Bin Capacity Analysis")
+                                .strong()
+                                .color(style::TEXT_PRIMARY),
+                        );
+                        ui.add_space(6.0);
 
-                    ui.horizontal(|ui| {
-                        ui.label("Minimum Free Slots:");
-                        ui.add(egui::Slider::new(&mut state.free_slots, 1..=30).text("slots"));
-                    });
+                        ui.horizontal(|ui| {
+                            ui.label("Minimum Free Slots:");
+                            ui.add(egui::Slider::new(&mut state.free_slots, 1..=30).text("slots"));
+                        });
 
-                    ui.add_space(5.0);
+                        ui.add_space(5.0);
 
-                    ui.horizontal(|ui| {
-                        ui.label("Sort by:");
-                        egui::ComboBox::from_label("")
-                            .selected_text(match state.sort_order {
-                                SortOrder::ByFreeSlots => "Free Slots (Descending)",
-                                SortOrder::ByLocation => "Location (Ascending)",
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut state.sort_order,
-                                    SortOrder::ByFreeSlots,
-                                    "Free Slots (Descending)",
-                                );
-                                ui.selectable_value(
-                                    &mut state.sort_order,
-                                    SortOrder::ByLocation,
-                                    "Location (Ascending)",
-                                );
-                            });
-                    });
+                        ui.horizontal(|ui| {
+                            ui.label("Sort by:");
+                            egui::ComboBox::from_label("")
+                                .selected_text(match state.sort_order {
+                                    SortOrder::ByFreeSlots => "Free Slots (Descending)",
+                                    SortOrder::ByLocation => "Location (Ascending)",
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut state.sort_order,
+                                        SortOrder::ByFreeSlots,
+                                        "Free Slots (Descending)",
+                                    );
+                                    ui.selectable_value(
+                                        &mut state.sort_order,
+                                        SortOrder::ByLocation,
+                                        "Location (Ascending)",
+                                    );
+                                });
+                        });
 
-                    ui.add_space(10.0);
+                        ui.add_space(10.0);
 
-                    if ui.button("Analyze Stock").clicked() {
-                        if let Err(e) = Self::analyze_stock(state) {
-                            state.output = format!("Error: {e}");
+                        if style::primary_button(ui, "Analyze Stock").clicked() {
+                            if let Err(e) = Self::analyze_stock(state) {
+                                state.output = format!("Error: {e}");
+                            }
                         }
-                    }
+                    });
 
+                    ui.add_space(8.0);
                     ui.separator();
 
                     if !state.output.is_empty() {
-                        ui.add_space(4.0);
-                        if ui.button("Save Analysis to File").clicked() {
+                        ui.add_space(6.0);
+                        if style::secondary_button(ui, "Save Analysis to File").clicked() {
                             if let Some(path) = rfd::FileDialog::new()
                                 .set_file_name("stock_analysis.txt")
                                 .add_filter("Text Files", &["txt"])
@@ -139,8 +147,13 @@ impl StockAnalysisScreen {
     }
 
     fn show_db_stats(ui: &mut egui::Ui, stats: &DbStats) {
-        ui.group(|ui| {
-            ui.label(egui::RichText::new("Database Overview").strong().size(14.0));
+        style::section_frame().show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("Database Overview")
+                    .strong()
+                    .size(14.0)
+                    .color(style::TEXT_PRIMARY),
+            );
             ui.add_space(6.0);
 
             // Summary: 4-column grid (label, value, label, value)

@@ -4,6 +4,7 @@ use crate::{
         components::FilePicker,
         screens::PickingState,
         state::{AppState, Screen, SearchState, SelectedSearchCard},
+        style,
     },
 };
 use eframe::egui;
@@ -40,27 +41,25 @@ impl SearchScreen {
         Self::check_delayed_search(state);
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("← Back to Menu").clicked() {
-                    app_state.current_screen = Screen::Welcome;
+            if style::back_button(ui, "Back") {
+                app_state.current_screen = Screen::Welcome;
+            }
+            ui.add_space(8.0);
+
+            style::screen_heading(ui, "Card Search");
+
+            // ── File picker ─────────────────────────────────────────────────
+            style::section_frame().show(ui, |ui| {
+                let browsed = FilePicker::new("CSV File:", &mut state.csv_path)
+                    .with_filter("CSV", &["csv"])
+                    .show(ui);
+                ui.add_space(6.0);
+                if (style::primary_button(ui, "Load CSV").clicked() || browsed)
+                    && !state.csv_path.is_empty()
+                {
+                    Self::load_csv(state);
                 }
             });
-            ui.add_space(10.0);
-
-            ui.heading("Card Search");
-            ui.add_space(10.0);
-
-            // File picker for CSV
-            let browsed = FilePicker::new("CSV File:", &mut state.csv_path)
-                .with_filter("CSV", &["csv"])
-                .show(ui);
-
-            ui.add_space(10.0);
-
-            // Load CSV button (also triggered automatically when a file is browsed)
-            if (ui.button("Load CSV").clicked() || browsed) && !state.csv_path.is_empty() {
-                Self::load_csv(state);
-            }
 
             ui.add_space(10.0);
 
@@ -83,8 +82,12 @@ impl SearchScreen {
     }
 
     fn show_search_controls(ui: &mut egui::Ui, state: &mut SearchState) {
-        ui.group(|ui| {
-            ui.label("Search Settings:");
+        style::section_frame().show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("Search Settings")
+                    .strong()
+                    .color(style::TEXT_PRIMARY),
+            );
             ui.add_space(5.0);
 
             // Search term input
@@ -230,10 +233,10 @@ impl SearchScreen {
 
                 ui.add_space(5.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Proceed to Lists").clicked() {
+                    if style::primary_button(ui, "Proceed to Lists").clicked() {
                         Self::proceed_to_lists(app_state, state, picking_state);
                     }
-                    if ui.button("Clear All").clicked() {
+                    if style::secondary_button(ui, "Clear All").clicked() {
                         state.selected_cards.clear();
                     }
                 });
@@ -278,25 +281,30 @@ impl SearchScreen {
 
                 ui.add_space(20.0);
 
-                if ui.button("⏮ First").clicked() && state.current_page > 0 {
+                if style::secondary_button_enabled(ui, "⏮", state.current_page > 0).clicked() {
                     state.current_page = 0;
                 }
-
-                if ui.button("⏪ Previous").clicked() && state.current_page > 0 {
+                if style::secondary_button_enabled(ui, "⏪", state.current_page > 0).clicked() {
                     state.current_page -= 1;
                 }
 
-                ui.label(format!(
-                    "Page {} of {}",
-                    state.current_page + 1,
-                    total_pages
-                ));
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Page {} of {}",
+                        state.current_page + 1,
+                        total_pages
+                    ))
+                    .color(style::TEXT_MUTED),
+                );
 
-                if ui.button("Next ⏩").clicked() && state.current_page < total_pages - 1 {
+                if style::secondary_button_enabled(ui, "⏩", state.current_page < total_pages - 1)
+                    .clicked()
+                {
                     state.current_page += 1;
                 }
-
-                if ui.button("Last ⏭").clicked() && state.current_page < total_pages - 1 {
+                if style::secondary_button_enabled(ui, "⏭", state.current_page < total_pages - 1)
+                    .clicked()
+                {
                     state.current_page = total_pages - 1;
                 }
             });

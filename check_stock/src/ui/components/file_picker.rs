@@ -1,3 +1,4 @@
+use crate::ui::style;
 use eframe::egui;
 
 pub struct FilePicker<'a> {
@@ -27,8 +28,12 @@ impl<'a> FilePicker<'a> {
     pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
         let mut picked = false;
         ui.horizontal(|ui| {
-            ui.label(self.label);
-            if ui.button("Browse").clicked() {
+            ui.label(
+                egui::RichText::new(self.label)
+                    .color(style::TEXT_MUTED)
+                    .size(13.0),
+            );
+            if style::secondary_button(ui, "Browse").clicked() {
                 let mut dialog = rfd::FileDialog::new();
 
                 if let Some(name) = self.filter_name {
@@ -40,7 +45,7 @@ impl<'a> FilePicker<'a> {
                     picked = true;
                 }
             }
-            ui.text_edit_singleline(self.path);
+            ui.add(egui::TextEdit::singleline(self.path).desired_width(f32::INFINITY));
         });
         picked
     }

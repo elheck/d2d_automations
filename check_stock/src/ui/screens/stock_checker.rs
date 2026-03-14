@@ -10,6 +10,7 @@ use crate::{
         language::Language,
         screens::PickingState,
         state::{AppState, OutputFormat, Screen},
+        style,
     },
 };
 use eframe::egui;
@@ -147,90 +148,96 @@ pub struct StockCheckerScreen;
 impl StockCheckerScreen {
     pub fn show(ctx: &egui::Context, state: &mut AppState, picking_state: &mut PickingState) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("← Back to Welcome Screen").clicked() {
-                    state.current_screen = Screen::Welcome;
-                }
-            });
-            ui.add_space(10.0);
+            if style::back_button(ui, "Back") {
+                state.current_screen = Screen::Welcome;
+            }
+            ui.add_space(8.0);
 
-            ui.heading("MTG Stock Checker");
-            ui.add_space(10.0);
+            style::screen_heading(ui, "MTG Stock Checker");
 
-            // File pickers
-            if FilePicker::new("Inventory CSV:", &mut state.inventory_path)
-                .with_filter("CSV", &["csv"])
-                .show(ui)
-            {
-                if let Ok(inventory) = read_csv(&state.inventory_path) {
-                    if let Err(e) = crate::inventory_db::sync_inventory(&inventory) {
-                        log::warn!("Inventory DB sync failed: {}", e);
+            // ── File pickers ────────────────────────────────────────────────
+            style::section_frame().show(ui, |ui| {
+                if FilePicker::new("Inventory CSV:", &mut state.inventory_path)
+                    .with_filter("CSV", &["csv"])
+                    .show(ui)
+                {
+                    if let Ok(inventory) = read_csv(&state.inventory_path) {
+                        if let Err(e) = crate::inventory_db::sync_inventory(&inventory) {
+                            log::warn!("Inventory DB sync failed: {}", e);
+                        }
                     }
                 }
-            }
-
-            FilePicker::new("Wantslist:", &mut state.wantslist_path).show(ui);
-
-            // Language selection and discount
-            ui.horizontal(|ui| {
-                ui.label("Preferred Language:");
-                egui::ComboBox::new("language_selector", "")
-                    .selected_text(state.preferred_language.as_str())
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut state.preferred_language,
-                            Language::English,
-                            "English",
-                        );
-                        ui.selectable_value(
-                            &mut state.preferred_language,
-                            Language::German,
-                            "German",
-                        );
-                        ui.selectable_value(
-                            &mut state.preferred_language,
-                            Language::Spanish,
-                            "Spanish",
-                        );
-                        ui.selectable_value(
-                            &mut state.preferred_language,
-                            Language::French,
-                            "French",
-                        );
-                        ui.selectable_value(
-                            &mut state.preferred_language,
-                            Language::Italian,
-                            "Italian",
-                        );
-                    });
-                ui.checkbox(
-                    &mut state.preferred_language_only,
-                    "Only show cards in preferred language",
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label("Discount (%):");
-                let mut discount = state.discount_percent;
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut discount)
-                            .range(0.0..=100.0)
-                            .speed(0.1),
-                    )
-                    .changed()
-                {
-                    state.discount_percent = discount;
-                }
+                FilePicker::new("Wantslist:", &mut state.wantslist_path).show(ui);
             });
 
+            ui.add_space(8.0);
+
+            // ── Settings ────────────────────────────────────────────────────
+            style::section_frame().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Preferred Language:");
+                    egui::ComboBox::new("language_selector", "")
+                        .selected_text(state.preferred_language.as_str())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut state.preferred_language,
+                                Language::English,
+                                "English",
+                            );
+                            ui.selectable_value(
+                                &mut state.preferred_language,
+                                Language::German,
+                                "German",
+                            );
+                            ui.selectable_value(
+                                &mut state.preferred_language,
+                                Language::Spanish,
+                                "Spanish",
+                            );
+                            ui.selectable_value(
+                                &mut state.preferred_language,
+                                Language::French,
+                                "French",
+                            );
+                            ui.selectable_value(
+                                &mut state.preferred_language,
+                                Language::Italian,
+                                "Italian",
+                            );
+                        });
+                    ui.checkbox(
+                        &mut state.preferred_language_only,
+                        "Only show cards in preferred language",
+                    );
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Discount (%):");
+                    let mut discount = state.discount_percent;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut discount)
+                                .range(0.0..=100.0)
+                                .speed(0.1),
+                        )
+                        .changed()
+                    {
+                        state.discount_percent = discount;
+                    }
+                });
+            });
+
+            ui.add_space(10.0);
+
             ui.horizontal(|ui| {
-                if ui.button("Check Stock").clicked() {
+                if style::primary_button(ui, "Check Stock").clicked() {
                     if let Err(e) = Self::check_stock(state) {
                         state.output = format!("Error: {e}");
                     }
                 }
             });
 
+            ui.add_space(6.0);
             ui.separator();
 
             if state.show_selection || state.selection_mode {
@@ -305,7 +312,11 @@ impl StockCheckerScreen {
         state: &mut AppState,
         picking_state: &mut PickingState,
     ) {
-        ui.label("Select the cards you want to include:");
+        ui.label(
+            egui::RichText::new("Select the cards you want to include:")
+                .color(style::TEXT_MUTED)
+                .size(13.0),
+        );
         egui::ScrollArea::vertical()
             .max_height(ui.available_height() - 50.0)
             .show(ui, |ui| {
@@ -345,23 +356,22 @@ impl StockCheckerScreen {
         ui.separator();
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
             ui.horizontal(|ui| {
-                if ui
-                    .button("🎴 Interactive Picking List")
+                if style::primary_button(ui, "🎴 Interactive Picking List")
                     .on_hover_text("Open visual picking list with card images")
                     .clicked()
                 {
                     Self::start_interactive_picking(state, picking_state);
                 }
-                if ui.button("Generate Picking List").clicked() {
+                if style::secondary_button(ui, "Generate Picking List").clicked() {
                     Self::generate_selected_output(state, OutputFormat::PickingList);
                 }
-                if ui.button("Generate Invoice List").clicked() {
+                if style::secondary_button(ui, "Generate Invoice List").clicked() {
                     Self::generate_selected_output(state, OutputFormat::InvoiceList);
                 }
-                if ui.button("Generate Stock Update CSV").clicked() {
+                if style::secondary_button(ui, "Generate Stock Update CSV").clicked() {
                     Self::generate_selected_output(state, OutputFormat::UpdateStock);
                 }
-                if ui.button("Return to Regular List").clicked() {
+                if style::secondary_button(ui, "Return to Regular List").clicked() {
                     state.show_selection = false;
                     state.selection_mode = false;
                     Self::generate_regular_output(state);
@@ -390,14 +400,13 @@ impl StockCheckerScreen {
             ui.separator();
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                 ui.horizontal(|ui| {
-                    if ui
-                        .button("🎴 Interactive Picking List")
+                    if style::primary_button(ui, "🎴 Interactive Picking List")
                         .on_hover_text("Open visual picking list with card images")
                         .clicked()
                     {
                         Self::start_interactive_picking(state, picking_state);
                     }
-                    if ui.button("Select Cards for Lists").clicked() {
+                    if style::secondary_button(ui, "Select Cards for Lists").clicked() {
                         Self::start_selection(state);
                     }
                 });
