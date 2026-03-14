@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "pricing_tests.rs"]
+mod tests;
+
 use crate::{
     io::read_csv,
     models::Card,
