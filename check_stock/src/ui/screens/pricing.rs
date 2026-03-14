@@ -56,9 +56,7 @@ impl PricingScreen {
                     .with_filter("CSV", &["csv"])
                     .show(ui);
                 ui.add_space(6.0);
-                if (style::primary_button(ui, "Load CSV").clicked() || browsed)
-                    && !state.csv_path.is_empty()
-                {
+                if browsed && !state.csv_path.is_empty() {
                     Self::load_csv(state);
                 }
                 if let Some(err) = &state.load_error {
