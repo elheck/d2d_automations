@@ -424,6 +424,7 @@ pub struct NodeGraph {
     pub wires: Vec<Wire>,
     next_id: NodeId,
     pub canvas_offset: egui::Vec2,
+    pub canvas_zoom: f32,
     /// (node_id, unused) — drag delta applied each frame via response.drag_delta()
     pub drag: Option<(NodeId, egui::Vec2)>,
     /// Started wiring from this output port; wire follows cursor until released
@@ -437,6 +438,7 @@ impl Default for NodeGraph {
             wires: Vec::new(),
             next_id: 0,
             canvas_offset: egui::vec2(0.0, 0.0),
+            canvas_zoom: 1.0,
             drag: None,
             pending_wire: None,
         };

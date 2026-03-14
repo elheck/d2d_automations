@@ -203,22 +203,26 @@ fn show_canvas(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut PricingState)
     let (canvas_response, mut painter) =
         ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
     let canvas_rect = canvas_response.rect;
+    let zoom = state.graph.canvas_zoom;
 
     // Background + dot grid
     painter.rect_filled(canvas_rect, egui::CornerRadius::ZERO, CANVAS_BG);
-    draw_grid(&painter, canvas_rect, state.graph.canvas_offset);
+    draw_grid(&painter, canvas_rect, state.graph.canvas_offset, zoom);
 
     // Clip everything to canvas bounds
     painter.set_clip_rect(canvas_rect);
 
-    // Precompute node screen-space rects (canvas pos → screen pos)
+    // Precompute node screen-space rects applying zoom and pan
     let rects: Vec<(NodeId, egui::Rect)> = state
         .graph
         .nodes
         .iter()
         .map(|n| {
-            let sp = canvas_rect.min + n.pos.to_vec2() + state.graph.canvas_offset;
-            (n.id, egui::Rect::from_min_size(sp, node_size(&n.kind)))
+            let sp = canvas_rect.min + n.pos.to_vec2() * zoom + state.graph.canvas_offset;
+            (
+                n.id,
+                egui::Rect::from_min_size(sp, node_size(&n.kind) * zoom),
+            )
         })
         .collect();
 
@@ -238,8 +242,8 @@ fn show_canvas(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut PricingState)
         if let (Some(fr), Some(tr)) = (fr, tr) {
             draw_bezier(
                 &painter,
-                out_port_pos(fr, wire.from_port),
-                in_port_pos(tr, wire.to_port),
+                out_port_pos(fr, wire.from_port, zoom),
+                in_port_pos(tr, wire.to_port, zoom),
                 WIRE_COLOR,
                 2.0,
             );
@@ -249,7 +253,7 @@ fn show_canvas(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut PricingState)
     // Draw pending wire following the cursor
     if let Some((from_id, from_port)) = state.graph.pending_wire {
         if let Some(fr) = rects.iter().find(|(id, _)| *id == from_id).map(|(_, r)| *r) {
-            let start = out_port_pos(fr, from_port);
+            let start = out_port_pos(fr, from_port, zoom);
             let end = canvas_response.hover_pos().unwrap_or(start);
             draw_bezier(&painter, start, end, WIRE_PENDING_COLOR, 1.5);
             ctx.request_repaint();
@@ -259,18 +263,25 @@ fn show_canvas(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut PricingState)
     // Draw node chrome (background, header, port circles, labels + count)
     for node in &state.graph.nodes {
         if let Some(rect) = rects.iter().find(|(id, _)| *id == node.id).map(|(_, r)| *r) {
-            draw_node_chrome(&painter, node, rect, counts.get(&node.id).copied());
+            draw_node_chrome(&painter, node, rect, counts.get(&node.id).copied(), zoom);
         }
     }
 
     // Parameter widgets sit inside node bodies (ui.put uses screen-space rects)
     for node in &mut state.graph.nodes {
         if let Some(rect) = rects.iter().find(|(id, _)| *id == node.id).map(|(_, r)| *r) {
-            show_node_params(ui, node, rect);
+            show_node_params(ui, node, rect, zoom);
         }
     }
 
-    handle_interactions(ctx, &canvas_response, &rects, &mut state.graph);
+    handle_interactions(
+        ctx,
+        &canvas_response,
+        &rects,
+        &mut state.graph,
+        canvas_rect,
+        zoom,
+    );
 }
 
 // ── Geometry ──────────────────────────────────────────────────────────────────
@@ -282,24 +293,24 @@ fn node_size(kind: &NodeKind) -> egui::Vec2 {
     egui::vec2(NODE_W, h)
 }
 
-fn out_port_pos(rect: egui::Rect, idx: usize) -> egui::Pos2 {
+fn out_port_pos(rect: egui::Rect, idx: usize, zoom: f32) -> egui::Pos2 {
     egui::pos2(
         rect.max.x,
-        rect.min.y + HEADER_H + (idx as f32 + 0.5) * PORT_ROW_H,
+        rect.min.y + HEADER_H * zoom + (idx as f32 + 0.5) * PORT_ROW_H * zoom,
     )
 }
 
-fn in_port_pos(rect: egui::Rect, idx: usize) -> egui::Pos2 {
+fn in_port_pos(rect: egui::Rect, idx: usize, zoom: f32) -> egui::Pos2 {
     egui::pos2(
         rect.min.x,
-        rect.min.y + HEADER_H + (idx as f32 + 0.5) * PORT_ROW_H,
+        rect.min.y + HEADER_H * zoom + (idx as f32 + 0.5) * PORT_ROW_H * zoom,
     )
 }
 
 // ── Drawing ───────────────────────────────────────────────────────────────────
 
-fn draw_grid(painter: &egui::Painter, canvas: egui::Rect, offset: egui::Vec2) {
-    let spacing = 32.0_f32;
+fn draw_grid(painter: &egui::Painter, canvas: egui::Rect, offset: egui::Vec2, zoom: f32) {
+    let spacing = (32.0_f32 * zoom).max(8.0);
     let ox = offset.x.rem_euclid(spacing);
     let oy = offset.y.rem_euclid(spacing);
     let mut x = canvas.min.x + ox;
@@ -350,25 +361,29 @@ fn draw_node_chrome(
     node: &GraphNode,
     rect: egui::Rect,
     output_count: Option<usize>,
+    zoom: f32,
 ) {
     let accent = node.kind.accent_color();
+    let cr = (6.0 * zoom).min(255.0) as u8;
+    let corner = egui::CornerRadius::same(cr);
 
     // Node body
     painter.rect(
         rect,
-        egui::CornerRadius::same(6),
+        corner,
         NODE_BG,
         egui::Stroke::new(1.5, NODE_BORDER),
         egui::StrokeKind::Inside,
     );
 
     // Header bar (rounded top corners only)
-    let header_rect = egui::Rect::from_min_size(rect.min, egui::vec2(NODE_W, HEADER_H));
+    let header_rect =
+        egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), HEADER_H * zoom));
     painter.rect(
         header_rect,
         egui::CornerRadius {
-            nw: 6,
-            ne: 6,
+            nw: cr,
+            ne: cr,
             sw: 0,
             se: 0,
         },
@@ -382,34 +397,34 @@ fn draw_node_chrome(
         header_rect.center(),
         egui::Align2::CENTER_CENTER,
         node.kind.title(),
-        egui::FontId::proportional(13.0),
+        egui::FontId::proportional(13.0 * zoom),
         egui::Color32::WHITE,
     );
 
     // Input ports (left edge)
     for i in 0..node.kind.input_count() {
-        let pos = in_port_pos(rect, i);
+        let pos = in_port_pos(rect, i, zoom);
         painter.circle(
             pos,
-            PORT_R,
+            PORT_R * zoom,
             PORT_IN_COLOR,
             egui::Stroke::new(1.5, egui::Color32::WHITE),
         );
         painter.text(
-            pos + egui::vec2(PORT_R + 5.0, 0.0),
+            pos + egui::vec2(PORT_R * zoom + 5.0, 0.0),
             egui::Align2::LEFT_CENTER,
             "in",
-            egui::FontId::proportional(10.0),
+            egui::FontId::proportional(10.0 * zoom),
             egui::Color32::from_rgb(155, 170, 200),
         );
     }
 
     // Output ports (right edge) — label shows card count when available
     for i in 0..node.kind.output_count() {
-        let pos = out_port_pos(rect, i);
+        let pos = out_port_pos(rect, i, zoom);
         painter.circle(
             pos,
-            PORT_R,
+            PORT_R * zoom,
             PORT_OUT_COLOR,
             egui::Stroke::new(1.5, egui::Color32::WHITE),
         );
@@ -419,17 +434,20 @@ fn draw_node_chrome(
             Some(n) => (format!("{n}"), egui::Color32::from_rgb(190, 215, 255)),
         };
         painter.text(
-            pos - egui::vec2(PORT_R + 5.0, 0.0),
+            pos - egui::vec2(PORT_R * zoom + 5.0, 0.0),
             egui::Align2::RIGHT_CENTER,
             &count_text,
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(11.0 * zoom),
             count_color,
         );
     }
 
     // Output node: show incoming count prominently in the body (no output port)
     if matches!(node.kind, NodeKind::Output) {
-        let body_center = egui::pos2(rect.center().x, rect.min.y + HEADER_H + PORT_ROW_H * 0.5);
+        let body_center = egui::pos2(
+            rect.center().x,
+            rect.min.y + HEADER_H * zoom + PORT_ROW_H * zoom * 0.5,
+        );
         let (text, color) = match output_count {
             None => ("—".to_string(), egui::Color32::from_rgb(100, 110, 140)),
             Some(0) => ("0 cards".to_string(), egui::Color32::from_rgb(220, 120, 60)),
@@ -439,7 +457,7 @@ fn draw_node_chrome(
             body_center,
             egui::Align2::CENTER_CENTER,
             &text,
-            egui::FontId::proportional(13.0),
+            egui::FontId::proportional(13.0 * zoom),
             color,
         );
     }
@@ -448,20 +466,24 @@ fn draw_node_chrome(
 // ── Parameter widgets ─────────────────────────────────────────────────────────
 
 /// Absolute screen-space rect for one parameter row inside a node.
-fn param_row_rect(rect: egui::Rect, port_rows: usize, row: usize) -> egui::Rect {
-    let y = rect.min.y + HEADER_H + port_rows as f32 * PORT_ROW_H + 4.0 + row as f32 * PARAM_H;
+fn param_row_rect(rect: egui::Rect, port_rows: usize, row: usize, zoom: f32) -> egui::Rect {
+    let y = rect.min.y
+        + HEADER_H * zoom
+        + port_rows as f32 * PORT_ROW_H * zoom
+        + 4.0
+        + row as f32 * PARAM_H * zoom;
     egui::Rect::from_min_size(
         egui::pos2(rect.min.x + 8.0, y),
-        egui::vec2(NODE_W - 16.0, PARAM_H - 8.0),
+        egui::vec2(rect.width() - 16.0, PARAM_H * zoom - 8.0),
     )
 }
 
-fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect) {
+fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect, zoom: f32) {
     let port_rows = node.kind.input_count().max(node.kind.output_count());
 
     match &mut node.kind {
         NodeKind::FilterCondition { condition } => {
-            let r = param_row_rect(rect, port_rows, 0);
+            let r = param_row_rect(rect, port_rows, 0, zoom);
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(r), |ui| {
                 egui::ComboBox::from_id_salt(("fcond", node.id))
                     .selected_text(condition.as_str())
@@ -474,7 +496,7 @@ fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect) {
             });
         }
         NodeKind::FilterLanguage { language } => {
-            let r = param_row_rect(rect, port_rows, 0);
+            let r = param_row_rect(rect, port_rows, 0, zoom);
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(r), |ui| {
                 egui::ComboBox::from_id_salt(("flang", node.id))
                     .selected_text(language.as_str())
@@ -487,7 +509,7 @@ fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect) {
             });
         }
         NodeKind::FilterFoil { mode } => {
-            let r = param_row_rect(rect, port_rows, 0);
+            let r = param_row_rect(rect, port_rows, 0, zoom);
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(r), |ui| {
                 egui::ComboBox::from_id_salt(("ffoil", node.id))
                     .selected_text(mode.as_str())
@@ -501,7 +523,7 @@ fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect) {
         }
         NodeKind::FilterPrice { min, max } => {
             ui.put(
-                param_row_rect(rect, port_rows, 0),
+                param_row_rect(rect, port_rows, 0, zoom),
                 egui::DragValue::new(min)
                     .prefix("≥ ")
                     .suffix(" €")
@@ -509,7 +531,7 @@ fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect) {
                     .range(0.0..=99999.0),
             );
             ui.put(
-                param_row_rect(rect, port_rows, 1),
+                param_row_rect(rect, port_rows, 1, zoom),
                 egui::DragValue::new(max)
                     .prefix("≤ ")
                     .suffix(" €")
@@ -518,7 +540,7 @@ fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect) {
             );
         }
         NodeKind::FilterRarity { rarity } => {
-            let r = param_row_rect(rect, port_rows, 0);
+            let r = param_row_rect(rect, port_rows, 0, zoom);
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(r), |ui| {
                 egui::ComboBox::from_id_salt(("frare", node.id))
                     .selected_text(rarity.as_str())
@@ -533,19 +555,19 @@ fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect) {
 
         NodeKind::FilterName { term } => {
             ui.put(
-                param_row_rect(rect, port_rows, 0),
+                param_row_rect(rect, port_rows, 0, zoom),
                 egui::TextEdit::singleline(term).hint_text("name contains…"),
             );
         }
         NodeKind::FilterSet { term } => {
             ui.put(
-                param_row_rect(rect, port_rows, 0),
+                param_row_rect(rect, port_rows, 0, zoom),
                 egui::TextEdit::singleline(term).hint_text("set name or code…"),
             );
         }
         NodeKind::FilterLocation { term } => {
             ui.put(
-                param_row_rect(rect, port_rows, 0),
+                param_row_rect(rect, port_rows, 0, zoom),
                 egui::TextEdit::singleline(term).hint_text("location contains…"),
             );
         }
@@ -561,6 +583,8 @@ fn handle_interactions(
     response: &egui::Response,
     rects: &[(NodeId, egui::Rect)],
     graph: &mut NodeGraph,
+    canvas_rect: egui::Rect,
+    zoom: f32,
 ) {
     let mouse_pos = response.hover_pos();
     let pressed = ctx.input(|i| i.pointer.primary_pressed());
@@ -568,14 +592,34 @@ fn handle_interactions(
     let right_pressed = ctx.input(|i| i.pointer.secondary_pressed());
     let drag_delta = response.drag_delta();
 
-    // Apply drag delta to the node being dragged
+    // Scroll wheel: zoom centered on cursor
+    if response.hovered() {
+        let scroll_y = ctx.input(|i| i.smooth_scroll_delta.y);
+        if scroll_y != 0.0 {
+            let factor: f32 = if scroll_y > 0.0 { 1.03 } else { 1.0 / 1.03 };
+            let old_zoom = graph.canvas_zoom;
+            let new_zoom = (old_zoom * factor).clamp(0.15, 5.0);
+            if let Some(cursor) = mouse_pos {
+                let origin = canvas_rect.min.to_vec2();
+                // Keep the canvas point under the cursor fixed
+                let cursor_canvas = (cursor.to_vec2() - origin - graph.canvas_offset) / old_zoom;
+                graph.canvas_offset = cursor.to_vec2() - origin - cursor_canvas * new_zoom;
+            }
+            graph.canvas_zoom = new_zoom;
+        }
+    }
+
+    // Apply drag delta to the node being dragged (divide by zoom: screen→canvas space)
     if let Some((drag_id, _)) = graph.drag {
         if let Some(node) = graph.node_mut(drag_id) {
-            node.pos += drag_delta;
+            node.pos += drag_delta / zoom;
         }
         if released {
             graph.drag = None;
         }
+    } else if graph.pending_wire.is_none() {
+        // Pan canvas when dragging on empty space
+        graph.canvas_offset += drag_delta;
     }
 
     // Complete or cancel pending wire on mouse release
@@ -595,7 +639,7 @@ fn handle_interactions(
                         .map(|n| n.kind.input_count())
                         .unwrap_or(0);
                     for p in 0..in_count {
-                        if mpos.distance(in_port_pos(*rect, p)) <= PORT_HIT_R {
+                        if mpos.distance(in_port_pos(*rect, p, zoom)) <= PORT_HIT_R * zoom {
                             new_wire = Some(Wire {
                                 from_node: from_id,
                                 from_port,
@@ -631,7 +675,7 @@ fn handle_interactions(
                     .map(|n| n.kind.output_count())
                     .unwrap_or(0);
                 for p in 0..out_count {
-                    if mpos.distance(out_port_pos(*rect, p)) <= PORT_HIT_R {
+                    if mpos.distance(out_port_pos(*rect, p, zoom)) <= PORT_HIT_R * zoom {
                         graph.pending_wire = Some((*node_id, p));
                         started_wire = true;
                         break 'outer;
@@ -642,7 +686,10 @@ fn handle_interactions(
             // Header drag
             if !started_wire {
                 for (node_id, rect) in rects {
-                    let header = egui::Rect::from_min_size(rect.min, egui::vec2(NODE_W, HEADER_H));
+                    let header = egui::Rect::from_min_size(
+                        rect.min,
+                        egui::vec2(rect.width(), HEADER_H * zoom),
+                    );
                     if header.contains(mpos) {
                         graph.drag = Some((*node_id, egui::vec2(0.0, 0.0)));
                         break;
