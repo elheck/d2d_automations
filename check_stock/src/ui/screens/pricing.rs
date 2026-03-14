@@ -107,28 +107,6 @@ impl PricingScreen {
 fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
     ui.horizontal_wrapped(|ui| {
         ui.label(
-            egui::RichText::new("Price:")
-                .color(style::TEXT_MUTED)
-                .size(12.0),
-        );
-        if style::secondary_button(ui, "× Multiply").clicked() {
-            graph.add_node(NodeKind::PriceMultiply { factor: 1.0 }, free_pos(graph));
-        }
-        if style::secondary_button(ui, "↑ Floor").clicked() {
-            graph.add_node(NodeKind::PriceFloor { min: 0.25 }, free_pos(graph));
-        }
-        if style::secondary_button(ui, "↓ Cap").clicked() {
-            graph.add_node(NodeKind::PriceCap { max: 100.0 }, free_pos(graph));
-        }
-        if style::secondary_button(ui, "○ Round").clicked() {
-            graph.add_node(NodeKind::PriceRound { step: 0.5 }, free_pos(graph));
-        }
-
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(4.0);
-
-        ui.label(
             egui::RichText::new("Filter:")
                 .color(style::TEXT_MUTED)
                 .size(12.0),
@@ -478,48 +456,6 @@ fn show_node_params(ui: &mut egui::Ui, node: &mut GraphNode, rect: egui::Rect) {
     let port_rows = node.kind.input_count().max(node.kind.output_count());
 
     match &mut node.kind {
-        // ── Price transforms ─────────────────────────────────────────────────
-        NodeKind::PriceMultiply { factor } => {
-            ui.put(
-                param_row_rect(rect, port_rows, 0),
-                egui::DragValue::new(factor)
-                    .prefix("× ")
-                    .speed(0.01)
-                    .range(0.01..=100.0),
-            );
-        }
-        NodeKind::PriceFloor { min } => {
-            ui.put(
-                param_row_rect(rect, port_rows, 0),
-                egui::DragValue::new(min)
-                    .prefix("min ")
-                    .suffix(" €")
-                    .speed(0.05)
-                    .range(0.0..=9999.0),
-            );
-        }
-        NodeKind::PriceCap { max } => {
-            ui.put(
-                param_row_rect(rect, port_rows, 0),
-                egui::DragValue::new(max)
-                    .prefix("max ")
-                    .suffix(" €")
-                    .speed(0.5)
-                    .range(0.01..=99999.0),
-            );
-        }
-        NodeKind::PriceRound { step } => {
-            ui.put(
-                param_row_rect(rect, port_rows, 0),
-                egui::DragValue::new(step)
-                    .prefix("step ")
-                    .suffix(" €")
-                    .speed(0.01)
-                    .range(0.01..=100.0),
-            );
-        }
-
-        // ── Filters ──────────────────────────────────────────────────────────
         NodeKind::FilterCondition { condition } => {
             let r = param_row_rect(rect, port_rows, 0);
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(r), |ui| {
@@ -818,21 +754,16 @@ fn evaluate_counts(
 /// Price-transform nodes pass indices unchanged (counts are unaffected by price edits).
 fn filter_indices(kind: &NodeKind, indices: Vec<usize>, cards: &[Card]) -> Vec<usize> {
     match kind {
-        NodeKind::CsvSource
-        | NodeKind::Output
-        | NodeKind::PriceMultiply { .. }
-        | NodeKind::PriceFloor { .. }
-        | NodeKind::PriceCap { .. }
-        | NodeKind::PriceRound { .. } => indices,
+        NodeKind::CsvSource | NodeKind::Output => indices,
 
         NodeKind::FilterCondition { condition } => {
             if matches!(condition, ConditionFilter::Any) {
                 return indices;
             }
-            let min = condition_rank(condition.as_str());
+            let target = condition.as_str();
             indices
                 .into_iter()
-                .filter(|&i| condition_rank(&cards[i].condition) >= min)
+                .filter(|&i| cards[i].condition.eq_ignore_ascii_case(target))
                 .collect()
         }
 
@@ -919,16 +850,5 @@ fn filter_indices(kind: &NodeKind, indices: Vec<usize>, cards: &[Card]) -> Vec<u
                 })
                 .collect()
         }
-    }
-}
-
-fn condition_rank(condition: &str) -> u8 {
-    match condition.to_uppercase().as_str() {
-        "MT" | "NM" => 5,
-        "EX" => 4,
-        "GD" => 3,
-        "LP" => 2,
-        "PL" => 1,
-        _ => 0,
     }
 }

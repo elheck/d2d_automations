@@ -340,11 +340,6 @@ pub enum NodeKind {
     // Source / sink
     CsvSource,
     Output,
-    // Price transforms
-    PriceMultiply { factor: f64 },
-    PriceFloor { min: f64 },
-    PriceCap { max: f64 },
-    PriceRound { step: f64 },
     // Filters
     FilterCondition { condition: ConditionFilter },
     FilterLanguage { language: LanguageFilter },
@@ -361,10 +356,6 @@ impl NodeKind {
         match self {
             Self::CsvSource => "CSV Source",
             Self::Output => "Output",
-            Self::PriceMultiply { .. } => "Multiply Price",
-            Self::PriceFloor { .. } => "Price Floor",
-            Self::PriceCap { .. } => "Price Cap",
-            Self::PriceRound { .. } => "Round Price",
             Self::FilterCondition { .. } => "Filter Condition",
             Self::FilterLanguage { .. } => "Filter Language",
             Self::FilterFoil { .. } => "Filter Foil",
@@ -380,10 +371,6 @@ impl NodeKind {
         match self {
             Self::CsvSource => egui::Color32::from_rgb(50, 100, 170),
             Self::Output => egui::Color32::from_rgb(150, 115, 40),
-            Self::PriceMultiply { .. } => egui::Color32::from_rgb(60, 140, 80),
-            Self::PriceFloor { .. } => egui::Color32::from_rgb(140, 100, 50),
-            Self::PriceCap { .. } => egui::Color32::from_rgb(140, 55, 90),
-            Self::PriceRound { .. } => egui::Color32::from_rgb(90, 80, 155),
             Self::FilterCondition { .. } => egui::Color32::from_rgb(30, 125, 140),
             Self::FilterLanguage { .. } => egui::Color32::from_rgb(40, 105, 160),
             Self::FilterFoil { .. } => egui::Color32::from_rgb(110, 70, 155),
