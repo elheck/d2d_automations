@@ -542,6 +542,12 @@ pub struct PricingState {
     pub cards: Vec<crate::models::Card>,
     pub load_error: Option<String>,
     pub graph: NodeGraph,
+    pub show_preview: bool,
+    /// Cached output-node card indices, updated once per frame in show_canvas.
+    pub cached_output: Vec<usize>,
+    /// Which preview column is sorted (index into PREVIEW_COLS), and direction.
+    pub preview_sort_col: Option<usize>,
+    pub preview_sort_asc: bool,
 }
 
 impl Default for SearchState {
