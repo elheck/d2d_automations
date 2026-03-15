@@ -1,48 +1,9 @@
 //! Cardmarket price guide fetching and parsing
 
 use crate::error::{Error, Result};
-use serde::Deserialize;
 use std::collections::HashMap;
 
-/// Cardmarket price guide URL (MTG = category 1)
-const PRICE_GUIDE_URL: &str =
-    "https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_1.json";
-
-/// Cardmarket price guide entry for a single product
-#[derive(Debug, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct PriceGuideEntry {
-    pub id_product: u64,
-    pub id_category: u64,
-    pub avg: Option<f64>,
-    pub low: Option<f64>,
-    pub trend: Option<f64>,
-    pub avg1: Option<f64>,
-    pub avg7: Option<f64>,
-    pub avg30: Option<f64>,
-    #[serde(rename = "avg-foil")]
-    pub avg_foil: Option<f64>,
-    #[serde(rename = "low-foil")]
-    pub low_foil: Option<f64>,
-    #[serde(rename = "trend-foil")]
-    pub trend_foil: Option<f64>,
-    #[serde(rename = "avg1-foil")]
-    pub avg1_foil: Option<f64>,
-    #[serde(rename = "avg7-foil")]
-    pub avg7_foil: Option<f64>,
-    #[serde(rename = "avg30-foil")]
-    pub avg30_foil: Option<f64>,
-}
-
-/// Full price guide file structure from Cardmarket
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-struct PriceGuideFile {
-    pub version: u32,
-    pub created_at: String,
-    pub price_guides: Vec<PriceGuideEntry>,
-}
+pub use mtg_common::cardmarket::{PriceGuideEntry, PriceGuideFile};
 
 /// Price guide lookup by product ID
 pub struct PriceGuide {
@@ -57,8 +18,8 @@ impl PriceGuide {
 
         let client = reqwest::Client::new();
         let response = client
-            .get(PRICE_GUIDE_URL)
-            .header("User-Agent", "inventory_sync/1.0")
+            .get(mtg_common::PRICE_GUIDE_URL)
+            .header("User-Agent", mtg_common::USER_AGENT)
             .send()
             .await?;
 

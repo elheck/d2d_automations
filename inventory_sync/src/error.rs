@@ -76,5 +76,18 @@ impl From<rusqlite::Error> for InventoryError {
     }
 }
 
+impl From<mtg_common::MtgError> for InventoryError {
+    fn from(err: mtg_common::MtgError) -> Self {
+        match err {
+            mtg_common::MtgError::Network(e) => InventoryError::Network(e),
+            mtg_common::MtgError::Parse(e) => InventoryError::Parse(e),
+            mtg_common::MtgError::HttpStatus(s) => InventoryError::HttpStatus(s),
+            mtg_common::MtgError::Io(_) => {
+                InventoryError::ImageFetchFailed("I/O error".to_string())
+            }
+        }
+    }
+}
+
 /// Result alias for inventory_sync operations
 pub type Result<T> = std::result::Result<T, InventoryError>;

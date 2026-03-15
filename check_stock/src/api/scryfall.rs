@@ -1,6 +1,8 @@
 use crate::error::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
 
+pub use mtg_common::scryfall::{CardFace, ImageUris, ScryfallPrices};
+
 /// Scryfall card response
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[allow(dead_code)]
@@ -29,64 +31,16 @@ pub struct ScryfallCard {
     pub oracle_text: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-#[allow(dead_code)]
-pub struct ScryfallPrices {
-    pub eur: Option<String>,
-    pub eur_foil: Option<String>,
-    pub usd: Option<String>,
-    pub usd_foil: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[allow(dead_code)]
-pub struct ImageUris {
-    pub small: Option<String>,
-    pub normal: Option<String>,
-    pub large: Option<String>,
-    pub png: Option<String>,
-    pub art_crop: Option<String>,
-    pub border_crop: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[allow(dead_code)]
-pub struct CardFace {
-    pub name: String,
-    #[serde(default)]
-    pub image_uris: Option<ImageUris>,
-    #[serde(default)]
-    pub mana_cost: Option<String>,
-    #[serde(default)]
-    pub type_line: Option<String>,
-    #[serde(default)]
-    pub oracle_text: Option<String>,
-}
-
 impl ScryfallCard {
     /// Get the primary image URL (normal size)
     pub fn image_url(&self) -> Option<&str> {
-        // Try direct image_uris first
-        if let Some(ref uris) = self.image_uris {
-            return uris.normal.as_deref();
-        }
-        // For double-faced cards, get front face image
-        if let Some(ref faces) = self.card_faces {
-            if let Some(face) = faces.first() {
-                if let Some(ref uris) = face.image_uris {
-                    return uris.normal.as_deref();
-                }
-            }
-        }
-        None
+        mtg_common::scryfall::image_url(self.image_uris.as_ref(), self.card_faces.as_deref())
     }
 }
 
 /// Scryfall API error response
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct ScryfallError {
-    pub status: u16,
     pub code: String,
     pub details: String,
 }
@@ -113,7 +67,7 @@ pub(crate) fn fetch_card_from(
 
     let response = reqwest::blocking::Client::new()
         .get(&url)
-        .header("User-Agent", "D2D-Automations/1.0")
+        .header("User-Agent", mtg_common::USER_AGENT)
         .send()?;
 
     if response.status().is_success() {
@@ -133,7 +87,7 @@ pub fn fetch_image(url: &str) -> ApiResult<Vec<u8>> {
 
     let response = reqwest::blocking::Client::new()
         .get(url)
-        .header("User-Agent", "D2D-Automations/1.0")
+        .header("User-Agent", mtg_common::USER_AGENT)
         .send()?;
 
     if response.status().is_success() {
@@ -165,7 +119,7 @@ pub(crate) async fn fetch_card_from_async(
 
     let response = reqwest::Client::new()
         .get(&url)
-        .header("User-Agent", "D2D-Automations/1.0")
+        .header("User-Agent", mtg_common::USER_AGENT)
         .send()
         .await?;
 
@@ -186,7 +140,7 @@ pub async fn fetch_image_async(url: &str) -> ApiResult<Vec<u8>> {
 
     let response = reqwest::Client::new()
         .get(url)
-        .header("User-Agent", "D2D-Automations/1.0")
+        .header("User-Agent", mtg_common::USER_AGENT)
         .send()
         .await?;
 

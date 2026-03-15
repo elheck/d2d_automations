@@ -5,6 +5,8 @@
 use crate::error::InventoryError;
 use serde::{Deserialize, Serialize};
 
+pub use mtg_common::scryfall::{CardFace, ImageUris, PurchaseUris};
+
 /// Scryfall card response
 #[derive(Debug, Deserialize)]
 pub struct ScryfallCard {
@@ -26,27 +28,6 @@ pub struct ScryfallCard {
     pub oracle_text: Option<String>,
     #[serde(default)]
     pub purchase_uris: Option<PurchaseUris>,
-}
-
-/// Purchase links from Scryfall
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct PurchaseUris {
-    pub cardmarket: Option<String>,
-    pub tcgplayer: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ImageUris {
-    pub small: Option<String>,
-    pub normal: Option<String>,
-    pub large: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CardFace {
-    pub name: String,
-    #[serde(default)]
-    pub image_uris: Option<ImageUris>,
 }
 
 /// Metadata about a card from Scryfall (serializable for caching)
@@ -75,24 +56,9 @@ impl ScryfallCard {
 
     /// Get the primary image URL (normal size)
     pub fn image_url(&self) -> Option<&str> {
-        // Try direct image_uris first
-        if let Some(ref uris) = self.image_uris {
-            return uris.normal.as_deref();
-        }
-        // For double-faced cards, get front face image
-        if let Some(ref faces) = self.card_faces {
-            if let Some(face) = faces.first() {
-                if let Some(ref uris) = face.image_uris {
-                    return uris.normal.as_deref();
-                }
-            }
-        }
-        None
+        mtg_common::scryfall::image_url(self.image_uris.as_ref(), self.card_faces.as_deref())
     }
 }
-
-/// Scryfall API user agent
-const USER_AGENT: &str = "D2D-Automations-InventorySync/1.0";
 
 /// Fetch a card from Scryfall by Cardmarket product ID.
 /// This returns the exact printing matching the Cardmarket listing.
@@ -103,7 +69,7 @@ pub async fn fetch_card_by_cardmarket_id(id: u64) -> Result<ScryfallCard, Invent
 
     let response = reqwest::Client::new()
         .get(&url)
-        .header("User-Agent", USER_AGENT)
+        .header("User-Agent", mtg_common::USER_AGENT)
         .send()
         .await?;
 
@@ -129,7 +95,7 @@ pub async fn fetch_card_by_name(name: &str) -> Result<ScryfallCard, InventoryErr
 
     let response = reqwest::Client::new()
         .get(&url)
-        .header("User-Agent", USER_AGENT)
+        .header("User-Agent", mtg_common::USER_AGENT)
         .send()
         .await?;
 
@@ -146,7 +112,7 @@ pub async fn fetch_image(url: &str) -> Result<Vec<u8>, InventoryError> {
 
     let response = reqwest::Client::new()
         .get(url)
-        .header("User-Agent", "D2D-Automations-InventorySync/1.0")
+        .header("User-Agent", mtg_common::USER_AGENT)
         .send()
         .await?;
 

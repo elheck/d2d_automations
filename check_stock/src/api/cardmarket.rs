@@ -1,43 +1,7 @@
 use crate::error::{ApiError, ApiResult};
-use serde::Deserialize;
 use std::collections::HashMap;
 
-/// Cardmarket price guide entry
-#[derive(Debug, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-pub struct PriceGuideEntry {
-    pub id_product: u64,
-    pub id_category: u64,
-    pub avg: Option<f64>,
-    pub low: Option<f64>,
-    pub trend: Option<f64>,
-    pub avg1: Option<f64>,
-    pub avg7: Option<f64>,
-    pub avg30: Option<f64>,
-    #[serde(rename = "avg-foil")]
-    pub avg_foil: Option<f64>,
-    #[serde(rename = "low-foil")]
-    pub low_foil: Option<f64>,
-    #[serde(rename = "trend-foil")]
-    pub trend_foil: Option<f64>,
-    #[serde(rename = "avg1-foil")]
-    pub avg1_foil: Option<f64>,
-    #[serde(rename = "avg7-foil")]
-    pub avg7_foil: Option<f64>,
-    #[serde(rename = "avg30-foil")]
-    pub avg30_foil: Option<f64>,
-}
-
-/// Full price guide file structure
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-pub struct PriceGuideFile {
-    pub version: u32,
-    pub created_at: String,
-    pub price_guides: Vec<PriceGuideEntry>,
-}
+pub use mtg_common::cardmarket::{PriceGuideEntry, PriceGuideFile};
 
 /// Price guide lookup by product ID
 #[derive(Debug)]
@@ -67,9 +31,7 @@ impl PriceGuide {
 
     /// Fetch price guide from Cardmarket's CDN
     pub fn fetch() -> ApiResult<Self> {
-        Self::fetch_from(
-            "https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_1.json",
-        )
+        Self::fetch_from(mtg_common::PRICE_GUIDE_URL)
     }
 
     /// Fetches price guide from the given URL (for testing with mock servers).
@@ -78,7 +40,7 @@ impl PriceGuide {
 
         let response = reqwest::blocking::Client::new()
             .get(url)
-            .header("User-Agent", "D2D-Automations/1.0")
+            .header("User-Agent", mtg_common::USER_AGENT)
             .send()?;
 
         if !response.status().is_success() {
@@ -115,10 +77,7 @@ impl PriceGuide {
 
     /// Fetch price guide from Cardmarket's CDN (async)
     pub async fn fetch_async() -> ApiResult<Self> {
-        Self::fetch_from_async(
-            "https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_1.json",
-        )
-        .await
+        Self::fetch_from_async(mtg_common::PRICE_GUIDE_URL).await
     }
 
     /// Fetches price guide from the given URL (async, for testing with mock servers).
@@ -127,7 +86,7 @@ impl PriceGuide {
 
         let response = reqwest::Client::new()
             .get(url)
-            .header("User-Agent", "D2D-Automations/1.0")
+            .header("User-Agent", mtg_common::USER_AGENT)
             .send()
             .await?;
 

@@ -6,6 +6,7 @@ description = "MTG inventory sync - collects pricing data and syncs stock from C
 authors = ["Aron"]
 
 [dependencies]
+mtg_common = { path = "../mtg_common" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }

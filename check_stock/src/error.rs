@@ -2,7 +2,6 @@ use std::fmt;
 
 /// Unified error type for API and I/O operations
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum ApiError {
     /// HTTP request failed (network error, timeout, etc.)
     Network(reqwest::Error),
@@ -60,6 +59,17 @@ impl From<serde_json::Error> for ApiError {
 impl From<std::io::Error> for ApiError {
     fn from(err: std::io::Error) -> Self {
         ApiError::Io(err)
+    }
+}
+
+impl From<mtg_common::MtgError> for ApiError {
+    fn from(err: mtg_common::MtgError) -> Self {
+        match err {
+            mtg_common::MtgError::Network(e) => ApiError::Network(e),
+            mtg_common::MtgError::Parse(e) => ApiError::Parse(e),
+            mtg_common::MtgError::HttpStatus(s) => ApiError::HttpStatus(s),
+            mtg_common::MtgError::Io(e) => ApiError::Io(e),
+        }
     }
 }
 
