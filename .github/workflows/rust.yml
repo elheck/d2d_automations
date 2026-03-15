@@ -24,12 +24,14 @@ jobs:
           filters: |
             check_stock:
               - 'check_stock/**'
+              - 'mtg_common/**'
               - '.github/workflows/rust.yml'
             accounting:
               - 'accounting/**'
               - '.github/workflows/rust.yml'
             inventory_sync:
               - 'inventory_sync/**'
+              - 'mtg_common/**'
               - '.github/workflows/rust.yml'
 
   build_and_test_check_stock:
@@ -226,7 +228,8 @@ jobs:
     - name: Build test image
       uses: docker/build-push-action@v5
       with:
-        context: ./inventory_sync
+        context: .
+        file: ./inventory_sync/Dockerfile
         target: tester
         load: true
         tags: inventory_sync:test
@@ -251,7 +254,8 @@ jobs:
     - name: Build production image
       uses: docker/build-push-action@v5
       with:
-        context: ./inventory_sync
+        context: .
+        file: ./inventory_sync/Dockerfile
         target: runtime
         load: true
         tags: inventory_sync:latest
@@ -275,7 +279,8 @@ jobs:
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       uses: docker/build-push-action@v5
       with:
-        context: ./inventory_sync
+        context: .
+        file: ./inventory_sync/Dockerfile
         target: runtime
         push: true
         platforms: linux/amd64,linux/arm64,linux/arm/v7

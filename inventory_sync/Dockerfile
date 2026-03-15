@@ -9,10 +9,13 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy shared crate
+COPY mtg_common /mtg_common
+
 # Copy manifests and source
-COPY Cargo.toml Cargo.lock* ./
-COPY src ./src
-COPY static ./static
+COPY inventory_sync/Cargo.toml inventory_sync/Cargo.lock* ./
+COPY inventory_sync/src ./src
+COPY inventory_sync/static ./static
 
 # Build the application
 RUN cargo build --release
@@ -32,10 +35,13 @@ RUN apt-get update && apt-get install -y \
 RUN rustup component add rustfmt clippy && \
     cargo install cargo-audit --locked
 
+# Copy shared crate
+COPY mtg_common /mtg_common
+
 # Copy manifests and source
-COPY Cargo.toml Cargo.lock* ./
-COPY src ./src
-COPY static ./static
+COPY inventory_sync/Cargo.toml inventory_sync/Cargo.lock* ./
+COPY inventory_sync/src ./src
+COPY inventory_sync/static ./static
 
 # Default command runs full test suite
 CMD ["sh", "-c", "cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --verbose && cargo build --release && cargo audit"]
