@@ -1,4 +1,4 @@
-use super::{evaluate_counts, filter_indices};
+use super::{condition_rank, evaluate_counts, filter_indices, sort_preview};
 use crate::{
     models::Card,
     ui::state::{
@@ -644,6 +644,15 @@ fn make_wire(from: usize, to: usize) -> Wire {
     }
 }
 
+fn make_wire_ports(from: usize, from_port: usize, to: usize, to_port: usize) -> Wire {
+    Wire {
+        from_node: from,
+        from_port,
+        to_node: to,
+        to_port,
+    }
+}
+
 #[test]
 fn evaluate_counts_empty_cards_returns_empty() {
     let graph = NodeGraph::default();
@@ -1166,4 +1175,676 @@ fn json_is_human_readable() {
     assert!(json.contains("FilterName"));
     assert!(json.contains("Jace"));
     assert!(json.contains("canvas_zoom"));
+}
+
+// ── filter_indices: remaining ConditionFilter variants ────────────────────────
+
+#[test]
+fn filter_condition_ex_gd_lp_variants() {
+    let cards = vec![
+        make_card(
+            "A", "EX", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "GD", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "C", "LP", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "D", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+    ];
+    assert_eq!(
+        filter_indices(
+            &NodeKind::FilterCondition {
+                condition: ConditionFilter::Ex
+            },
+            all_indices(&cards),
+            &cards,
+        ),
+        vec![0]
+    );
+    assert_eq!(
+        filter_indices(
+            &NodeKind::FilterCondition {
+                condition: ConditionFilter::Gd
+            },
+            all_indices(&cards),
+            &cards,
+        ),
+        vec![1]
+    );
+    assert_eq!(
+        filter_indices(
+            &NodeKind::FilterCondition {
+                condition: ConditionFilter::Lp
+            },
+            all_indices(&cards),
+            &cards,
+        ),
+        vec![2]
+    );
+}
+
+// ── filter_indices: remaining LanguageFilter variants ─────────────────────────
+
+#[test]
+fn filter_language_german_french_spanish_italian() {
+    let cards = vec![
+        make_card(
+            "A", "NM", "German", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "NM", "French", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "C", "NM", "Spanish", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "D", "NM", "Italian", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "E", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+    ];
+    assert_eq!(
+        filter_indices(
+            &NodeKind::FilterLanguage {
+                language: LanguageFilter::German
+            },
+            all_indices(&cards),
+            &cards,
+        ),
+        vec![0]
+    );
+    assert_eq!(
+        filter_indices(
+            &NodeKind::FilterLanguage {
+                language: LanguageFilter::French
+            },
+            all_indices(&cards),
+            &cards,
+        ),
+        vec![1]
+    );
+    assert_eq!(
+        filter_indices(
+            &NodeKind::FilterLanguage {
+                language: LanguageFilter::Spanish
+            },
+            all_indices(&cards),
+            &cards,
+        ),
+        vec![2]
+    );
+    assert_eq!(
+        filter_indices(
+            &NodeKind::FilterLanguage {
+                language: LanguageFilter::Italian
+            },
+            all_indices(&cards),
+            &cards,
+        ),
+        vec![3]
+    );
+}
+
+// ── filter_indices: remaining RarityFilter variants ───────────────────────────
+
+#[test]
+fn filter_rarity_common_uncommon_mythic() {
+    let cards = vec![
+        make_card(
+            "A", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "NM", "English", "false", "1.0", "Uncommon", "Set", "s1", None,
+        ),
+        make_card(
+            "C", "NM", "English", "false", "1.0", "Mythic", "Set", "s1", None,
+        ),
+        make_card(
+            "D", "NM", "English", "false", "1.0", "Rare", "Set", "s1", None,
+        ),
+    ];
+    assert_eq!(
+        filter_indices(
+            &NodeKind::FilterRarity {
+                rarity: RarityFilter::Common
+            },
+            all_indices(&cards),
+            &cards,
+        ),
+        vec![0]
+    );
+    assert_eq!(
+        filter_indices(
+            &NodeKind::FilterRarity {
+                rarity: RarityFilter::Uncommon
+            },
+            all_indices(&cards),
+            &cards,
+        ),
+        vec![1]
+    );
+    assert_eq!(
+        filter_indices(
+            &NodeKind::FilterRarity {
+                rarity: RarityFilter::Mythic
+            },
+            all_indices(&cards),
+            &cards,
+        ),
+        vec![2]
+    );
+}
+
+// ── NodeKind: logical node metadata ──────────────────────────────────────────
+
+#[test]
+fn node_kind_logical_titles() {
+    assert_eq!(NodeKind::LogicalAnd.title(), "AND");
+    assert_eq!(NodeKind::LogicalOr.title(), "OR");
+    assert_eq!(NodeKind::LogicalNot.title(), "NOT");
+}
+
+#[test]
+fn node_kind_logical_input_output_counts() {
+    assert_eq!(NodeKind::LogicalAnd.input_count(), 2);
+    assert_eq!(NodeKind::LogicalAnd.output_count(), 1);
+    assert_eq!(NodeKind::LogicalOr.input_count(), 2);
+    assert_eq!(NodeKind::LogicalOr.output_count(), 1);
+    assert_eq!(NodeKind::LogicalNot.input_count(), 1);
+    assert_eq!(NodeKind::LogicalNot.output_count(), 1);
+}
+
+#[test]
+fn node_kind_logical_param_count() {
+    assert_eq!(NodeKind::LogicalAnd.param_count(), 0);
+    assert_eq!(NodeKind::LogicalOr.param_count(), 0);
+    assert_eq!(NodeKind::LogicalNot.param_count(), 0);
+}
+
+// ── evaluate_counts: LogicalAnd ───────────────────────────────────────────────
+
+#[test]
+fn evaluate_counts_logical_and_intersection() {
+    // Cards: A=NM+English, B=GD+English, C=NM+German, D=GD+German
+    // AND(FilterNM, FilterEnglish) → only A passes both
+    let cards = vec![
+        make_card(
+            "A", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "GD", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "C", "NM", "German", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "D", "GD", "German", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+    ];
+    let nodes = vec![
+        make_node(0, NodeKind::CsvSource),
+        make_node(
+            1,
+            NodeKind::FilterCondition {
+                condition: ConditionFilter::Nm,
+            },
+        ),
+        make_node(
+            2,
+            NodeKind::FilterLanguage {
+                language: LanguageFilter::English,
+            },
+        ),
+        make_node(3, NodeKind::LogicalAnd),
+        make_node(4, NodeKind::Output),
+    ];
+    let wires = vec![
+        make_wire(0, 1),
+        make_wire(0, 2),
+        make_wire_ports(1, 0, 3, 0),
+        make_wire_ports(2, 0, 3, 1),
+        make_wire(3, 4),
+    ];
+    let counts = evaluate_counts(&nodes, &wires, &cards);
+    assert_eq!(counts[&3], 1);
+    assert_eq!(counts[&4], 1);
+}
+
+#[test]
+fn evaluate_counts_logical_and_unconnected_returns_zero() {
+    let cards = vec![make_card(
+        "A", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+    )];
+    let nodes = vec![make_node(0, NodeKind::LogicalAnd)];
+    let counts = evaluate_counts(&nodes, &[], &cards);
+    assert_eq!(counts[&0], 0);
+}
+
+#[test]
+fn evaluate_counts_logical_and_one_port_connected_returns_zero() {
+    // Port 1 unconnected → intersection with empty set → 0
+    let cards = vec![make_card(
+        "A", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+    )];
+    let nodes = vec![
+        make_node(0, NodeKind::CsvSource),
+        make_node(1, NodeKind::LogicalAnd),
+    ];
+    let wires = vec![make_wire_ports(0, 0, 1, 0)]; // only port 0 connected
+    let counts = evaluate_counts(&nodes, &wires, &cards);
+    assert_eq!(counts[&1], 0);
+}
+
+// ── evaluate_counts: LogicalOr ────────────────────────────────────────────────
+
+#[test]
+fn evaluate_counts_logical_or_union() {
+    // Cards: A=NM+foil, B=GD+foil, C=NM+non-foil, D=GD+non-foil
+    // OR(FilterNM, FilterFoil): A∪B∪C = 3 (D fails both)
+    let cards = vec![
+        make_card(
+            "A", "NM", "English", "true", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "GD", "English", "true", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "C", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "D", "GD", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+    ];
+    let nodes = vec![
+        make_node(0, NodeKind::CsvSource),
+        make_node(
+            1,
+            NodeKind::FilterCondition {
+                condition: ConditionFilter::Nm,
+            },
+        ),
+        make_node(
+            2,
+            NodeKind::FilterFoil {
+                mode: FoilFilter::FoilOnly,
+            },
+        ),
+        make_node(3, NodeKind::LogicalOr),
+        make_node(4, NodeKind::Output),
+    ];
+    let wires = vec![
+        make_wire(0, 1),
+        make_wire(0, 2),
+        make_wire_ports(1, 0, 3, 0),
+        make_wire_ports(2, 0, 3, 1),
+        make_wire(3, 4),
+    ];
+    let counts = evaluate_counts(&nodes, &wires, &cards);
+    assert_eq!(counts[&3], 3);
+    assert_eq!(counts[&4], 3);
+}
+
+#[test]
+fn evaluate_counts_logical_or_deduplicates_overlap() {
+    // Both filters match the same card — OR must not double-count it
+    let cards = vec![
+        make_card(
+            "A", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "GD", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+    ];
+    // FilterLanguage(English) → {A, B}; FilterName("A") → {A}; OR → {A, B} (not 3)
+    let nodes = vec![
+        make_node(0, NodeKind::CsvSource),
+        make_node(
+            1,
+            NodeKind::FilterLanguage {
+                language: LanguageFilter::English,
+            },
+        ),
+        make_node(2, NodeKind::FilterName { term: "A".into() }),
+        make_node(3, NodeKind::LogicalOr),
+    ];
+    let wires = vec![
+        make_wire(0, 1),
+        make_wire(0, 2),
+        make_wire_ports(1, 0, 3, 0),
+        make_wire_ports(2, 0, 3, 1),
+    ];
+    let counts = evaluate_counts(&nodes, &wires, &cards);
+    assert_eq!(counts[&3], 2);
+}
+
+// ── evaluate_counts: LogicalNot ───────────────────────────────────────────────
+
+#[test]
+fn evaluate_counts_logical_not_complement() {
+    // CSV(3 cards) → FilterNM → NOT → Output: NOT inverts, returns GD and PL
+    let cards = vec![
+        make_card(
+            "A", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "GD", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "C", "PL", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+    ];
+    let nodes = vec![
+        make_node(0, NodeKind::CsvSource),
+        make_node(
+            1,
+            NodeKind::FilterCondition {
+                condition: ConditionFilter::Nm,
+            },
+        ),
+        make_node(2, NodeKind::LogicalNot),
+        make_node(3, NodeKind::Output),
+    ];
+    let wires = vec![make_wire(0, 1), make_wire(1, 2), make_wire(2, 3)];
+    let counts = evaluate_counts(&nodes, &wires, &cards);
+    assert_eq!(counts[&2], 2); // B and C
+    assert_eq!(counts[&3], 2);
+}
+
+#[test]
+fn evaluate_counts_logical_not_unconnected_returns_all() {
+    // Unconnected NOT: complement of empty input = all cards
+    let cards = vec![
+        make_card(
+            "A", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "GD", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+    ];
+    let nodes = vec![make_node(0, NodeKind::LogicalNot)];
+    let counts = evaluate_counts(&nodes, &[], &cards);
+    assert_eq!(counts[&0], 2);
+}
+
+// ── condition_rank ────────────────────────────────────────────────────────────
+
+#[test]
+fn condition_rank_strict_ordering() {
+    assert!(condition_rank("NM") < condition_rank("EX"));
+    assert!(condition_rank("EX") < condition_rank("GD"));
+    assert!(condition_rank("GD") < condition_rank("LP"));
+    assert!(condition_rank("LP") < condition_rank("PL"));
+}
+
+#[test]
+fn condition_rank_case_insensitive() {
+    assert_eq!(condition_rank("nm"), condition_rank("NM"));
+    assert_eq!(condition_rank("ex"), condition_rank("EX"));
+    assert_eq!(condition_rank("gd"), condition_rank("GD"));
+}
+
+#[test]
+fn condition_rank_unknown_is_lowest_priority() {
+    assert_eq!(condition_rank("UNKNOWN"), 5);
+    assert_eq!(condition_rank(""), 5);
+    assert!(condition_rank("PL") < condition_rank("UNKNOWN"));
+}
+
+// ── sort_preview ──────────────────────────────────────────────────────────────
+
+#[test]
+fn sort_preview_by_name_ascending() {
+    let cards = vec![
+        make_card(
+            "Zap", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "Bolt", "NM", "English", "false", "2.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "Aura", "NM", "English", "false", "3.0", "Common", "Set", "s1", None,
+        ),
+    ];
+    let mut indices = vec![0, 1, 2];
+    sort_preview(&mut indices, &cards, 0, true);
+    assert_eq!(indices, vec![2, 1, 0]); // Aura, Bolt, Zap
+}
+
+#[test]
+fn sort_preview_by_name_descending() {
+    let cards = vec![
+        make_card(
+            "Aura", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "Bolt", "NM", "English", "false", "2.0", "Common", "Set", "s1", None,
+        ),
+    ];
+    let mut indices = vec![0, 1];
+    sort_preview(&mut indices, &cards, 0, false);
+    assert_eq!(indices, vec![1, 0]); // Bolt, Aura
+}
+
+#[test]
+fn sort_preview_by_set_ascending() {
+    let cards = vec![
+        make_card(
+            "A", "NM", "English", "false", "1.0", "Common", "Zendikar", "zen", None,
+        ),
+        make_card(
+            "B", "NM", "English", "false", "1.0", "Common", "Alpha", "lea", None,
+        ),
+    ];
+    let mut indices = vec![0, 1];
+    sort_preview(&mut indices, &cards, 1, true);
+    assert_eq!(indices, vec![1, 0]); // Alpha, Zendikar
+}
+
+#[test]
+fn sort_preview_by_condition_rank_ascending() {
+    let cards = vec![
+        make_card(
+            "A", "PL", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "C", "GD", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+    ];
+    let mut indices = vec![0, 1, 2];
+    sort_preview(&mut indices, &cards, 2, true); // NM first
+    assert_eq!(indices, vec![1, 2, 0]); // NM, GD, PL
+}
+
+#[test]
+fn sort_preview_by_language_ascending() {
+    let cards = vec![
+        make_card(
+            "A", "NM", "Spanish", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "C", "NM", "German", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+    ];
+    let mut indices = vec![0, 1, 2];
+    sort_preview(&mut indices, &cards, 3, true);
+    assert_eq!(indices, vec![1, 2, 0]); // English, German, Spanish
+}
+
+#[test]
+fn sort_preview_by_foil_ascending_non_foil_first() {
+    let cards = vec![
+        make_card(
+            "A", "NM", "English", "true", "1.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+    ];
+    let mut indices = vec![0, 1];
+    sort_preview(&mut indices, &cards, 4, true);
+    assert_eq!(indices, vec![1, 0]); // non-foil first
+}
+
+#[test]
+fn sort_preview_by_price_ascending() {
+    let cards = vec![
+        make_card(
+            "A", "NM", "English", "false", "3.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "NM", "English", "false", "0.5", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "C", "NM", "English", "false", "1.5", "Common", "Set", "s1", None,
+        ),
+    ];
+    let mut indices = vec![0, 1, 2];
+    sort_preview(&mut indices, &cards, 5, true);
+    assert_eq!(indices, vec![1, 2, 0]); // 0.5, 1.5, 3.0
+}
+
+#[test]
+fn sort_preview_by_price_descending() {
+    let cards = vec![
+        make_card(
+            "A", "NM", "English", "false", "1.5", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "NM", "English", "false", "3.0", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "C", "NM", "English", "false", "0.5", "Common", "Set", "s1", None,
+        ),
+    ];
+    let mut indices = vec![0, 1, 2];
+    sort_preview(&mut indices, &cards, 5, false);
+    assert_eq!(indices, vec![1, 0, 2]); // 3.0, 1.5, 0.5
+}
+
+#[test]
+fn sort_preview_price_unparseable_treated_as_zero() {
+    let cards = vec![
+        make_card(
+            "A", "NM", "English", "false", "invalid", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "NM", "English", "false", "2.0", "Common", "Set", "s1", None,
+        ),
+    ];
+    let mut indices = vec![0, 1];
+    sort_preview(&mut indices, &cards, 5, true);
+    assert_eq!(indices, vec![0, 1]); // invalid→0.0 < 2.0
+}
+
+#[test]
+fn sort_preview_by_location_ascending() {
+    let cards = vec![
+        make_card(
+            "A",
+            "NM",
+            "English",
+            "false",
+            "1.0",
+            "Common",
+            "Set",
+            "s1",
+            Some("C1"),
+        ),
+        make_card(
+            "B",
+            "NM",
+            "English",
+            "false",
+            "1.0",
+            "Common",
+            "Set",
+            "s1",
+            Some("A1"),
+        ),
+        make_card(
+            "C", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+        ),
+    ];
+    let mut indices = vec![0, 1, 2];
+    sort_preview(&mut indices, &cards, 6, true);
+    assert_eq!(indices, vec![2, 1, 0]); // ""(None) < "A1" < "C1"
+}
+
+#[test]
+fn sort_preview_empty_indices_is_noop() {
+    let cards = vec![make_card(
+        "A", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
+    )];
+    let mut indices: Vec<usize> = vec![];
+    sort_preview(&mut indices, &cards, 0, true);
+    assert!(indices.is_empty());
+}
+
+// ── filter enum as_str ────────────────────────────────────────────────────────
+
+#[test]
+fn language_filter_as_str() {
+    assert_eq!(LanguageFilter::Any.as_str(), "Any");
+    assert_eq!(LanguageFilter::English.as_str(), "English");
+    assert_eq!(LanguageFilter::German.as_str(), "German");
+    assert_eq!(LanguageFilter::French.as_str(), "French");
+    assert_eq!(LanguageFilter::Spanish.as_str(), "Spanish");
+    assert_eq!(LanguageFilter::Italian.as_str(), "Italian");
+}
+
+#[test]
+fn foil_filter_as_str() {
+    assert_eq!(FoilFilter::Any.as_str(), "Any");
+    assert_eq!(FoilFilter::FoilOnly.as_str(), "Foil only");
+    assert_eq!(FoilFilter::NonFoilOnly.as_str(), "Non-foil only");
+}
+
+#[test]
+fn rarity_filter_as_str() {
+    assert_eq!(RarityFilter::Any.as_str(), "Any");
+    assert_eq!(RarityFilter::Common.as_str(), "Common");
+    assert_eq!(RarityFilter::Uncommon.as_str(), "Uncommon");
+    assert_eq!(RarityFilter::Rare.as_str(), "Rare");
+    assert_eq!(RarityFilter::Mythic.as_str(), "Mythic");
+}
+
+#[test]
+fn condition_filter_as_str_all_variants() {
+    assert_eq!(ConditionFilter::Ex.as_str(), "EX");
+    assert_eq!(ConditionFilter::Gd.as_str(), "GD");
+    assert_eq!(ConditionFilter::Lp.as_str(), "LP");
+}
+
+// ── round-trip: logical node kinds survive serialization ──────────────────────
+
+#[test]
+fn round_trip_preserves_logical_node_kinds() {
+    let mut g = NodeGraph::default();
+    g.add_node(NodeKind::LogicalAnd, eframe::egui::pos2(100.0, 0.0));
+    g.add_node(NodeKind::LogicalOr, eframe::egui::pos2(200.0, 0.0));
+    g.add_node(NodeKind::LogicalNot, eframe::egui::pos2(300.0, 0.0));
+    let restored = NodeGraph::load(g.save());
+    assert!(restored
+        .nodes
+        .iter()
+        .any(|n| matches!(n.kind, NodeKind::LogicalAnd)));
+    assert!(restored
+        .nodes
+        .iter()
+        .any(|n| matches!(n.kind, NodeKind::LogicalOr)));
+    assert!(restored
+        .nodes
+        .iter()
+        .any(|n| matches!(n.kind, NodeKind::LogicalNot)));
 }
