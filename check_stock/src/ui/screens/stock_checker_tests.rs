@@ -5,26 +5,9 @@ use crate::models::Card;
 
 fn make_card(name: &str, price: &str) -> Card {
     Card {
-        cardmarket_id: "1".to_string(),
-        quantity: "1".to_string(),
         name: name.to_string(),
-        set: "Test Set".to_string(),
-        set_code: "tst".to_string(),
-        cn: "1".to_string(),
-        condition: "NM".to_string(),
-        language: "English".to_string(),
-        is_foil: "0".to_string(),
-        is_playset: None,
-        is_signed: "0".to_string(),
         price: price.to_string(),
-        comment: String::new(),
-        location: None,
-        name_de: String::new(),
-        name_es: String::new(),
-        name_fr: String::new(),
-        name_it: String::new(),
-        rarity: "common".to_string(),
-        listed_at: "2025-01-01".to_string(),
+        ..Card::test_default()
     }
 }
 
@@ -279,26 +262,10 @@ mod perform_stock_check_tests {
 
     fn make_inventory_card(name: &str, quantity: i32, name_de: &str) -> Card {
         Card {
-            cardmarket_id: "1".to_string(),
-            quantity: quantity.to_string(),
             name: name.to_string(),
-            set: "Test Set".to_string(),
-            set_code: "tst".to_string(),
-            cn: "1".to_string(),
-            condition: "NM".to_string(),
-            language: "English".to_string(),
-            is_foil: "0".to_string(),
-            is_playset: None,
-            is_signed: "0".to_string(),
-            price: "1.00".to_string(),
-            comment: String::new(),
-            location: None,
+            quantity: quantity.to_string(),
             name_de: name_de.to_string(),
-            name_es: String::new(),
-            name_fr: String::new(),
-            name_it: String::new(),
-            rarity: "common".to_string(),
-            listed_at: "2025-01-01".to_string(),
+            ..Card::test_default()
         }
     }
 

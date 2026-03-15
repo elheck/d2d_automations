@@ -80,13 +80,11 @@ impl CardCache {
     }
 
     /// Get card count
-    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.cards.len()
     }
 
     /// Check if empty
-    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.cards.is_empty()
     }

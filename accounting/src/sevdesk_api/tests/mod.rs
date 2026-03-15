@@ -6,4 +6,3 @@ mod countries_tests;
 mod invoice_workflow_tests;
 mod invoices_tests;
 mod models_tests;
-mod utils_tests;

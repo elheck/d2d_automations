@@ -11,14 +11,17 @@ mod invoice_workflow;
 mod invoices;
 mod simulation;
 mod users;
-mod utils;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use std::time::Duration;
+
 use reqwest::Client;
 
 use countries::CountryCache;
+
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// SevDesk API client for creating invoices and managing contacts.
 pub struct SevDeskApi {
@@ -34,7 +37,10 @@ impl SevDeskApi {
         log::info!("Creating SevDesk API client");
         log::debug!("API token length: {}", api_token.len());
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(HTTP_TIMEOUT)
+                .build()
+                .expect("Failed to build HTTP client"),
             api_token,
             base_url: "https://my.sevdesk.de/api/v1".to_string(),
             country_cache: Arc::new(RwLock::new(CountryCache::default())),

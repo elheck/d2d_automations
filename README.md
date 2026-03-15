@@ -70,14 +70,3 @@ Full security and refactoring review conducted 2026-03-15. Findings below, order
 | M7 | inventory_sync | No graceful shutdown |
 | M8 | inventory_sync | Unbounded image cache can fill disk |
 | M9 | inventory_sync | CDN script without SRI hash |
-
-### Phase 4: Refactoring — Within Projects
-
-| # | Issue | Project |
-|---|-------|---------|
-| R1 | 8x duplicated `create_test_card` helper | check_stock |
-| R2 | Duplicated `parse_price` function | accounting |
-| R3 | `InvoiceApp` god object (740 lines) | accounting |
-| R4 | 40x `#[allow(dead_code)]` annotations | all |
-| R5 | `partial_cmp().unwrap()` on f64 (panics on NaN) | check_stock |
-| R6 | No HTTP timeout on reqwest clients | accounting, check_stock |

@@ -3,6 +3,9 @@
 use crate::error::{Error, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::time::Duration;
+
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Cardmarket product catalog URLs (MTG = category 1)
 const SINGLES_URL: &str =
@@ -43,7 +46,7 @@ pub struct ProductCatalog {
 impl ProductCatalog {
     /// Fetch both singles and non-singles product catalogs from Cardmarket's CDN
     pub async fn fetch() -> Result<Self> {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder().timeout(HTTP_TIMEOUT).build()?;
 
         // Fetch singles
         log::info!("Fetching singles product catalog from Cardmarket...");

@@ -4,6 +4,9 @@
 
 use crate::error::InventoryError;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub use mtg_common::scryfall::{CardFace, ImageUris, PurchaseUris};
 
@@ -67,7 +70,9 @@ pub async fn fetch_card_by_cardmarket_id(id: u64) -> Result<ScryfallCard, Invent
 
     log::debug!("Fetching card from Scryfall by cardmarket ID: {}", id);
 
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()?
         .get(&url)
         .header("User-Agent", mtg_common::USER_AGENT)
         .send()
@@ -93,7 +98,9 @@ pub async fn fetch_card_by_name(name: &str) -> Result<ScryfallCard, InventoryErr
 
     log::debug!("Fetching card from Scryfall: {}", name);
 
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()?
         .get(&url)
         .header("User-Agent", mtg_common::USER_AGENT)
         .send()
@@ -110,7 +117,9 @@ pub async fn fetch_card_by_name(name: &str) -> Result<ScryfallCard, InventoryErr
 pub async fn fetch_image(url: &str) -> Result<Vec<u8>, InventoryError> {
     log::debug!("Fetching image from URL: {}", url);
 
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()?
         .get(url)
         .header("User-Agent", mtg_common::USER_AGENT)
         .send()

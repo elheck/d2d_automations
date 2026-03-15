@@ -417,29 +417,13 @@ mod tests {
     use super::*;
     use crate::models::Card;
 
-    // Helper to create a test card
     fn create_test_card(name: &str, price: &str, quantity: i32) -> Card {
         Card {
-            cardmarket_id: "12345".to_string(),
-            quantity: quantity.to_string(),
             name: name.to_string(),
-            set: "Alpha".to_string(),
-            set_code: "LEA".to_string(),
-            cn: "123".to_string(),
-            condition: "NM".to_string(),
-            language: "English".to_string(),
-            is_foil: "false".to_string(),
-            is_playset: None,
-            is_signed: "false".to_string(),
             price: price.to_string(),
-            comment: "".to_string(),
+            quantity: quantity.to_string(),
             location: Some("A-0-1-1".to_string()),
-            name_de: "".to_string(),
-            name_es: "".to_string(),
-            name_fr: "".to_string(),
-            name_it: "".to_string(),
-            rarity: "common".to_string(),
-            listed_at: "2024-01-01".to_string(),
+            ..Card::test_default()
         }
     }
 

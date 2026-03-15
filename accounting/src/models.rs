@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct OrderItem {
     pub description: String,
-    #[allow(dead_code)]
     pub product_id: String,
     pub localized_product_name: String,
     pub price: f64,
@@ -11,29 +11,25 @@ pub struct OrderItem {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct OrderRecord {
     pub order_id: String,
-    #[allow(dead_code)]
     pub username: String,
     pub name: String,
     pub street: String,
     pub zip: String,  // Postal code
     pub city: String, // City name without postal code
     pub country: String,
-    #[allow(dead_code)]
     pub is_professional: Option<String>,
-    #[allow(dead_code)]
     pub vat_number: Option<String>,
     pub date_of_purchase: String,
     pub article_count: u32,
     pub merchandise_value: String,
     pub shipment_costs: String,
     pub total_value: String,
-    #[allow(dead_code)]
     pub commission: String,
     pub currency: String,
     pub description: String,
-    #[allow(dead_code)]
     pub product_id: String,
     pub localized_product_name: String,
     #[serde(skip)]
@@ -42,16 +38,14 @@ pub struct OrderRecord {
 
 // Simplified structure for card inventory data
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CardRecord {
     pub product_id: String,
     pub card_name: String,
     pub set_name: String,
-    #[allow(dead_code)]
     pub collector_number: String,
-    #[allow(dead_code)]
     pub rarity: String,
     pub condition: String,
-    #[allow(dead_code)]
     pub language: String,
     pub price: String,
     pub currency: String,
@@ -193,8 +187,8 @@ pub struct SevDeskUnity {
 
 // API Response types
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct SevDeskResponse<T> {
-    #[allow(dead_code)]
     pub success: Option<bool>,
     pub objects: Option<Vec<T>>,
 }
@@ -212,18 +206,14 @@ pub struct SevDeskSingleObjectResponse<T> {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct ContactResponse {
     pub id: String, // SevDesk returns ID as string
-    #[allow(dead_code)]
     pub name: String,
     #[serde(rename = "objectName")]
-    #[allow(dead_code)]
     pub object_name: String,
-    // Add other fields that might be useful, but make them optional
     #[serde(rename = "customerNumber")]
-    #[allow(dead_code)]
     pub customer_number: Option<String>,
-    #[allow(dead_code)]
     pub status: Option<String>,
 }
 
@@ -235,17 +225,17 @@ pub struct InvoiceResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct UserResponse {
     pub id: String, // SevDesk returns ID as string
     pub username: String,
     #[serde(rename = "objectName")]
-    #[allow(dead_code)]
     pub object_name: String,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct InvoiceCreationResult {
-    #[allow(dead_code)]
     pub order_id: String,
     pub customer_name: String,
     pub invoice_id: Option<u32>,
@@ -329,26 +319,24 @@ impl SendType {
 
 /// Response from /StaticCountry endpoint
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct StaticCountryResponse {
     pub id: String,
     pub name: String,
     #[serde(rename = "nameEn")]
     pub name_en: Option<String>,
     #[serde(rename = "translationCode")]
-    #[allow(dead_code)]
     pub translation_code: Option<String>,
-    #[allow(dead_code)]
     pub locale: Option<String>,
-    #[allow(dead_code)]
     pub priority: Option<String>,
 }
 
 /// Response from /CheckAccount endpoint - represents a payment/clearing account
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct CheckAccountResponse {
     pub id: String,
     #[serde(rename = "objectName")]
-    #[allow(dead_code)]
     pub object_name: String,
     pub name: String,
     #[serde(rename = "type")]
@@ -357,7 +345,6 @@ pub struct CheckAccountResponse {
     #[serde(rename = "defaultAccount")]
     pub default_account: Option<String>,
     pub status: Option<String>, // "0" = Archived, "100" = Active
-    #[allow(dead_code)]
     pub iban: Option<String>,
     #[serde(rename = "accountingNumber")]
     pub accounting_number: Option<String>,

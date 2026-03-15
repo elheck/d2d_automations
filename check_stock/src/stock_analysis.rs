@@ -107,54 +107,18 @@ pub fn format_stock_analysis_with_sort(stats: &StockStats, sort_order: SortOrder
 mod tests {
     use super::*;
 
-    // Helper to create a test card with a specific location and quantity
     fn create_card_at_location(location: &str, quantity: i32) -> Card {
         Card {
-            cardmarket_id: "12345".to_string(),
             quantity: quantity.to_string(),
-            name: "Test Card".to_string(),
-            set: "Test Set".to_string(),
-            set_code: "TST".to_string(),
-            cn: "1".to_string(),
-            condition: "NM".to_string(),
-            language: "English".to_string(),
-            is_foil: "false".to_string(),
-            is_playset: None,
-            is_signed: "false".to_string(),
-            price: "1.00".to_string(),
-            comment: "".to_string(),
             location: Some(location.to_string()),
-            name_de: "".to_string(),
-            name_es: "".to_string(),
-            name_fr: "".to_string(),
-            name_it: "".to_string(),
-            rarity: "common".to_string(),
-            listed_at: "2024-01-01".to_string(),
+            ..Card::test_default()
         }
     }
 
     fn create_card_without_location(quantity: i32) -> Card {
         Card {
-            cardmarket_id: "12345".to_string(),
             quantity: quantity.to_string(),
-            name: "Test Card".to_string(),
-            set: "Test Set".to_string(),
-            set_code: "TST".to_string(),
-            cn: "1".to_string(),
-            condition: "NM".to_string(),
-            language: "English".to_string(),
-            is_foil: "false".to_string(),
-            is_playset: None,
-            is_signed: "false".to_string(),
-            price: "1.00".to_string(),
-            comment: "".to_string(),
-            location: None,
-            name_de: "".to_string(),
-            name_es: "".to_string(),
-            name_fr: "".to_string(),
-            name_it: "".to_string(),
-            rarity: "common".to_string(),
-            listed_at: "2024-01-01".to_string(),
+            ..Card::test_default()
         }
     }
 

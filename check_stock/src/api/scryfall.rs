@@ -1,5 +1,8 @@
 use crate::error::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub use mtg_common::scryfall::{CardFace, ImageUris, ScryfallPrices};
 
@@ -65,7 +68,9 @@ pub(crate) fn fetch_card_from(
 
     log::info!("Fetching card from Scryfall: {}", url);
 
-    let response = reqwest::blocking::Client::new()
+    let response = reqwest::blocking::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()?
         .get(&url)
         .header("User-Agent", mtg_common::USER_AGENT)
         .send()?;
@@ -85,7 +90,9 @@ pub(crate) fn fetch_card_from(
 pub fn fetch_image(url: &str) -> ApiResult<Vec<u8>> {
     log::debug!("Fetching image: {}", url);
 
-    let response = reqwest::blocking::Client::new()
+    let response = reqwest::blocking::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()?
         .get(url)
         .header("User-Agent", mtg_common::USER_AGENT)
         .send()?;
@@ -117,7 +124,9 @@ pub(crate) async fn fetch_card_from_async(
 
     log::info!("Fetching card from Scryfall: {}", url);
 
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()?
         .get(&url)
         .header("User-Agent", mtg_common::USER_AGENT)
         .send()
@@ -138,7 +147,9 @@ pub(crate) async fn fetch_card_from_async(
 pub async fn fetch_image_async(url: &str) -> ApiResult<Vec<u8>> {
     log::debug!("Fetching image: {}", url);
 
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()?
         .get(url)
         .header("User-Agent", mtg_common::USER_AGENT)
         .send()

@@ -2,7 +2,6 @@ use d2d_automations::card_matching::find_matching_cards;
 use d2d_automations::models::{Card, Language};
 use std::time::Instant;
 
-// Helper function to create test card data
 fn create_test_card(
     id: u32,
     name: &str,

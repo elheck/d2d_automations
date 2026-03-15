@@ -1,5 +1,8 @@
 use crate::error::{ApiError, ApiResult};
 use std::collections::HashMap;
+use std::time::Duration;
+
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub use mtg_common::cardmarket::{PriceGuideEntry, PriceGuideFile};
 
@@ -9,7 +12,6 @@ pub struct PriceGuide {
     entries: HashMap<u64, PriceGuideEntry>,
 }
 
-#[allow(dead_code)]
 impl PriceGuide {
     /// Load price guide from JSON file
     pub fn load(path: &str) -> ApiResult<Self> {
@@ -38,7 +40,9 @@ impl PriceGuide {
     pub(crate) fn fetch_from(url: &str) -> ApiResult<Self> {
         log::info!("Fetching price guide from: {}", url);
 
-        let response = reqwest::blocking::Client::new()
+        let response = reqwest::blocking::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .build()?
             .get(url)
             .header("User-Agent", mtg_common::USER_AGENT)
             .send()?;
@@ -84,7 +88,9 @@ impl PriceGuide {
     pub(crate) async fn fetch_from_async(url: &str) -> ApiResult<Self> {
         log::info!("Fetching price guide from: {}", url);
 
-        let response = reqwest::Client::new()
+        let response = reqwest::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .build()?
             .get(url)
             .header("User-Agent", mtg_common::USER_AGENT)
             .send()

@@ -91,7 +91,7 @@ pub fn find_matching_cards<'a>(
                 .then_with(|| {
                     let pa = a.price.parse::<f64>().unwrap_or(f64::MAX);
                     let pb = b.price.parse::<f64>().unwrap_or(f64::MAX);
-                    pa.partial_cmp(&pb).unwrap()
+                    pa.partial_cmp(&pb).unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .then_with(|| a.name.cmp(&b.name))
                 .then_with(|| a.cardmarket_id.cmp(&b.cardmarket_id))
@@ -170,29 +170,13 @@ pub fn parse_location_code(loc: &str) -> Vec<i32> {
 mod tests {
     use super::*;
 
-    // Helper to create a test card with default values
     fn create_test_card(name: &str, language: &str) -> Card {
         Card {
-            cardmarket_id: "12345".to_string(),
             quantity: "4".to_string(),
             name: name.to_string(),
-            set: "Alpha".to_string(),
-            set_code: "LEA".to_string(),
-            cn: "123".to_string(),
-            condition: "NM".to_string(),
             language: language.to_string(),
-            is_foil: "false".to_string(),
-            is_playset: None,
-            is_signed: "false".to_string(),
-            price: "25.50".to_string(),
-            comment: "".to_string(),
             location: Some("A-0-1-1".to_string()),
-            name_de: "".to_string(),
-            name_es: "".to_string(),
-            name_fr: "".to_string(),
-            name_it: "".to_string(),
-            rarity: "common".to_string(),
-            listed_at: "2024-01-01".to_string(),
+            ..Card::test_default()
         }
     }
 
@@ -204,26 +188,14 @@ mod tests {
         name_it: &str,
     ) -> Card {
         Card {
-            cardmarket_id: "12345".to_string(),
             quantity: "4".to_string(),
             name: name.to_string(),
-            set: "Alpha".to_string(),
-            set_code: "LEA".to_string(),
-            cn: "123".to_string(),
-            condition: "NM".to_string(),
-            language: "English".to_string(),
-            is_foil: "false".to_string(),
-            is_playset: None,
-            is_signed: "false".to_string(),
-            price: "25.50".to_string(),
-            comment: "".to_string(),
-            location: Some("A-0-1-1".to_string()),
             name_de: name_de.to_string(),
             name_es: name_es.to_string(),
             name_fr: name_fr.to_string(),
             name_it: name_it.to_string(),
-            rarity: "common".to_string(),
-            listed_at: "2024-01-01".to_string(),
+            location: Some("A-0-1-1".to_string()),
+            ..Card::test_default()
         }
     }
 

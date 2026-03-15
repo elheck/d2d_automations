@@ -3,6 +3,7 @@
 use anyhow::Result;
 use log::{debug, error, info};
 
+use crate::csv_processor::field_parsers::parse_price;
 use crate::models::{InvoiceCreationResult, OrderRecord};
 
 use super::SevDeskApi;
@@ -64,9 +65,9 @@ impl SevDeskApi {
         );
 
         // Validate price parsing
-        let merchandise_value = self.parse_price(&order.merchandise_value)?;
-        let shipment_costs = self.parse_price(&order.shipment_costs)?;
-        let total_value = self.parse_price(&order.total_value)?;
+        let merchandise_value = parse_price(&order.merchandise_value)?;
+        let shipment_costs = parse_price(&order.shipment_costs)?;
+        let total_value = parse_price(&order.total_value)?;
         debug!("Prices would be - merchandise: {merchandise_value:.2}, shipping: {shipment_costs:.2}, total: {total_value:.2}");
 
         // Validate items and quantities

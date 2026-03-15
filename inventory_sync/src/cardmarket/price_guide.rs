@@ -2,6 +2,9 @@
 
 use crate::error::{Error, Result};
 use std::collections::HashMap;
+use std::time::Duration;
+
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub use mtg_common::cardmarket::{PriceGuideEntry, PriceGuideFile};
 
@@ -16,7 +19,7 @@ impl PriceGuide {
     pub async fn fetch() -> Result<Self> {
         log::info!("Fetching price guide from Cardmarket...");
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder().timeout(HTTP_TIMEOUT).build()?;
         let response = client
             .get(mtg_common::PRICE_GUIDE_URL)
             .header("User-Agent", mtg_common::USER_AGENT)

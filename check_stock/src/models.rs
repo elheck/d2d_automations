@@ -23,7 +23,6 @@ impl Language {
     }
 
     /// Returns the ISO 639-1 language code (e.g., "en", "de")
-    #[allow(dead_code)]
     pub fn code(&self) -> &'static str {
         match self {
             Language::English => "en",
@@ -76,7 +75,6 @@ impl Language {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-#[allow(dead_code)]
 pub struct Card {
     #[serde(rename = "cardmarketId")]
     pub cardmarket_id: String,
@@ -147,6 +145,36 @@ impl Card {
     }
 }
 
+#[cfg(test)]
+impl Card {
+    /// Creates a Card with sensible defaults for testing.
+    /// Override individual fields as needed: `let mut c = Card::test_default(); c.name = "...".into();`
+    pub fn test_default() -> Card {
+        Card {
+            cardmarket_id: "12345".to_string(),
+            quantity: "1".to_string(),
+            name: "Test Card".to_string(),
+            set: "Test Set".to_string(),
+            set_code: "TST".to_string(),
+            cn: "1".to_string(),
+            condition: "NM".to_string(),
+            language: "English".to_string(),
+            is_foil: "false".to_string(),
+            is_playset: None,
+            is_signed: "false".to_string(),
+            price: "1.00".to_string(),
+            comment: "".to_string(),
+            location: None,
+            name_de: "".to_string(),
+            name_es: "".to_string(),
+            name_fr: "".to_string(),
+            name_it: "".to_string(),
+            rarity: "common".to_string(),
+            listed_at: "2024-01-01".to_string(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct WantsEntry {
     pub quantity: i32,
@@ -157,29 +185,20 @@ pub struct WantsEntry {
 mod tests {
     use super::*;
 
-    // Helper to create a test card with default values
     fn create_test_card() -> Card {
         Card {
-            cardmarket_id: "12345".to_string(),
             quantity: "4".to_string(),
             name: "Lightning Bolt".to_string(),
             set: "Alpha".to_string(),
             set_code: "LEA".to_string(),
             cn: "123".to_string(),
-            condition: "NM".to_string(),
-            language: "English".to_string(),
-            is_foil: "false".to_string(),
-            is_playset: None,
-            is_signed: "false".to_string(),
             price: "25.50".to_string(),
-            comment: "".to_string(),
             location: Some("A-0-1-1".to_string()),
             name_de: "Blitzschlag".to_string(),
             name_es: "Rayo".to_string(),
             name_fr: "Éclair".to_string(),
             name_it: "Fulmine".to_string(),
-            rarity: "common".to_string(),
-            listed_at: "2024-01-01".to_string(),
+            ..Card::test_default()
         }
     }
 

@@ -47,7 +47,6 @@ impl ImageCache {
     }
 
     /// Check if an image is cached
-    #[allow(dead_code)]
     pub fn contains(&self, set_code: &str, collector_number: &str) -> bool {
         self.path(set_code, collector_number).exists()
     }

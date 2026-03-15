@@ -3,7 +3,6 @@
 use super::*;
 use crate::models::Card;
 
-/// Helper to create a test Card with minimal required fields
 fn create_test_card(
     name: &str,
     set_code: &str,
@@ -13,30 +12,17 @@ fn create_test_card(
     foil: bool,
 ) -> Card {
     Card {
-        cardmarket_id: "12345".to_string(),
-        quantity: "1".to_string(),
         name: name.to_string(),
-        set: "Test Set".to_string(),
         set_code: set_code.to_string(),
         cn: cn.to_string(),
-        condition: "NM".to_string(),
-        language: "English".to_string(),
+        price: price.to_string(),
+        location: location.map(|s| s.to_string()),
         is_foil: if foil {
             "1".to_string()
         } else {
             "0".to_string()
         },
-        is_playset: None,
-        is_signed: "0".to_string(),
-        price: price.to_string(),
-        comment: "".to_string(),
-        location: location.map(|s| s.to_string()),
-        name_de: "".to_string(),
-        name_es: "".to_string(),
-        name_fr: "".to_string(),
-        name_it: "".to_string(),
-        rarity: "common".to_string(),
-        listed_at: "2025-01-01".to_string(),
+        ..Card::test_default()
     }
 }
 
@@ -106,26 +92,8 @@ mod picking_item_tests {
     #[test]
     fn test_from_matched_card_invalid_price() {
         let card = Card {
-            cardmarket_id: "12345".to_string(),
-            quantity: "1".to_string(),
-            name: "Test Card".to_string(),
-            set: "Test Set".to_string(),
-            set_code: "tst".to_string(),
-            cn: "1".to_string(),
-            condition: "NM".to_string(),
-            language: "English".to_string(),
-            is_foil: "0".to_string(),
-            is_playset: None,
-            is_signed: "0".to_string(),
             price: "invalid".to_string(),
-            comment: "".to_string(),
-            location: None,
-            name_de: "".to_string(),
-            name_es: "".to_string(),
-            name_fr: "".to_string(),
-            name_it: "".to_string(),
-            rarity: "common".to_string(),
-            listed_at: "2025-01-01".to_string(),
+            ..Card::test_default()
         };
         let mc = create_matched_card(&card, "Test Set", 1);
 
