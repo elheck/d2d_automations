@@ -1,7 +1,10 @@
-# Only include inventory_sync and mtg_common for Docker builds
-*
-!inventory_sync/Cargo.toml
-!inventory_sync/Cargo.lock
-!inventory_sync/src/
-!inventory_sync/static/
-!mtg_common/
+# Exclude everything except inventory_sync and mtg_common
+.git
+.github
+check_stock
+accounting
+target
+*.md
+*.db
+*.sqlite
+*.csv

@@ -91,7 +91,8 @@ jobs:
       - name: Build and test in Docker
         uses: docker/build-push-action@v5
         with:
-          context: ./inventory_sync
+          context: .
+          file: ./inventory_sync/Dockerfile
           target: tester
           load: true
           tags: inventory_sync:test
@@ -272,7 +273,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: ./inventory_sync
+          context: .
+          file: ./inventory_sync/Dockerfile
           target: runtime
           push: true
           platforms: linux/amd64,linux/arm64
