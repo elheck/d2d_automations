@@ -130,7 +130,15 @@ impl PricingScreen {
 
 // Column widths (px) for the preview table — must match header and body.
 const PREVIEW_COLS: [f32; 7] = [190.0, 120.0, 52.0, 85.0, 35.0, 62.0, 110.0];
-const PREVIEW_HEADERS: [&str; 7] = ["Name", "Set", "Cond.", "Lang.", "Foil", "Price €", "Location"];
+const PREVIEW_HEADERS: [&str; 7] = [
+    "Name",
+    "Set",
+    "Cond.",
+    "Lang.",
+    "Foil",
+    "Price €",
+    "Location",
+];
 const PREVIEW_ROW_H: f32 = 18.0;
 
 fn condition_rank(cond: &str) -> u8 {
@@ -144,7 +152,7 @@ fn condition_rank(cond: &str) -> u8 {
     }
 }
 
-fn sort_preview(indices: &mut Vec<usize>, cards: &[Card], col: usize, asc: bool) {
+fn sort_preview(indices: &mut [usize], cards: &[Card], col: usize, asc: bool) {
     indices.sort_by(|&a, &b| {
         let ca = &cards[a];
         let cb = &cards[b];
@@ -165,7 +173,11 @@ fn sort_preview(indices: &mut Vec<usize>, cards: &[Card], col: usize, asc: bool)
                 .unwrap_or("")
                 .cmp(cb.location.as_deref().unwrap_or("")),
         };
-        if asc { ord } else { ord.reverse() }
+        if asc {
+            ord
+        } else {
+            ord.reverse()
+        }
     });
 }
 
@@ -189,10 +201,8 @@ fn show_preview_window(ctx: &egui::Context, state: &mut PricingState) {
             }
             if count == 0 {
                 ui.label(
-                    egui::RichText::new(
-                        "No cards in output. Connect filters to the Output node.",
-                    )
-                    .color(egui::Color32::from_rgb(160, 100, 60)),
+                    egui::RichText::new("No cards in output. Connect filters to the Output node.")
+                        .color(egui::Color32::from_rgb(160, 100, 60)),
                 );
                 return;
             }
@@ -206,11 +216,19 @@ fn show_preview_window(ctx: &egui::Context, state: &mut PricingState) {
                 {
                     let is_active = state.preview_sort_col == Some(col);
                     let indicator = if is_active {
-                        if state.preview_sort_asc { " ▲" } else { " ▼" }
+                        if state.preview_sort_asc {
+                            " ▲"
+                        } else {
+                            " ▼"
+                        }
                     } else {
                         ""
                     };
-                    let color = if is_active { active_color } else { header_color };
+                    let color = if is_active {
+                        active_color
+                    } else {
+                        header_color
+                    };
                     let text = format!("{label}{indicator}");
                     let resp = ui.add_sized(
                         [w, PREVIEW_ROW_H],
@@ -239,9 +257,7 @@ fn show_preview_window(ctx: &egui::Context, state: &mut PricingState) {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show_rows(ui, PREVIEW_ROW_H, count, |ui, row_range| {
-                    for (row_offset, &idx) in
-                        card_indices[row_range.clone()].iter().enumerate()
-                    {
+                    for (row_offset, &idx) in card_indices[row_range.clone()].iter().enumerate() {
                         let c = &state.cards[idx];
                         let stripe = (row_range.start + row_offset) % 2 == 0;
                         let row_rect = ui
@@ -258,20 +274,14 @@ fn show_preview_window(ctx: &egui::Context, state: &mut PricingState) {
                         let mut x = row_rect.min.x;
                         let cells: [(&str, egui::Color32); 7] = [
                             (c.name.as_str(), egui::Color32::WHITE),
-                            (
-                                c.set.as_str(),
-                                egui::Color32::from_rgb(140, 155, 180),
-                            ),
+                            (c.set.as_str(), egui::Color32::from_rgb(140, 155, 180)),
                             (c.condition.as_str(), egui::Color32::WHITE),
                             (c.language.as_str(), egui::Color32::WHITE),
                             (
                                 if c.is_foil_card() { "✓" } else { "" },
                                 egui::Color32::from_rgb(180, 215, 255),
                             ),
-                            (
-                                c.price.as_str(),
-                                egui::Color32::from_rgb(160, 215, 140),
-                            ),
+                            (c.price.as_str(), egui::Color32::from_rgb(160, 215, 140)),
                             (
                                 c.location.as_deref().unwrap_or("—"),
                                 egui::Color32::from_rgb(140, 155, 180),
@@ -534,10 +544,7 @@ fn show_canvas(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut PricingState)
 
     // Evaluate graph once — derive per-node counts and cache output-node indices
     let mut all_outputs = evaluate_all(&state.graph.nodes, &state.graph.wires, &state.cards);
-    let counts: HashMap<NodeId, usize> = all_outputs
-        .iter()
-        .map(|(&id, v)| (id, v.len()))
-        .collect();
+    let counts: HashMap<NodeId, usize> = all_outputs.iter().map(|(&id, v)| (id, v.len())).collect();
     // Cache the output node's card indices for the preview window (zero-cost when preview is closed)
     let output_id = state
         .graph
@@ -550,7 +557,12 @@ fn show_canvas(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut PricingState)
         .unwrap_or_default();
     // Apply the current sort in-place so the preview window is always ready
     if let Some(col) = state.preview_sort_col {
-        sort_preview(&mut state.cached_output, &state.cards, col, state.preview_sort_asc);
+        sort_preview(
+            &mut state.cached_output,
+            &state.cards,
+            col,
+            state.preview_sort_asc,
+        );
     }
 
     // Draw committed wires (behind nodes)
@@ -587,8 +599,28 @@ fn show_canvas(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut PricingState)
     // Draw node chrome (background, header, port circles, labels + count)
     for node in &state.graph.nodes {
         if let Some(rect) = rects.iter().find(|(id, _)| *id == node.id).map(|(_, r)| *r) {
-            draw_node_chrome(&painter, node, rect, counts.get(&node.id).copied(), zoom);
+            let is_selected = state.graph.selected.contains(&node.id);
+            draw_node_chrome(
+                &painter,
+                node,
+                rect,
+                counts.get(&node.id).copied(),
+                zoom,
+                is_selected,
+            );
         }
+    }
+
+    // Draw marquee rectangle on top of nodes
+    if let Some((start, end)) = state.graph.marquee {
+        let sel_rect = egui::Rect::from_two_pos(start, end);
+        painter.rect(
+            sel_rect,
+            egui::CornerRadius::ZERO,
+            egui::Color32::from_rgba_premultiplied(80, 140, 255, 20),
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 160, 255)),
+            egui::StrokeKind::Inside,
+        );
     }
 
     // Parameter widgets sit inside node bodies (ui.put uses screen-space rects)
@@ -686,6 +718,7 @@ fn draw_node_chrome(
     rect: egui::Rect,
     output_count: Option<usize>,
     zoom: f32,
+    is_selected: bool,
 ) {
     let accent = node.kind.accent_color();
     let cr = (6.0 * zoom).min(255.0) as u8;
@@ -699,6 +732,17 @@ fn draw_node_chrome(
         egui::Stroke::new(1.5, NODE_BORDER),
         egui::StrokeKind::Inside,
     );
+
+    // Selection highlight (drawn over the body border)
+    if is_selected {
+        painter.rect(
+            rect.expand(2.0),
+            egui::CornerRadius::same(cr + 2),
+            egui::Color32::TRANSPARENT,
+            egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 170, 255)),
+            egui::StrokeKind::Outside,
+        );
+    }
 
     // Header bar (rounded top corners only)
     let header_rect =
@@ -937,17 +981,58 @@ fn handle_interactions(
         }
     }
 
-    // Apply drag delta to the node being dragged (divide by zoom: screen→canvas space)
+    // Middle-mouse pan (works regardless of other interactions)
+    if response.hovered() {
+        let middle_delta = ctx.input(|i| {
+            if i.pointer.middle_down() {
+                i.pointer.delta()
+            } else {
+                egui::Vec2::ZERO
+            }
+        });
+        graph.canvas_offset += middle_delta;
+    }
+
+    // Apply drag delta to the node(s) being dragged
     if let Some((drag_id, _)) = graph.drag {
-        if let Some(node) = graph.node_mut(drag_id) {
+        if graph.selected.contains(&drag_id) {
+            // Move every selected node together
+            let selected: Vec<NodeId> = graph.selected.iter().copied().collect();
+            for node in &mut graph.nodes {
+                if selected.contains(&node.id) {
+                    node.pos += drag_delta / zoom;
+                }
+            }
+        } else if let Some(node) = graph.node_mut(drag_id) {
             node.pos += drag_delta / zoom;
         }
         if released {
             graph.drag = None;
         }
-    } else if graph.pending_wire.is_none() {
-        // Pan canvas when dragging on empty space
-        graph.canvas_offset += drag_delta;
+    } else if graph.marquee.is_some() {
+        // Update the live end of the marquee; do NOT pan
+        if let Some(mpos) = mouse_pos {
+            if let Some(ref mut m) = graph.marquee {
+                m.1 = mpos;
+            }
+        }
+    }
+
+    // Finalise marquee selection on release
+    if released {
+        if let Some((start, end)) = graph.marquee.take() {
+            let sel_rect = egui::Rect::from_two_pos(start, end);
+            if sel_rect.width() > 4.0 || sel_rect.height() > 4.0 {
+                graph.selected.clear();
+                for (id, rect) in rects {
+                    if sel_rect.intersects(*rect) {
+                        graph.selected.insert(*id);
+                    }
+                }
+            } else {
+                graph.selected.clear();
+            }
+        }
     }
 
     // Complete or cancel pending wire on mouse release
@@ -1023,6 +1108,11 @@ fn handle_interactions(
                         break;
                     }
                 }
+            }
+
+            // Clicked empty canvas → start marquee
+            if !started_wire && graph.drag.is_none() {
+                graph.marquee = Some((mpos, mpos));
             }
         }
     }
@@ -1127,8 +1217,7 @@ fn evaluate_all(
                 NodeKind::LogicalAnd => {
                     let mut result = inputs[0].clone();
                     for other in &inputs[1..] {
-                        let set: std::collections::HashSet<usize> =
-                            other.iter().copied().collect();
+                        let set: std::collections::HashSet<usize> = other.iter().copied().collect();
                         result.retain(|i| set.contains(i));
                     }
                     result

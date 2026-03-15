@@ -442,6 +442,10 @@ pub struct NodeGraph {
     pub drag: Option<(NodeId, egui::Vec2)>,
     /// Started wiring from this output port; wire follows cursor until released
     pub pending_wire: Option<(NodeId, usize)>,
+    /// Screen-space (start, current) corners of an in-progress marquee selection drag
+    pub marquee: Option<(egui::Pos2, egui::Pos2)>,
+    /// IDs of nodes currently selected via marquee
+    pub selected: std::collections::HashSet<NodeId>,
 }
 
 impl Default for NodeGraph {
@@ -454,6 +458,8 @@ impl Default for NodeGraph {
             canvas_zoom: 1.0,
             drag: None,
             pending_wire: None,
+            marquee: None,
+            selected: std::collections::HashSet::new(),
         };
         g.add_node(NodeKind::CsvSource, egui::pos2(40.0, 100.0));
         g.add_node(NodeKind::Output, egui::pos2(460.0, 100.0));
@@ -515,6 +521,8 @@ impl NodeGraph {
             canvas_zoom: saved.canvas_zoom,
             drag: None,
             pending_wire: None,
+            marquee: None,
+            selected: std::collections::HashSet::new(),
         }
     }
 }
