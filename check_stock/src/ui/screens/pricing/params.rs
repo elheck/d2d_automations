@@ -119,6 +119,45 @@ pub(super) fn show_node_params(
                 egui::TextEdit::singleline(term).hint_text("location contains…"),
             );
         }
+        NodeKind::PriceFloor {
+            common,
+            uncommon,
+            rare,
+            mythic,
+        } => {
+            ui.put(
+                param_row_rect(rect, port_rows, 0, zoom),
+                egui::DragValue::new(common)
+                    .prefix("C ≥ ")
+                    .suffix(" €")
+                    .speed(0.05)
+                    .range(0.0..=99999.0),
+            );
+            ui.put(
+                param_row_rect(rect, port_rows, 1, zoom),
+                egui::DragValue::new(uncommon)
+                    .prefix("U ≥ ")
+                    .suffix(" €")
+                    .speed(0.05)
+                    .range(0.0..=99999.0),
+            );
+            ui.put(
+                param_row_rect(rect, port_rows, 2, zoom),
+                egui::DragValue::new(rare)
+                    .prefix("R ≥ ")
+                    .suffix(" €")
+                    .speed(0.05)
+                    .range(0.0..=99999.0),
+            );
+            ui.put(
+                param_row_rect(rect, port_rows, 3, zoom),
+                egui::DragValue::new(mythic)
+                    .prefix("M ≥ ")
+                    .suffix(" €")
+                    .speed(0.05)
+                    .range(0.0..=99999.0),
+            );
+        }
         NodeKind::CsvSource
         | NodeKind::Output
         | NodeKind::LogicalAnd

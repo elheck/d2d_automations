@@ -342,18 +342,42 @@ pub enum NodeKind {
     CsvSource,
     Output,
     // Filters
-    FilterCondition { condition: ConditionFilter },
-    FilterLanguage { language: LanguageFilter },
-    FilterFoil { mode: FoilFilter },
-    FilterPrice { min: f64, max: f64 },
-    FilterRarity { rarity: RarityFilter },
-    FilterName { term: String },
-    FilterSet { term: String },
-    FilterLocation { term: String },
+    FilterCondition {
+        condition: ConditionFilter,
+    },
+    FilterLanguage {
+        language: LanguageFilter,
+    },
+    FilterFoil {
+        mode: FoilFilter,
+    },
+    FilterPrice {
+        min: f64,
+        max: f64,
+    },
+    FilterRarity {
+        rarity: RarityFilter,
+    },
+    FilterName {
+        term: String,
+    },
+    FilterSet {
+        term: String,
+    },
+    FilterLocation {
+        term: String,
+    },
     // Logic
     LogicalAnd,
     LogicalOr,
     LogicalNot,
+    // Price transforms
+    PriceFloor {
+        common: f64,
+        uncommon: f64,
+        rare: f64,
+        mythic: f64,
+    },
 }
 
 impl NodeKind {
@@ -372,6 +396,7 @@ impl NodeKind {
             Self::LogicalAnd => "AND",
             Self::LogicalOr => "OR",
             Self::LogicalNot => "NOT",
+            Self::PriceFloor { .. } => "Price Floor",
         }
     }
 
@@ -390,6 +415,7 @@ impl NodeKind {
             Self::LogicalAnd => egui::Color32::from_rgb(100, 60, 160),
             Self::LogicalOr => egui::Color32::from_rgb(60, 130, 80),
             Self::LogicalNot => egui::Color32::from_rgb(170, 55, 55),
+            Self::PriceFloor { .. } => egui::Color32::from_rgb(185, 145, 30),
         }
     }
 
@@ -413,6 +439,7 @@ impl NodeKind {
             Self::CsvSource | Self::Output => 0,
             Self::LogicalAnd | Self::LogicalOr | Self::LogicalNot => 0,
             Self::FilterPrice { .. } => 2,
+            Self::PriceFloor { .. } => 4,
             _ => 1,
         }
     }
@@ -553,6 +580,8 @@ pub struct PricingState {
     pub show_preview: bool,
     /// Cached output-node card indices, updated once per frame in show_canvas.
     pub cached_output: Vec<usize>,
+    /// Effective price overrides from PriceFloor nodes upstream of Output (card_idx → floor price).
+    pub cached_price_overrides: std::collections::HashMap<usize, f64>,
     /// Which preview column is sorted (index into PREVIEW_COLS), and direction.
     pub preview_sort_col: Option<usize>,
     pub preview_sort_asc: bool,

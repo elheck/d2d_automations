@@ -172,6 +172,29 @@ pub(super) fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
 
         ui.add_space(16.0);
         ui.label(
+            egui::RichText::new("Transform:")
+                .color(style::TEXT_MUTED)
+                .size(12.0),
+        );
+        if style::secondary_button(ui, "⌊ Price Floor")
+            .on_hover_text(
+                "Set minimum prices per rarity — cards below the floor are shown at the floor price",
+            )
+            .clicked()
+        {
+            graph.add_node(
+                NodeKind::PriceFloor {
+                    common: 0.0,
+                    uncommon: 0.0,
+                    rare: 0.0,
+                    mythic: 0.0,
+                },
+                free_pos(graph),
+            );
+        }
+
+        ui.add_space(16.0);
+        ui.label(
             egui::RichText::new("Logic:")
                 .color(style::TEXT_MUTED)
                 .size(12.0),

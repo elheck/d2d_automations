@@ -143,24 +143,32 @@ fn show_canvas(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut PricingState)
         })
         .collect();
 
-    // Evaluate graph once — derive per-node counts and cache output-node indices
+    // Evaluate graph once — derive per-node counts and cache output-node indices + price overrides
     let mut all_outputs = evaluate_all(&state.graph.nodes, &state.graph.wires, &state.cards);
-    let counts: HashMap<NodeId, usize> = all_outputs.iter().map(|(&id, v)| (id, v.len())).collect();
-    // Cache the output node's card indices for the preview window (zero-cost when preview is closed)
+    let counts: HashMap<NodeId, usize> = all_outputs
+        .iter()
+        .map(|(&id, out)| (id, out.indices.len()))
+        .collect();
+    // Cache the output node's result for the preview window (zero-cost when preview is closed)
     let output_id = state
         .graph
         .nodes
         .iter()
         .find(|n| matches!(n.kind, NodeKind::Output))
         .map(|n| n.id);
-    state.cached_output = output_id
-        .and_then(|id| all_outputs.remove(&id))
-        .unwrap_or_default();
+    if let Some(out) = output_id.and_then(|id| all_outputs.remove(&id)) {
+        state.cached_output = out.indices;
+        state.cached_price_overrides = out.overrides;
+    } else {
+        state.cached_output = Vec::new();
+        state.cached_price_overrides = HashMap::new();
+    }
     // Apply the current sort in-place so the preview window is always ready
     if let Some(col) = state.preview_sort_col {
         sort_preview(
             &mut state.cached_output,
             &state.cards,
+            &state.cached_price_overrides,
             col,
             state.preview_sort_asc,
         );

@@ -2,15 +2,25 @@ use crate::models::Card;
 use crate::ui::state::{
     ConditionFilter, FoilFilter, GraphNode, LanguageFilter, NodeId, NodeKind, RarityFilter, Wire,
 };
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
-/// Evaluates the full graph and returns the card index set for every node.
+/// Per-node evaluation result: the set of card indices that reach this node, plus any
+/// price overrides accumulated from upstream `PriceFloor` nodes.
+#[derive(Default)]
+pub(super) struct NodeOutput {
+    pub indices: Vec<usize>,
+    /// Maps card index → effective (floored) price. Only present when a PriceFloor node
+    /// raised the card's price above its CSV value.
+    pub overrides: HashMap<usize, f64>,
+}
+
+/// Evaluates the full graph and returns a `NodeOutput` for every node.
 /// Returns an empty map if no cards are loaded.
 pub(super) fn evaluate_all(
     nodes: &[GraphNode],
     wires: &[Wire],
     all_cards: &[Card],
-) -> HashMap<NodeId, Vec<usize>> {
+) -> HashMap<NodeId, NodeOutput> {
     if all_cards.is_empty() {
         return HashMap::new();
     }
@@ -49,7 +59,7 @@ pub(super) fn evaluate_all(
     }
 
     let all_indices: Vec<usize> = (0..all_cards.len()).collect();
-    let mut outputs: HashMap<NodeId, Vec<usize>> = HashMap::new();
+    let mut outputs: HashMap<NodeId, NodeOutput> = HashMap::new();
 
     for id in topo {
         let node = match nodes.iter().find(|n| n.id == id) {
@@ -58,54 +68,114 @@ pub(super) fn evaluate_all(
         };
 
         let output = if node.kind.input_count() == 0 {
-            filter_indices(&node.kind, all_indices.clone(), all_cards)
+            NodeOutput {
+                indices: filter_indices(&node.kind, all_indices.clone(), all_cards),
+                overrides: HashMap::new(),
+            }
         } else {
-            let inputs: Vec<Vec<usize>> = (0..node.kind.input_count())
+            let inputs: Vec<NodeOutput> = (0..node.kind.input_count())
                 .map(|port| {
                     incoming
                         .get(&(id, port))
                         .and_then(|&from| outputs.get(&from))
-                        .cloned()
+                        .map(|out| NodeOutput {
+                            indices: out.indices.clone(),
+                            overrides: out.overrides.clone(),
+                        })
                         .unwrap_or_default()
                 })
                 .collect();
 
             match &node.kind {
                 NodeKind::LogicalAnd => {
-                    let mut result = inputs[0].clone();
+                    let mut result = inputs[0].indices.clone();
                     for other in &inputs[1..] {
-                        let set: std::collections::HashSet<usize> = other.iter().copied().collect();
+                        let set: HashSet<usize> = other.indices.iter().copied().collect();
                         result.retain(|i| set.contains(i));
                     }
-                    result
+                    let surviving: HashSet<usize> = result.iter().copied().collect();
+                    let overrides = merge_overrides(&inputs, &surviving);
+                    NodeOutput {
+                        indices: result,
+                        overrides,
+                    }
                 }
                 NodeKind::LogicalOr => {
-                    let mut seen = std::collections::HashSet::new();
+                    let mut seen = HashSet::new();
                     let mut result = Vec::new();
                     for input in &inputs {
-                        for &i in input {
+                        for &i in &input.indices {
                             if seen.insert(i) {
                                 result.push(i);
                             }
                         }
                     }
                     result.sort_unstable();
-                    result
+                    let surviving: HashSet<usize> = result.iter().copied().collect();
+                    let overrides = merge_overrides(&inputs, &surviving);
+                    NodeOutput {
+                        indices: result,
+                        overrides,
+                    }
                 }
                 NodeKind::LogicalNot => {
-                    let excluded: std::collections::HashSet<usize> =
-                        inputs[0].iter().copied().collect();
-                    all_indices
+                    let excluded: HashSet<usize> = inputs[0].indices.iter().copied().collect();
+                    let result: Vec<usize> = all_indices
                         .iter()
                         .copied()
                         .filter(|i| !excluded.contains(i))
-                        .collect()
+                        .collect();
+                    // Cards coming out of NOT didn't flow through any PriceFloor on this path.
+                    NodeOutput {
+                        indices: result,
+                        overrides: HashMap::new(),
+                    }
                 }
-                _ => filter_indices(
-                    &node.kind,
-                    inputs.into_iter().next().unwrap_or_default(),
-                    all_cards,
-                ),
+                NodeKind::PriceFloor {
+                    common,
+                    uncommon,
+                    rare,
+                    mythic,
+                } => {
+                    let input = inputs.into_iter().next().unwrap_or_default();
+                    let mut overrides = input.overrides;
+                    for &idx in &input.indices {
+                        let card = &all_cards[idx];
+                        let floor = match card.rarity.to_lowercase().as_str() {
+                            "common" => *common,
+                            "uncommon" => *uncommon,
+                            "rare" => *rare,
+                            "mythic" => *mythic,
+                            _ => 0.0,
+                        };
+                        let current = overrides
+                            .get(&idx)
+                            .copied()
+                            .unwrap_or_else(|| card.price_f64());
+                        if current < floor {
+                            overrides.insert(idx, floor);
+                        }
+                    }
+                    NodeOutput {
+                        indices: input.indices,
+                        overrides,
+                    }
+                }
+                _ => {
+                    // Filter nodes: apply filter, then propagate overrides for surviving indices.
+                    let input = inputs.into_iter().next().unwrap_or_default();
+                    let filtered = filter_indices(&node.kind, input.indices, all_cards);
+                    let surviving: HashSet<usize> = filtered.iter().copied().collect();
+                    let overrides = input
+                        .overrides
+                        .into_iter()
+                        .filter(|(k, _)| surviving.contains(k))
+                        .collect();
+                    NodeOutput {
+                        indices: filtered,
+                        overrides,
+                    }
+                }
             }
         };
 
@@ -113,6 +183,23 @@ pub(super) fn evaluate_all(
     }
 
     outputs
+}
+
+/// Merge price overrides from multiple inputs, keeping only entries for `surviving` indices.
+/// When two inputs both override the same card, the higher floor wins.
+fn merge_overrides(inputs: &[NodeOutput], surviving: &HashSet<usize>) -> HashMap<usize, f64> {
+    let mut merged: HashMap<usize, f64> = HashMap::new();
+    for input in inputs {
+        for (&idx, &price) in &input.overrides {
+            if surviving.contains(&idx) {
+                let entry = merged.entry(idx).or_insert(price);
+                if price > *entry {
+                    *entry = price;
+                }
+            }
+        }
+    }
+    merged
 }
 
 #[cfg(test)]
@@ -123,20 +210,21 @@ pub(super) fn evaluate_counts(
 ) -> HashMap<NodeId, usize> {
     evaluate_all(nodes, wires, all_cards)
         .into_iter()
-        .map(|(id, v)| (id, v.len()))
+        .map(|(id, out)| (id, out.indices.len()))
         .collect()
 }
 
 /// Apply a node's filtering logic to a set of card indices.
-/// Logical nodes (AND/OR/NOT) are handled in `evaluate_all`; this function is only
-/// called for source/sink and filter nodes.
+/// Logical nodes (AND/OR/NOT) and PriceFloor are handled in `evaluate_all`; this function
+/// is only called for source/sink and filter nodes.
 pub(super) fn filter_indices(kind: &NodeKind, indices: Vec<usize>, cards: &[Card]) -> Vec<usize> {
     match kind {
         NodeKind::CsvSource
         | NodeKind::Output
         | NodeKind::LogicalAnd
         | NodeKind::LogicalOr
-        | NodeKind::LogicalNot => indices,
+        | NodeKind::LogicalNot
+        | NodeKind::PriceFloor { .. } => indices,
 
         NodeKind::FilterCondition { condition } => {
             if matches!(condition, ConditionFilter::Any) {

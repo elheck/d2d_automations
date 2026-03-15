@@ -1,4 +1,4 @@
-use super::{condition_rank, evaluate_counts, filter_indices, sort_preview};
+use super::{condition_rank, evaluate_all, evaluate_counts, filter_indices, sort_preview};
 use crate::{
     models::Card,
     ui::state::{
@@ -1611,7 +1611,7 @@ fn sort_preview_by_name_ascending() {
         ),
     ];
     let mut indices = vec![0, 1, 2];
-    sort_preview(&mut indices, &cards, 0, true);
+    sort_preview(&mut indices, &cards, &Default::default(), 0, true);
     assert_eq!(indices, vec![2, 1, 0]); // Aura, Bolt, Zap
 }
 
@@ -1626,7 +1626,7 @@ fn sort_preview_by_name_descending() {
         ),
     ];
     let mut indices = vec![0, 1];
-    sort_preview(&mut indices, &cards, 0, false);
+    sort_preview(&mut indices, &cards, &Default::default(), 0, false);
     assert_eq!(indices, vec![1, 0]); // Bolt, Aura
 }
 
@@ -1641,7 +1641,7 @@ fn sort_preview_by_set_ascending() {
         ),
     ];
     let mut indices = vec![0, 1];
-    sort_preview(&mut indices, &cards, 1, true);
+    sort_preview(&mut indices, &cards, &Default::default(), 1, true);
     assert_eq!(indices, vec![1, 0]); // Alpha, Zendikar
 }
 
@@ -1659,7 +1659,7 @@ fn sort_preview_by_condition_rank_ascending() {
         ),
     ];
     let mut indices = vec![0, 1, 2];
-    sort_preview(&mut indices, &cards, 2, true); // NM first
+    sort_preview(&mut indices, &cards, &Default::default(), 2, true); // NM first
     assert_eq!(indices, vec![1, 2, 0]); // NM, GD, PL
 }
 
@@ -1677,7 +1677,7 @@ fn sort_preview_by_language_ascending() {
         ),
     ];
     let mut indices = vec![0, 1, 2];
-    sort_preview(&mut indices, &cards, 3, true);
+    sort_preview(&mut indices, &cards, &Default::default(), 3, true);
     assert_eq!(indices, vec![1, 2, 0]); // English, German, Spanish
 }
 
@@ -1692,7 +1692,7 @@ fn sort_preview_by_foil_ascending_non_foil_first() {
         ),
     ];
     let mut indices = vec![0, 1];
-    sort_preview(&mut indices, &cards, 4, true);
+    sort_preview(&mut indices, &cards, &Default::default(), 4, true);
     assert_eq!(indices, vec![1, 0]); // non-foil first
 }
 
@@ -1710,7 +1710,7 @@ fn sort_preview_by_price_ascending() {
         ),
     ];
     let mut indices = vec![0, 1, 2];
-    sort_preview(&mut indices, &cards, 5, true);
+    sort_preview(&mut indices, &cards, &Default::default(), 5, true);
     assert_eq!(indices, vec![1, 2, 0]); // 0.5, 1.5, 3.0
 }
 
@@ -1728,7 +1728,7 @@ fn sort_preview_by_price_descending() {
         ),
     ];
     let mut indices = vec![0, 1, 2];
-    sort_preview(&mut indices, &cards, 5, false);
+    sort_preview(&mut indices, &cards, &Default::default(), 5, false);
     assert_eq!(indices, vec![1, 0, 2]); // 3.0, 1.5, 0.5
 }
 
@@ -1743,7 +1743,7 @@ fn sort_preview_price_unparseable_treated_as_zero() {
         ),
     ];
     let mut indices = vec![0, 1];
-    sort_preview(&mut indices, &cards, 5, true);
+    sort_preview(&mut indices, &cards, &Default::default(), 5, true);
     assert_eq!(indices, vec![0, 1]); // invalid→0.0 < 2.0
 }
 
@@ -1777,7 +1777,7 @@ fn sort_preview_by_location_ascending() {
         ),
     ];
     let mut indices = vec![0, 1, 2];
-    sort_preview(&mut indices, &cards, 6, true);
+    sort_preview(&mut indices, &cards, &Default::default(), 7, true);
     assert_eq!(indices, vec![2, 1, 0]); // ""(None) < "A1" < "C1"
 }
 
@@ -1787,7 +1787,7 @@ fn sort_preview_empty_indices_is_noop() {
         "A", "NM", "English", "false", "1.0", "Common", "Set", "s1", None,
     )];
     let mut indices: Vec<usize> = vec![];
-    sort_preview(&mut indices, &cards, 0, true);
+    sort_preview(&mut indices, &cards, &Default::default(), 0, true);
     assert!(indices.is_empty());
 }
 
@@ -1847,4 +1847,202 @@ fn round_trip_preserves_logical_node_kinds() {
         .nodes
         .iter()
         .any(|n| matches!(n.kind, NodeKind::LogicalNot)));
+}
+
+// ── PriceFloor node ───────────────────────────────────────────────────────────
+
+#[test]
+fn price_floor_passes_through_all_indices() {
+    // PriceFloor must not filter any cards out — it only transforms prices.
+    let cards = vec![
+        make_card(
+            "A", "NM", "English", "false", "0.10", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "NM", "English", "false", "5.00", "Rare", "Set", "s1", None,
+        ),
+    ];
+    let nodes = vec![
+        make_node(0, NodeKind::CsvSource),
+        make_node(
+            1,
+            NodeKind::PriceFloor {
+                common: 1.0,
+                uncommon: 2.0,
+                rare: 3.0,
+                mythic: 10.0,
+            },
+        ),
+    ];
+    let wires = vec![make_wire(0, 1)];
+    let counts = evaluate_counts(&nodes, &wires, &cards);
+    assert_eq!(counts[&0], 2);
+    assert_eq!(counts[&1], 2); // no cards removed
+}
+
+#[test]
+fn price_floor_adds_override_when_price_below_floor() {
+    // Common card at 0.10 € with a 1.00 € floor → override to 1.00 €.
+    let cards = vec![make_card(
+        "A", "NM", "English", "false", "0.10", "Common", "Set", "s1", None,
+    )];
+    let nodes = vec![
+        make_node(0, NodeKind::CsvSource),
+        make_node(
+            1,
+            NodeKind::PriceFloor {
+                common: 1.0,
+                uncommon: 0.0,
+                rare: 0.0,
+                mythic: 0.0,
+            },
+        ),
+    ];
+    let wires = vec![make_wire(0, 1)];
+    let outputs = evaluate_all(&nodes, &wires, &cards);
+    let floor_out = &outputs[&1];
+    assert_eq!(floor_out.indices, vec![0]);
+    assert!((floor_out.overrides[&0] - 1.0).abs() < 0.001);
+}
+
+#[test]
+fn price_floor_no_override_when_price_above_floor() {
+    // Rare card at 5.00 € with a 3.00 € floor → no override needed.
+    let cards = vec![make_card(
+        "A", "NM", "English", "false", "5.00", "Rare", "Set", "s1", None,
+    )];
+    let nodes = vec![
+        make_node(0, NodeKind::CsvSource),
+        make_node(
+            1,
+            NodeKind::PriceFloor {
+                common: 0.0,
+                uncommon: 0.0,
+                rare: 3.0,
+                mythic: 0.0,
+            },
+        ),
+    ];
+    let wires = vec![make_wire(0, 1)];
+    let outputs = evaluate_all(&nodes, &wires, &cards);
+    let floor_out = &outputs[&1];
+    assert!(!floor_out.overrides.contains_key(&0));
+}
+
+#[test]
+fn price_floor_respects_rarity_per_card() {
+    // Common gets 1.0 floor, Uncommon gets 2.0, Rare gets 5.0, Mythic gets 10.0.
+    // Each card tests a different rarity.
+    let cards = vec![
+        make_card(
+            "C", "NM", "English", "false", "0.05", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "U", "NM", "English", "false", "0.05", "Uncommon", "Set", "s1", None,
+        ),
+        make_card(
+            "R", "NM", "English", "false", "0.05", "Rare", "Set", "s1", None,
+        ),
+        make_card(
+            "M", "NM", "English", "false", "0.05", "Mythic", "Set", "s1", None,
+        ),
+    ];
+    let nodes = vec![
+        make_node(0, NodeKind::CsvSource),
+        make_node(
+            1,
+            NodeKind::PriceFloor {
+                common: 1.0,
+                uncommon: 2.0,
+                rare: 5.0,
+                mythic: 10.0,
+            },
+        ),
+    ];
+    let wires = vec![make_wire(0, 1)];
+    let outputs = evaluate_all(&nodes, &wires, &cards);
+    let floor_out = &outputs[&1];
+    assert!((floor_out.overrides[&0] - 1.0).abs() < 0.001);
+    assert!((floor_out.overrides[&1] - 2.0).abs() < 0.001);
+    assert!((floor_out.overrides[&2] - 5.0).abs() < 0.001);
+    assert!((floor_out.overrides[&3] - 10.0).abs() < 0.001);
+}
+
+#[test]
+fn price_floor_downstream_filter_drops_override_with_card() {
+    // Card 0 (Common, 0.10) gets a floor override. If a downstream filter removes it,
+    // the override should not appear in that filter's output.
+    let cards = vec![
+        make_card(
+            "A", "NM", "English", "false", "0.10", "Common", "Set", "s1", None,
+        ),
+        make_card(
+            "B", "GD", "English", "false", "0.10", "Common", "Set", "s1", None,
+        ),
+    ];
+    // CsvSource(0) → PriceFloor(1) → FilterCondition[NM](2)
+    let nodes = vec![
+        make_node(0, NodeKind::CsvSource),
+        make_node(
+            1,
+            NodeKind::PriceFloor {
+                common: 1.0,
+                uncommon: 0.0,
+                rare: 0.0,
+                mythic: 0.0,
+            },
+        ),
+        make_node(
+            2,
+            NodeKind::FilterCondition {
+                condition: ConditionFilter::Nm,
+            },
+        ),
+    ];
+    let wires = vec![make_wire(0, 1), make_wire(1, 2)];
+    let outputs = evaluate_all(&nodes, &wires, &cards);
+    let filter_out = &outputs[&2];
+    assert_eq!(filter_out.indices, vec![0]); // only NM card survives
+    assert!(filter_out.overrides.contains_key(&0)); // override propagated
+    assert!(!filter_out.overrides.contains_key(&1)); // GD card dropped with its override
+}
+
+#[test]
+fn price_floor_param_count() {
+    assert_eq!(
+        NodeKind::PriceFloor {
+            common: 0.0,
+            uncommon: 0.0,
+            rare: 0.0,
+            mythic: 0.0
+        }
+        .param_count(),
+        4
+    );
+}
+
+#[test]
+fn price_floor_title() {
+    assert_eq!(
+        NodeKind::PriceFloor {
+            common: 0.0,
+            uncommon: 0.0,
+            rare: 0.0,
+            mythic: 0.0
+        }
+        .title(),
+        "Price Floor"
+    );
+}
+
+#[test]
+fn price_floor_input_output_counts() {
+    let kind = NodeKind::PriceFloor {
+        common: 0.0,
+        uncommon: 0.0,
+        rare: 0.0,
+        mythic: 0.0,
+    };
+    assert_eq!(kind.input_count(), 1);
+    assert_eq!(kind.output_count(), 1);
 }

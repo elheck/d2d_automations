@@ -1,16 +1,19 @@
 use crate::models::Card;
 use crate::ui::state::PricingState;
 use eframe::egui;
+use std::collections::HashMap;
 
-// Column widths (px) for the preview table — must match header and body.
-const PREVIEW_COLS: [f32; 7] = [190.0, 120.0, 52.0, 85.0, 35.0, 62.0, 110.0];
-const PREVIEW_HEADERS: [&str; 7] = [
+// Proportional column weights — scaled to fill the window width at render time.
+// Order: Name, Set, Cond., Lang., Foil, Price €, Rarity, Location
+const PREVIEW_COL_WEIGHTS: [f32; 8] = [160.0, 110.0, 46.0, 68.0, 32.0, 95.0, 68.0, 95.0];
+const PREVIEW_HEADERS: [&str; 8] = [
     "Name",
     "Set",
     "Cond.",
     "Lang.",
     "Foil",
     "Price €",
+    "Rarity",
     "Location",
 ];
 const PREVIEW_ROW_H: f32 = 18.0;
@@ -26,7 +29,13 @@ pub(super) fn condition_rank(cond: &str) -> u8 {
     }
 }
 
-pub(super) fn sort_preview(indices: &mut [usize], cards: &[Card], col: usize, asc: bool) {
+pub(super) fn sort_preview(
+    indices: &mut [usize],
+    cards: &[Card],
+    overrides: &HashMap<usize, f64>,
+    col: usize,
+    asc: bool,
+) {
     indices.sort_by(|&a, &b| {
         let ca = &cards[a];
         let cb = &cards[b];
@@ -37,10 +46,11 @@ pub(super) fn sort_preview(indices: &mut [usize], cards: &[Card], col: usize, as
             3 => ca.language.cmp(&cb.language),
             4 => ca.is_foil_card().cmp(&cb.is_foil_card()),
             5 => {
-                let pa = ca.price.parse::<f64>().unwrap_or(0.0);
-                let pb = cb.price.parse::<f64>().unwrap_or(0.0);
+                let pa = overrides.get(&a).copied().unwrap_or_else(|| ca.price_f64());
+                let pb = overrides.get(&b).copied().unwrap_or_else(|| cb.price_f64());
                 pa.partial_cmp(&pb).unwrap_or(std::cmp::Ordering::Equal)
             }
+            6 => ca.rarity.cmp(&cb.rarity),
             _ => ca
                 .location
                 .as_deref()
@@ -81,12 +91,16 @@ pub(super) fn show_preview_window(ctx: &egui::Context, state: &mut PricingState)
                 return;
             }
 
+            // Scale column weights to fill the available width (subtract scrollbar ~12 px).
+            let total_weight: f32 = PREVIEW_COL_WEIGHTS.iter().sum();
+            let scale = (ui.available_width() - 12.0).max(100.0) / total_weight;
+            let col_widths: [f32; 8] = PREVIEW_COL_WEIGHTS.map(|w| w * scale);
+
             // Clickable header row — click to sort, click again to reverse
             let header_color = egui::Color32::from_rgb(160, 185, 220);
             let active_color = egui::Color32::from_rgb(220, 210, 120);
             ui.horizontal(|ui| {
-                for (col, (&w, &label)) in
-                    PREVIEW_COLS.iter().zip(PREVIEW_HEADERS.iter()).enumerate()
+                for (col, (&w, &label)) in col_widths.iter().zip(PREVIEW_HEADERS.iter()).enumerate()
                 {
                     let is_active = state.preview_sort_col == Some(col);
                     let indicator = if is_active {
@@ -119,6 +133,7 @@ pub(super) fn show_preview_window(ctx: &egui::Context, state: &mut PricingState)
                         sort_preview(
                             &mut state.cached_output,
                             &state.cards,
+                            &state.cached_price_overrides,
                             col,
                             state.preview_sort_asc,
                         );
@@ -146,7 +161,16 @@ pub(super) fn show_preview_window(ctx: &egui::Context, state: &mut PricingState)
                         }
                         // Place cells inside the allocated row rect
                         let mut x = row_rect.min.x;
-                        let cells: [(&str, egui::Color32); 7] = [
+                        let (price_str, price_color) =
+                            if let Some(&floor) = state.cached_price_overrides.get(&idx) {
+                                (
+                                    format!("{} → {:.2}*", c.price, floor),
+                                    egui::Color32::from_rgb(220, 200, 100),
+                                )
+                            } else {
+                                (c.price.clone(), egui::Color32::from_rgb(160, 215, 140))
+                            };
+                        let cells: [(&str, egui::Color32); 8] = [
                             (c.name.as_str(), egui::Color32::WHITE),
                             (c.set.as_str(), egui::Color32::from_rgb(140, 155, 180)),
                             (c.condition.as_str(), egui::Color32::WHITE),
@@ -155,18 +179,19 @@ pub(super) fn show_preview_window(ctx: &egui::Context, state: &mut PricingState)
                                 if c.is_foil_card() { "✓" } else { "" },
                                 egui::Color32::from_rgb(180, 215, 255),
                             ),
-                            (c.price.as_str(), egui::Color32::from_rgb(160, 215, 140)),
+                            (price_str.as_str(), price_color),
+                            (c.rarity.as_str(), egui::Color32::from_rgb(190, 165, 100)),
                             (
                                 c.location.as_deref().unwrap_or("—"),
                                 egui::Color32::from_rgb(140, 155, 180),
                             ),
                         ];
-                        for (&w, (text, color)) in PREVIEW_COLS.iter().zip(cells) {
+                        for (&w, (text, color)) in col_widths.iter().zip(cells) {
                             let cell_rect = egui::Rect::from_min_size(
                                 egui::pos2(x + 2.0, row_rect.min.y),
                                 egui::vec2(w - 4.0, PREVIEW_ROW_H),
                             );
-                            ui.painter().text(
+                            ui.painter().with_clip_rect(cell_rect).text(
                                 cell_rect.left_center(),
                                 egui::Align2::LEFT_CENTER,
                                 text,
