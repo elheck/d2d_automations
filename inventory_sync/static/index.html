@@ -161,6 +161,35 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 1rem;
+        }
+
+        .result-thumbnail {
+            width: 48px;
+            height: 67px;
+            border-radius: 4px;
+            object-fit: cover;
+            flex-shrink: 0;
+            background: var(--bg-primary);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .result-thumbnail.loaded {
+            opacity: 1;
+        }
+
+        .result-thumbnail-placeholder {
+            width: 48px;
+            height: 67px;
+            border-radius: 4px;
+            flex-shrink: 0;
+            background: var(--bg-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            font-size: 0.7rem;
         }
 
         .result-item:hover {
@@ -599,6 +628,10 @@
 
             resultsList.innerHTML = results.map((card, index) => `
                 <div class="result-item fade-in" style="animation-delay: ${index * 0.03}s" onclick="loadPriceChart(${card.id_product})">
+                    ${card.category_name === 'Magic Single'
+                        ? `<img class="result-thumbnail" src="/api/card-image/${card.id_product}" loading="lazy" alt="" onload="this.classList.add('loaded')" onerror="this.style.display='none'">`
+                        : ''
+                    }
                     <div class="result-content">
                         <div class="card-name">${escapeHtml(card.name)}</div>
                         <div class="card-meta">
