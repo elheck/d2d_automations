@@ -7,7 +7,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{header, StatusCode},
     response::{Html, Json, Response},
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use rusqlite::Connection;
@@ -15,10 +15,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
 use crate::database::{
-    get_id_expansion_for_product, get_price_history, get_product_by_id, search_products_by_name,
-    upsert_expansion_name,
+    get_id_expansion_for_product, get_latest_prices_bulk, get_price_history, get_product_by_id,
+    search_products_by_name, upsert_expansion_name,
 };
-use crate::database::{PriceHistoryPoint, ProductSearchResult};
+use crate::database::{LatestPrice, PriceHistoryPoint, ProductSearchResult};
 use crate::image_cache::{fetch_card_info_cached, fetch_image_cached, ImageCache};
 use crate::indicators::{
     calculate_all_indicators, calculate_cardmarket_signals, CardmarketSignals, TechnicalIndicators,
@@ -88,6 +88,15 @@ struct PriceData {
     history: Vec<PriceHistoryPoint>,
     indicators: TechnicalIndicators,
     cardmarket_signals: CardmarketSignals,
+}
+
+/// GET /api/health - Simple connectivity check
+async fn health_handler() -> Json<ApiResponse<&'static str>> {
+    Json(ApiResponse {
+        success: true,
+        data: Some("ok"),
+        error: None,
+    })
 }
 
 /// GET / - Serve the web UI (single HTML page)
@@ -224,14 +233,49 @@ async fn card_info_handler(
     }
 }
 
+/// Request body for bulk latest-prices lookup
+#[derive(Deserialize)]
+struct BulkPriceRequest {
+    ids: Vec<u64>,
+}
+
+/// POST /api/latest-prices
+/// Returns the most recent price row for each requested product ID.
+async fn latest_prices_handler(
+    State(state): State<AppState>,
+    Json(body): Json<BulkPriceRequest>,
+) -> Result<Json<ApiResponse<Vec<LatestPrice>>>, StatusCode> {
+    if body.ids.len() > 10_000 {
+        return Ok(Json(ApiResponse {
+            success: false,
+            data: None,
+            error: Some("Too many IDs (max 10 000)".to_string()),
+        }));
+    }
+    let conn = state.db.lock().unwrap();
+    match get_latest_prices_bulk(&conn, &body.ids) {
+        Ok(prices) => Ok(Json(ApiResponse {
+            success: true,
+            data: Some(prices),
+            error: None,
+        })),
+        Err(e) => {
+            log::error!("Bulk price lookup error: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 /// Build the web server router
 pub fn create_router(db: Arc<Mutex<Connection>>, image_cache: Arc<ImageCache>) -> Router {
     let state = AppState { db, image_cache };
 
     Router::new()
         .route("/", get(index_handler))
+        .route("/api/health", get(health_handler))
         .route("/api/search", get(search_handler))
         .route("/api/prices/{id}", get(prices_handler))
+        .route("/api/latest-prices", post(latest_prices_handler))
         .route("/api/card-image/{id}", get(card_image_handler))
         .route("/api/card-info/{id}", get(card_info_handler))
         .with_state(state)

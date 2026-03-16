@@ -420,6 +420,67 @@ pub fn get_price_history(
     }
 }
 
+/// Latest price snapshot for a single product (most recent price_date row).
+#[derive(Debug, Serialize)]
+pub struct LatestPrice {
+    pub id_product: u64,
+    pub price_date: String,
+    pub avg: Option<f64>,
+    pub low: Option<f64>,
+    pub trend: Option<f64>,
+    pub avg1: Option<f64>,
+    pub avg7: Option<f64>,
+    pub avg30: Option<f64>,
+    pub avg_foil: Option<f64>,
+    pub low_foil: Option<f64>,
+    pub trend_foil: Option<f64>,
+    pub avg1_foil: Option<f64>,
+    pub avg7_foil: Option<f64>,
+    pub avg30_foil: Option<f64>,
+}
+
+/// Get the latest price row for each of the given product IDs.
+///
+/// Uses a parameterized query per product (SQLite has no native array binding).
+/// Returns only products that have at least one price_history row.
+pub fn get_latest_prices_bulk(conn: &Connection, ids: &[u64]) -> DbResult<Vec<LatestPrice>> {
+    let mut results = Vec::with_capacity(ids.len());
+    let mut stmt = conn.prepare(
+        "SELECT id_product, price_date, avg, low, trend, avg1, avg7, avg30,
+                avg_foil, low_foil, trend_foil, avg1_foil, avg7_foil, avg30_foil
+         FROM price_history
+         WHERE id_product = ?1
+         ORDER BY price_date DESC
+         LIMIT 1",
+    )?;
+    for &id in ids {
+        if let Some(row) = stmt
+            .query_map(params![id], |row| {
+                Ok(LatestPrice {
+                    id_product: row.get(0)?,
+                    price_date: row.get(1)?,
+                    avg: row.get(2)?,
+                    low: row.get(3)?,
+                    trend: row.get(4)?,
+                    avg1: row.get(5)?,
+                    avg7: row.get(6)?,
+                    avg30: row.get(7)?,
+                    avg_foil: row.get(8)?,
+                    low_foil: row.get(9)?,
+                    trend_foil: row.get(10)?,
+                    avg1_foil: row.get(11)?,
+                    avg7_foil: row.get(12)?,
+                    avg30_foil: row.get(13)?,
+                })
+            })?
+            .next()
+        {
+            results.push(row?);
+        }
+    }
+    Ok(results)
+}
+
 /// Get product details by ID
 pub fn get_product_by_id(
     conn: &Connection,

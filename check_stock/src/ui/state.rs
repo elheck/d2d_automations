@@ -334,6 +334,96 @@ impl RarityFilter {
     }
 }
 
+// ── Inventory Sync connection ─────────────────────────────────────────────────
+
+/// Connection status for the inventory_sync server.
+pub enum ConnectionStatus {
+    /// No check has been performed yet.
+    Unchecked,
+    /// A health-check request is in flight.
+    Checking,
+    /// Server responded successfully.
+    Connected,
+    /// Check failed with an error message.
+    Failed(String),
+}
+
+/// Which price field to pull from the inventory_sync latest-price response.
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum InventoryPriceSource {
+    Trend,
+    Avg,
+    Low,
+    Avg1,
+    Avg7,
+    Avg30,
+}
+
+impl InventoryPriceSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Trend => "Trend",
+            Self::Avg => "Average",
+            Self::Low => "Low",
+            Self::Avg1 => "Avg 1-day",
+            Self::Avg7 => "Avg 7-day",
+            Self::Avg30 => "Avg 30-day",
+        }
+    }
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::Trend,
+            Self::Avg,
+            Self::Low,
+            Self::Avg1,
+            Self::Avg7,
+            Self::Avg30,
+        ]
+    }
+}
+
+/// Cached latest-price data for a single product from inventory_sync.
+#[derive(Clone, Debug)]
+pub struct CachedLatestPrice {
+    pub avg: Option<f64>,
+    pub low: Option<f64>,
+    pub trend: Option<f64>,
+    pub avg1: Option<f64>,
+    pub avg7: Option<f64>,
+    pub avg30: Option<f64>,
+    pub avg_foil: Option<f64>,
+    pub low_foil: Option<f64>,
+    pub trend_foil: Option<f64>,
+    pub avg1_foil: Option<f64>,
+    pub avg7_foil: Option<f64>,
+    pub avg30_foil: Option<f64>,
+}
+
+impl CachedLatestPrice {
+    /// Pick the price for the given source, choosing the foil variant when `is_foil` is true.
+    pub fn price_for(&self, source: InventoryPriceSource, is_foil: bool) -> Option<f64> {
+        if is_foil {
+            match source {
+                InventoryPriceSource::Trend => self.trend_foil,
+                InventoryPriceSource::Avg => self.avg_foil,
+                InventoryPriceSource::Low => self.low_foil,
+                InventoryPriceSource::Avg1 => self.avg1_foil,
+                InventoryPriceSource::Avg7 => self.avg7_foil,
+                InventoryPriceSource::Avg30 => self.avg30_foil,
+            }
+        } else {
+            match source {
+                InventoryPriceSource::Trend => self.trend,
+                InventoryPriceSource::Avg => self.avg,
+                InventoryPriceSource::Low => self.low,
+                InventoryPriceSource::Avg1 => self.avg1,
+                InventoryPriceSource::Avg7 => self.avg7,
+                InventoryPriceSource::Avg30 => self.avg30,
+            }
+        }
+    }
+}
+
 // ── Node kinds ────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -378,6 +468,10 @@ pub enum NodeKind {
         rare: f64,
         mythic: f64,
     },
+    /// Override card prices with inventory_sync market data.
+    InventoryPrice {
+        source: InventoryPriceSource,
+    },
 }
 
 impl NodeKind {
@@ -397,6 +491,7 @@ impl NodeKind {
             Self::LogicalOr => "OR",
             Self::LogicalNot => "NOT",
             Self::PriceFloor { .. } => "Price Floor",
+            Self::InventoryPrice { .. } => "Inventory Price",
         }
     }
 
@@ -416,6 +511,7 @@ impl NodeKind {
             Self::LogicalOr => egui::Color32::from_rgb(60, 130, 80),
             Self::LogicalNot => egui::Color32::from_rgb(170, 55, 55),
             Self::PriceFloor { .. } => egui::Color32::from_rgb(185, 145, 30),
+            Self::InventoryPrice { .. } => egui::Color32::from_rgb(60, 160, 180),
         }
     }
 
@@ -571,7 +667,8 @@ pub struct SavedGraph {
     pub canvas_zoom: f32,
 }
 
-#[derive(Default)]
+pub type PriceFetchResult = Result<Vec<(u64, CachedLatestPrice)>, String>;
+
 pub struct PricingState {
     pub csv_path: String,
     pub cards: Vec<crate::models::Card>,
@@ -585,6 +682,40 @@ pub struct PricingState {
     /// Which preview column is sorted (index into PREVIEW_COLS), and direction.
     pub preview_sort_col: Option<usize>,
     pub preview_sort_asc: bool,
+
+    // ── Inventory Sync ────────────────────────────────────────────────────
+    pub inventory_sync_url: String,
+    pub connection_status: ConnectionStatus,
+    /// Receives health-check result from background thread.
+    pub health_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    /// Cached latest prices keyed by cardmarket product ID.
+    pub inventory_prices: std::collections::HashMap<u64, CachedLatestPrice>,
+    /// Receives bulk price results from background fetch.
+    pub prices_rx: Option<std::sync::mpsc::Receiver<PriceFetchResult>>,
+    /// True while a bulk price fetch is in flight.
+    pub prices_fetching: bool,
+}
+
+impl Default for PricingState {
+    fn default() -> Self {
+        Self {
+            csv_path: String::new(),
+            cards: Vec::new(),
+            load_error: None,
+            graph: NodeGraph::default(),
+            show_preview: false,
+            cached_output: Vec::new(),
+            cached_price_overrides: std::collections::HashMap::new(),
+            preview_sort_col: None,
+            preview_sort_asc: false,
+            inventory_sync_url: "http://127.0.0.1:8080".to_string(),
+            connection_status: ConnectionStatus::Unchecked,
+            health_rx: None,
+            inventory_prices: std::collections::HashMap::new(),
+            prices_rx: None,
+            prices_fetching: false,
+        }
+    }
 }
 
 impl Default for SearchState {

@@ -1,6 +1,7 @@
 use super::constants::{HEADER_H, PARAM_H, PORT_ROW_H};
 use crate::ui::state::{
-    ConditionFilter, FoilFilter, GraphNode, LanguageFilter, NodeKind, RarityFilter,
+    ConditionFilter, FoilFilter, GraphNode, InventoryPriceSource, LanguageFilter, NodeKind,
+    RarityFilter,
 };
 use eframe::egui;
 
@@ -157,6 +158,19 @@ pub(super) fn show_node_params(
                     .speed(0.05)
                     .range(0.0..=99999.0),
             );
+        }
+        NodeKind::InventoryPrice { source } => {
+            let r = param_row_rect(rect, port_rows, 0, zoom);
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(r), |ui| {
+                egui::ComboBox::from_id_salt(("invprice", node.id))
+                    .selected_text(source.as_str())
+                    .width(r.width())
+                    .show_ui(ui, |ui| {
+                        for &s in InventoryPriceSource::all() {
+                            ui.selectable_value(source, s, s.as_str());
+                        }
+                    });
+            });
         }
         NodeKind::CsvSource
         | NodeKind::Output

@@ -1,7 +1,7 @@
 use crate::ui::{
     state::{
-        ConditionFilter, FoilFilter, LanguageFilter, NodeGraph, NodeKind, PricingState,
-        RarityFilter, SavedGraph,
+        ConditionFilter, FoilFilter, InventoryPriceSource, LanguageFilter, NodeGraph, NodeKind,
+        PricingState, RarityFilter, SavedGraph,
     },
     style,
 };
@@ -188,6 +188,19 @@ pub(super) fn show_add_toolbar(ui: &mut egui::Ui, graph: &mut NodeGraph) {
                     uncommon: 0.0,
                     rare: 0.0,
                     mythic: 0.0,
+                },
+                free_pos(graph),
+            );
+        }
+        if style::secondary_button(ui, "⇅ Inventory Price")
+            .on_hover_text(
+                "Override card prices with market data from the inventory_sync server (trend, avg, low, …)",
+            )
+            .clicked()
+        {
+            graph.add_node(
+                NodeKind::InventoryPrice {
+                    source: InventoryPriceSource::Trend,
                 },
                 free_pos(graph),
             );

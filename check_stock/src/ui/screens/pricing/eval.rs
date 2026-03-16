@@ -1,6 +1,7 @@
 use crate::models::Card;
 use crate::ui::state::{
-    ConditionFilter, FoilFilter, GraphNode, LanguageFilter, NodeId, NodeKind, RarityFilter, Wire,
+    CachedLatestPrice, ConditionFilter, FoilFilter, GraphNode, LanguageFilter, NodeId, NodeKind,
+    RarityFilter, Wire,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -20,6 +21,7 @@ pub(super) fn evaluate_all(
     nodes: &[GraphNode],
     wires: &[Wire],
     all_cards: &[Card],
+    inventory_prices: &HashMap<u64, CachedLatestPrice>,
 ) -> HashMap<NodeId, NodeOutput> {
     if all_cards.is_empty() {
         return HashMap::new();
@@ -161,6 +163,25 @@ pub(super) fn evaluate_all(
                         overrides,
                     }
                 }
+                NodeKind::InventoryPrice { source } => {
+                    let input = inputs.into_iter().next().unwrap_or_default();
+                    let mut overrides = input.overrides;
+                    for &idx in &input.indices {
+                        let card = &all_cards[idx];
+                        if let Ok(product_id) = card.cardmarket_id.parse::<u64>() {
+                            if let Some(cached) = inventory_prices.get(&product_id) {
+                                let is_foil = card.is_foil_card();
+                                if let Some(price) = cached.price_for(*source, is_foil) {
+                                    overrides.insert(idx, price);
+                                }
+                            }
+                        }
+                    }
+                    NodeOutput {
+                        indices: input.indices,
+                        overrides,
+                    }
+                }
                 _ => {
                     // Filter nodes: apply filter, then propagate overrides for surviving indices.
                     let input = inputs.into_iter().next().unwrap_or_default();
@@ -208,7 +229,7 @@ pub(super) fn evaluate_counts(
     wires: &[Wire],
     all_cards: &[Card],
 ) -> HashMap<NodeId, usize> {
-    evaluate_all(nodes, wires, all_cards)
+    evaluate_all(nodes, wires, all_cards, &HashMap::new())
         .into_iter()
         .map(|(id, out)| (id, out.indices.len()))
         .collect()
@@ -224,7 +245,8 @@ pub(super) fn filter_indices(kind: &NodeKind, indices: Vec<usize>, cards: &[Card
         | NodeKind::LogicalAnd
         | NodeKind::LogicalOr
         | NodeKind::LogicalNot
-        | NodeKind::PriceFloor { .. } => indices,
+        | NodeKind::PriceFloor { .. }
+        | NodeKind::InventoryPrice { .. } => indices,
 
         NodeKind::FilterCondition { condition } => {
             if matches!(condition, ConditionFilter::Any) {

@@ -1899,7 +1899,7 @@ fn price_floor_adds_override_when_price_below_floor() {
         ),
     ];
     let wires = vec![make_wire(0, 1)];
-    let outputs = evaluate_all(&nodes, &wires, &cards);
+    let outputs = evaluate_all(&nodes, &wires, &cards, &std::collections::HashMap::new());
     let floor_out = &outputs[&1];
     assert_eq!(floor_out.indices, vec![0]);
     assert!((floor_out.overrides[&0] - 1.0).abs() < 0.001);
@@ -1924,7 +1924,7 @@ fn price_floor_no_override_when_price_above_floor() {
         ),
     ];
     let wires = vec![make_wire(0, 1)];
-    let outputs = evaluate_all(&nodes, &wires, &cards);
+    let outputs = evaluate_all(&nodes, &wires, &cards, &std::collections::HashMap::new());
     let floor_out = &outputs[&1];
     assert!(!floor_out.overrides.contains_key(&0));
 }
@@ -1960,7 +1960,7 @@ fn price_floor_respects_rarity_per_card() {
         ),
     ];
     let wires = vec![make_wire(0, 1)];
-    let outputs = evaluate_all(&nodes, &wires, &cards);
+    let outputs = evaluate_all(&nodes, &wires, &cards, &std::collections::HashMap::new());
     let floor_out = &outputs[&1];
     assert!((floor_out.overrides[&0] - 1.0).abs() < 0.001);
     assert!((floor_out.overrides[&1] - 2.0).abs() < 0.001);
@@ -2000,7 +2000,7 @@ fn price_floor_downstream_filter_drops_override_with_card() {
         ),
     ];
     let wires = vec![make_wire(0, 1), make_wire(1, 2)];
-    let outputs = evaluate_all(&nodes, &wires, &cards);
+    let outputs = evaluate_all(&nodes, &wires, &cards, &std::collections::HashMap::new());
     let filter_out = &outputs[&2];
     assert_eq!(filter_out.indices, vec![0]); // only NM card survives
     assert!(filter_out.overrides.contains_key(&0)); // override propagated
