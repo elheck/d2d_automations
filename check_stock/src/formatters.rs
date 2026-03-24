@@ -412,6 +412,73 @@ pub fn format_update_stock_csv(matched_cards: &[MatchedCard]) -> String {
     String::from_utf8(data).unwrap()
 }
 
+/// Generates a CSV containing only cards whose price changed via the pricing
+/// node graph.  Each row carries the **new** price so the file can be imported
+/// back into Cardmarket to update listings.
+pub fn format_price_diff_csv(
+    cards: &[crate::models::Card],
+    indices: &[usize],
+    overrides: &std::collections::HashMap<usize, f64>,
+) -> String {
+    use csv::WriterBuilder;
+
+    let mut wtr = WriterBuilder::new().has_headers(true).from_writer(vec![]);
+
+    let _ = wtr.write_record([
+        "cardmarketId",
+        "quantity",
+        "name",
+        "set",
+        "setCode",
+        "cn",
+        "condition",
+        "language",
+        "isFoil",
+        "isPlayset",
+        "isSigned",
+        "price",
+        "comment",
+        "location",
+        "nameDE",
+        "nameES",
+        "nameFR",
+        "nameIT",
+        "rarity",
+    ]);
+
+    for &idx in indices {
+        let Some(&new_price) = overrides.get(&idx) else {
+            continue;
+        };
+        let card = &cards[idx];
+        let price_str = format!("{new_price:.2}");
+        let _ = wtr.write_record([
+            &card.cardmarket_id,
+            &card.quantity,
+            &card.name,
+            &card.set,
+            &card.set_code,
+            &card.cn,
+            &card.condition,
+            &card.language,
+            &card.is_foil,
+            card.is_playset.as_deref().unwrap_or(""),
+            &card.is_signed,
+            &price_str,
+            &card.comment,
+            card.location.as_deref().unwrap_or(""),
+            &card.name_de,
+            &card.name_es,
+            &card.name_fr,
+            &card.name_it,
+            &card.rarity,
+        ]);
+    }
+
+    let data = wtr.into_inner().unwrap();
+    String::from_utf8(data).unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -631,5 +698,80 @@ mod tests {
 
         // 2 cards at 25.00 = 50.00 total
         assert!(output.contains("50.00"));
+    }
+
+    // ==================== format_price_diff_csv Tests ====================
+
+    #[test]
+    fn test_price_diff_csv_empty_overrides() {
+        let cards = vec![create_test_card("Card A", "1.00", 1)];
+        let overrides = std::collections::HashMap::new();
+        let output = format_price_diff_csv(&cards, &[0], &overrides);
+
+        // Header only, no data rows
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("cardmarketId"));
+    }
+
+    #[test]
+    fn test_price_diff_csv_only_changed_cards() {
+        let cards = vec![
+            create_test_card("Unchanged", "5.00", 1),
+            create_test_card("Changed", "3.00", 1),
+            create_test_card("Also Unchanged", "7.00", 1),
+        ];
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert(1, 4.50);
+
+        let output = format_price_diff_csv(&cards, &[0, 1, 2], &overrides);
+
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 2); // header + 1 changed card
+        assert!(lines[1].contains("Changed"));
+        assert!(lines[1].contains("4.50"));
+        assert!(!output.contains("Unchanged"));
+    }
+
+    #[test]
+    fn test_price_diff_csv_preserves_card_fields() {
+        let mut card = create_test_card("Lightning Bolt", "10.00", 2);
+        card.cardmarket_id = "99999".to_string();
+        card.set = "Alpha".to_string();
+        card.condition = "EX".to_string();
+        card.language = "German".to_string();
+        card.is_foil = "true".to_string();
+        card.location = Some("A1_S2_R3_C4".to_string());
+        let cards = vec![card];
+
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert(0, 15.00);
+
+        let output = format_price_diff_csv(&cards, &[0], &overrides);
+
+        assert!(output.contains("99999"));
+        assert!(output.contains("Lightning Bolt"));
+        assert!(output.contains("Alpha"));
+        assert!(output.contains("EX"));
+        assert!(output.contains("German"));
+        assert!(output.contains("true"));
+        assert!(output.contains("A1_S2_R3_C4"));
+        assert!(output.contains("15.00"));
+    }
+
+    #[test]
+    fn test_price_diff_csv_skips_indices_not_in_overrides() {
+        let cards = vec![
+            create_test_card("Card A", "1.00", 1),
+            create_test_card("Card B", "2.00", 1),
+        ];
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert(0, 1.50);
+
+        // Only index 1 in the output indices, but only index 0 has an override
+        let output = format_price_diff_csv(&cards, &[1], &overrides);
+
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 1); // header only
     }
 }
