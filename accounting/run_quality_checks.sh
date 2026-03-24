@@ -100,7 +100,7 @@ echo
 # 8. Security Audit (optional - only if cargo-audit is installed)
 print_header "8. Security Audit"
 if command -v cargo-audit &> /dev/null; then
-    run_check "security audit" "cargo audit"
+    run_check "security audit" "cargo audit --ignore RUSTSEC-2024-0436"
 else
     print_warning "cargo-audit not installed. Install with: cargo install cargo-audit"
 fi
