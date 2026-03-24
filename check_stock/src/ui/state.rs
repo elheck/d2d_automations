@@ -694,6 +694,10 @@ pub struct PricingState {
     pub prices_rx: Option<std::sync::mpsc::Receiver<PriceFetchResult>>,
     /// True while a bulk price fetch is in flight.
     pub prices_fetching: bool,
+
+    // ── Diff CSV output ───────────────────────────────────────────────────
+    pub show_diff_output: bool,
+    pub diff_output_content: String,
 }
 
 impl Default for PricingState {
@@ -714,6 +718,8 @@ impl Default for PricingState {
             inventory_prices: std::collections::HashMap::new(),
             prices_rx: None,
             prices_fetching: false,
+            show_diff_output: false,
+            diff_output_content: String::new(),
         }
     }
 }

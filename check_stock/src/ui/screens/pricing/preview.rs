@@ -1,5 +1,6 @@
+use crate::formatters::format_price_diff_csv;
 use crate::models::Card;
-use crate::ui::state::PricingState;
+use crate::ui::{state::PricingState, style};
 use eframe::egui;
 use std::collections::HashMap;
 
@@ -142,9 +143,16 @@ pub(super) fn show_preview_window(ctx: &egui::Context, state: &mut PricingState)
             });
             ui.separator();
 
+            // ── Generate Diff CSV button (pinned to bottom) ────────────
+            let changed_count = state.cached_price_overrides.len();
+            let button_height = 36.0;
+            let available = ui.available_height();
+            let scroll_height = (available - button_height - 14.0).max(60.0);
+
             // Virtual-scrolling body — only visible rows are rendered
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
+                .max_height(scroll_height)
                 .show_rows(ui, PREVIEW_ROW_H, count, |ui, row_range| {
                     for (row_offset, &idx) in card_indices[row_range.clone()].iter().enumerate() {
                         let c = &state.cards[idx];
@@ -202,6 +210,19 @@ pub(super) fn show_preview_window(ctx: &egui::Context, state: &mut PricingState)
                         }
                     }
                 });
+
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(2.0);
+            let label = format!("Generate Diff CSV ({changed_count} changed)");
+            if style::primary_button_enabled(ui, &label, changed_count > 0).clicked() {
+                state.diff_output_content = format_price_diff_csv(
+                    &state.cards,
+                    &state.cached_output,
+                    &state.cached_price_overrides,
+                );
+                state.show_diff_output = true;
+            }
         });
 
     state.show_preview = open;

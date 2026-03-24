@@ -14,7 +14,7 @@ mod toolbar;
 use crate::{
     io::read_csv,
     ui::{
-        components::FilePicker,
+        components::{FilePicker, OutputWindow},
         state::{AppState, ConnectionStatus, NodeId, NodeKind, PricingState, Screen},
         style,
     },
@@ -100,6 +100,17 @@ impl PricingScreen {
         // ── Output preview window (floating, closeable) ───────────────────
         if state.show_preview {
             show_preview_window(ctx, state);
+        }
+
+        // ── Diff CSV output window ───────────────────────────────────────
+        if state.show_diff_output {
+            OutputWindow::new(
+                "Price Diff CSV",
+                &mut state.diff_output_content,
+                &mut state.show_diff_output,
+                "csv",
+            )
+            .show(ctx);
         }
     }
 
@@ -415,6 +426,9 @@ fn start_health_check(state: &mut PricingState) {
     });
 }
 
+/// Maximum IDs per request to `/api/latest-prices` (server rejects > 10 000).
+const PRICE_FETCH_BATCH_SIZE: usize = 10_000;
+
 fn start_price_fetch(state: &mut PricingState) {
     // Collect unique cardmarket IDs from the loaded CSV
     let ids: Vec<u64> = state
@@ -441,13 +455,26 @@ fn start_price_fetch(state: &mut PricingState) {
         state.inventory_sync_url.trim_end_matches('/')
     );
     std::thread::spawn(move || {
-        let body = serde_json::json!({ "ids": ids });
-        let result = reqwest::blocking::Client::new()
-            .post(&url)
-            .json(&body)
-            .timeout(std::time::Duration::from_secs(30))
-            .send();
-        let _ = tx.send(parse_price_response(result));
+        let client = reqwest::blocking::Client::new();
+        let mut all_prices = Vec::new();
+
+        for chunk in ids.chunks(PRICE_FETCH_BATCH_SIZE) {
+            let body = serde_json::json!({ "ids": chunk });
+            let result = client
+                .post(&url)
+                .json(&body)
+                .timeout(std::time::Duration::from_secs(30))
+                .send();
+            match parse_price_response(result) {
+                Ok(prices) => all_prices.extend(prices),
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                    return;
+                }
+            }
+        }
+
+        let _ = tx.send(Ok(all_prices));
     });
 }
 
