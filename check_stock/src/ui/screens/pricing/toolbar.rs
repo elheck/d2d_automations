@@ -28,7 +28,7 @@ pub(super) fn show_save_load_toolbar(ui: &mut egui::Ui, state: &mut PricingState
                 .set_file_name("node_graph.json")
                 .save_file()
             {
-                match serde_json::to_string_pretty(&state.graph.save()) {
+                match serde_json::to_string_pretty(&state.graph.save(&state.inventory_sync_url)) {
                     Ok(json) => {
                         if let Err(e) = std::fs::write(&path, json) {
                             error!("Failed to save graph: {e}");
@@ -54,6 +54,9 @@ pub(super) fn show_save_load_toolbar(ui: &mut egui::Ui, state: &mut PricingState
                 match std::fs::read_to_string(&path) {
                     Ok(json) => match serde_json::from_str::<SavedGraph>(&json) {
                         Ok(saved) => {
+                            if let Some(url) = &saved.inventory_sync_url {
+                                state.inventory_sync_url = url.clone();
+                            }
                             state.graph = NodeGraph::load(saved);
                             state.load_error = None;
                             info!("Loaded graph from {}", path.display());

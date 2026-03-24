@@ -607,7 +607,7 @@ impl NodeGraph {
         self.nodes.iter_mut().find(|n| n.id == id)
     }
 
-    pub fn save(&self) -> SavedGraph {
+    pub fn save(&self, inventory_sync_url: &str) -> SavedGraph {
         SavedGraph {
             nodes: self
                 .nodes
@@ -623,6 +623,7 @@ impl NodeGraph {
             canvas_offset_x: self.canvas_offset.x,
             canvas_offset_y: self.canvas_offset.y,
             canvas_zoom: self.canvas_zoom,
+            inventory_sync_url: Some(inventory_sync_url.to_owned()),
         }
     }
 
@@ -665,6 +666,8 @@ pub struct SavedGraph {
     pub canvas_offset_x: f32,
     pub canvas_offset_y: f32,
     pub canvas_zoom: f32,
+    #[serde(default)]
+    pub inventory_sync_url: Option<String>,
 }
 
 pub type PriceFetchResult = Result<Vec<(u64, CachedLatestPrice)>, String>;

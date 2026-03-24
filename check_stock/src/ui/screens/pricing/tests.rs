@@ -1010,7 +1010,7 @@ fn make_graph_with_filter() -> (NodeGraph, usize, usize, usize) {
 #[test]
 fn save_captures_node_count_and_positions() {
     let (g, _, filter_id, _) = make_graph_with_filter();
-    let saved = g.save();
+    let saved = g.save("http://127.0.0.1:8080");
     assert_eq!(saved.nodes.len(), 3);
     let saved_filter = saved.nodes.iter().find(|n| n.id == filter_id).unwrap();
     assert!((saved_filter.x - 200.0).abs() < f32::EPSILON);
@@ -1020,7 +1020,7 @@ fn save_captures_node_count_and_positions() {
 #[test]
 fn save_captures_wires() {
     let (g, csv_id, filter_id, out_id) = make_graph_with_filter();
-    let saved = g.save();
+    let saved = g.save("http://127.0.0.1:8080");
     assert_eq!(saved.wires.len(), 2);
     assert!(saved
         .wires
@@ -1037,7 +1037,7 @@ fn save_captures_canvas_state() {
     let mut g = NodeGraph::default();
     g.canvas_offset = eframe::egui::vec2(42.0, -7.5);
     g.canvas_zoom = 1.5;
-    let saved = g.save();
+    let saved = g.save("http://127.0.0.1:8080");
     assert!((saved.canvas_offset_x - 42.0).abs() < f32::EPSILON);
     assert!((saved.canvas_offset_y - (-7.5)).abs() < f32::EPSILON);
     assert!((saved.canvas_zoom - 1.5).abs() < f32::EPSILON);
@@ -1046,7 +1046,7 @@ fn save_captures_canvas_state() {
 #[test]
 fn load_restores_nodes_and_wires() {
     let (original, csv_id, filter_id, out_id) = make_graph_with_filter();
-    let saved = original.save();
+    let saved = original.save("http://127.0.0.1:8080");
     let restored = NodeGraph::load(saved);
 
     assert_eq!(restored.nodes.len(), 3);
@@ -1059,7 +1059,7 @@ fn load_restores_nodes_and_wires() {
 #[test]
 fn load_restores_node_positions() {
     let (original, _, filter_id, _) = make_graph_with_filter();
-    let saved = original.save();
+    let saved = original.save("http://127.0.0.1:8080");
     let restored = NodeGraph::load(saved);
     let node = restored.nodes.iter().find(|n| n.id == filter_id).unwrap();
     assert!((node.pos.x - 200.0).abs() < f32::EPSILON);
@@ -1071,7 +1071,7 @@ fn load_restores_canvas_state() {
     let mut g = NodeGraph::default();
     g.canvas_offset = eframe::egui::vec2(100.0, 30.0);
     g.canvas_zoom = 0.75;
-    let restored = NodeGraph::load(g.save());
+    let restored = NodeGraph::load(g.save("http://127.0.0.1:8080"));
     assert!((restored.canvas_offset.x - 100.0).abs() < f32::EPSILON);
     assert!((restored.canvas_offset.y - 30.0).abs() < f32::EPSILON);
     assert!((restored.canvas_zoom - 0.75).abs() < f32::EPSILON);
@@ -1081,7 +1081,7 @@ fn load_restores_canvas_state() {
 fn load_sets_next_id_beyond_max_existing() {
     let (original, _, _, _) = make_graph_with_filter();
     let max_id = original.nodes.iter().map(|n| n.id).max().unwrap();
-    let mut restored = NodeGraph::load(original.save());
+    let mut restored = NodeGraph::load(original.save("http://127.0.0.1:8080"));
     // Adding a new node must get an id higher than all restored ids
     let new_id = restored.add_node(NodeKind::CsvSource, eframe::egui::pos2(0.0, 0.0));
     assert!(new_id > max_id);
@@ -1090,7 +1090,7 @@ fn load_sets_next_id_beyond_max_existing() {
 #[test]
 fn load_then_add_node_ids_are_unique() {
     let (original, _, _, _) = make_graph_with_filter();
-    let mut restored = NodeGraph::load(original.save());
+    let mut restored = NodeGraph::load(original.save("http://127.0.0.1:8080"));
     let id_a = restored.add_node(NodeKind::Output, eframe::egui::pos2(0.0, 0.0));
     let id_b = restored.add_node(NodeKind::Output, eframe::egui::pos2(0.0, 0.0));
     let all_ids: Vec<usize> = restored.nodes.iter().map(|n| n.id).collect();
@@ -1132,7 +1132,7 @@ fn round_trip_preserves_all_node_kinds() {
     for kind in &kinds {
         g.add_node(kind.clone(), eframe::egui::pos2(0.0, 0.0));
     }
-    let restored = NodeGraph::load(g.save());
+    let restored = NodeGraph::load(g.save("http://127.0.0.1:8080"));
 
     // Spot-check a few variants survive the round-trip
     assert!(restored.nodes.iter().any(
@@ -1154,7 +1154,7 @@ fn round_trip_preserves_all_node_kinds() {
 #[test]
 fn json_round_trip_is_valid() {
     let (g, _, _, _) = make_graph_with_filter();
-    let saved = g.save();
+    let saved = g.save("http://127.0.0.1:8080");
     let json = serde_json::to_string(&saved).expect("serialize failed");
     let deserialized: SavedGraph = serde_json::from_str(&json).expect("deserialize failed");
     let restored = NodeGraph::load(deserialized);
@@ -1171,7 +1171,8 @@ fn json_is_human_readable() {
         },
         eframe::egui::pos2(0.0, 0.0),
     );
-    let json = serde_json::to_string_pretty(&g.save()).expect("serialize failed");
+    let json =
+        serde_json::to_string_pretty(&g.save("http://127.0.0.1:8080")).expect("serialize failed");
     assert!(json.contains("FilterName"));
     assert!(json.contains("Jace"));
     assert!(json.contains("canvas_zoom"));
@@ -1834,7 +1835,7 @@ fn round_trip_preserves_logical_node_kinds() {
     g.add_node(NodeKind::LogicalAnd, eframe::egui::pos2(100.0, 0.0));
     g.add_node(NodeKind::LogicalOr, eframe::egui::pos2(200.0, 0.0));
     g.add_node(NodeKind::LogicalNot, eframe::egui::pos2(300.0, 0.0));
-    let restored = NodeGraph::load(g.save());
+    let restored = NodeGraph::load(g.save("http://127.0.0.1:8080"));
     assert!(restored
         .nodes
         .iter()
