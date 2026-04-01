@@ -75,6 +75,17 @@ impl Default for AppState {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum LotSortColumn {
+    #[default]
+    Lot,
+    InStock,
+    Copies,
+    StockValue,
+    Sold,
+    Revenue,
+}
+
 #[derive(Default)]
 pub struct StockAnalysisState {
     pub inventory_path: String,
@@ -82,6 +93,8 @@ pub struct StockAnalysisState {
     pub db_stats_error: Option<String>,
     /// Set to true after the first stats load attempt so we don't query on every frame.
     pub stats_loaded: bool,
+    pub lot_sort_column: LotSortColumn,
+    pub lot_sort_ascending: bool,
 }
 
 pub struct BinAnalysisState {

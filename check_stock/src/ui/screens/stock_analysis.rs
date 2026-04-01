@@ -3,7 +3,7 @@ use crate::{
     io::read_csv,
     ui::{
         components::FilePicker,
-        state::{Screen, StockAnalysisState},
+        state::{LotSortColumn, Screen, StockAnalysisState},
         style,
     },
 };
@@ -48,8 +48,8 @@ impl StockAnalysisScreen {
                     ui.add_space(10.0);
 
                     // ── Database stats panel ────────────────────────────────
-                    if let Some(stats) = &state.db_stats {
-                        Self::show_db_stats(ui, stats);
+                    if let Some(db_stats) = state.db_stats.clone() {
+                        Self::show_db_stats(ui, &db_stats, state);
                     } else if let Some(err) = &state.db_stats_error {
                         style::status_error(ui, &format!("Stats error: {err}"));
                     }
@@ -69,7 +69,7 @@ impl StockAnalysisScreen {
         }
     }
 
-    fn show_db_stats(ui: &mut egui::Ui, stats: &DbStats) {
+    fn show_db_stats(ui: &mut egui::Ui, stats: &DbStats, state: &mut StockAnalysisState) {
         style::section_frame().show(ui, |ui| {
             ui.label(
                 egui::RichText::new("Database Overview")
@@ -203,7 +203,7 @@ impl StockAnalysisScreen {
 
             if !stats.lot_breakdown.is_empty() {
                 ui.add_space(8.0);
-                Self::show_lot_breakdown(ui, &stats.lot_breakdown);
+                Self::show_lot_breakdown(ui, &stats.lot_breakdown, state);
             }
         });
     }
@@ -237,7 +237,11 @@ impl StockAnalysisScreen {
             });
     }
 
-    fn show_lot_breakdown(ui: &mut egui::Ui, lots: &[LotBreakdown]) {
+    fn show_lot_breakdown(
+        ui: &mut egui::Ui,
+        lots: &[LotBreakdown],
+        state: &mut StockAnalysisState,
+    ) {
         ui.label(
             egui::RichText::new("Revenue by Lot")
                 .strong()
@@ -246,23 +250,78 @@ impl StockAnalysisScreen {
         );
         ui.add_space(4.0);
 
+        // Sort lots
+        let mut sorted: Vec<&LotBreakdown> = lots.iter().collect();
+        let asc = state.lot_sort_ascending;
+        sorted.sort_by(|a, b| {
+            let ord = match state.lot_sort_column {
+                LotSortColumn::Lot => {
+                    let na: i64 = a.lot[1..].parse().unwrap_or(i64::MAX);
+                    let nb: i64 = b.lot[1..].parse().unwrap_or(i64::MAX);
+                    na.cmp(&nb)
+                }
+                LotSortColumn::InStock => a.in_stock_listings.cmp(&b.in_stock_listings),
+                LotSortColumn::Copies => a.in_stock_copies.cmp(&b.in_stock_copies),
+                LotSortColumn::StockValue => a
+                    .in_stock_value
+                    .partial_cmp(&b.in_stock_value)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                LotSortColumn::Sold => a.sold_copies.cmp(&b.sold_copies),
+                LotSortColumn::Revenue => a
+                    .sold_revenue
+                    .partial_cmp(&b.sold_revenue)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            };
+            if asc {
+                ord
+            } else {
+                ord.reverse()
+            }
+        });
+
+        let header =
+            |ui: &mut egui::Ui, label: &str, col: LotSortColumn, state: &mut StockAnalysisState| {
+                let active = state.lot_sort_column == col;
+                let arrow = if active {
+                    if state.lot_sort_ascending {
+                        " \u{25B2}"
+                    } else {
+                        " \u{25BC}"
+                    }
+                } else {
+                    ""
+                };
+                let text = egui::RichText::new(format!("{label}{arrow}")).strong();
+                if ui
+                    .add(egui::Label::new(text).sense(egui::Sense::click()))
+                    .clicked()
+                {
+                    if active {
+                        state.lot_sort_ascending = !state.lot_sort_ascending;
+                    } else {
+                        state.lot_sort_column = col;
+                        state.lot_sort_ascending = false;
+                    }
+                }
+            };
+
         egui::Grid::new("lot_breakdown")
             .num_columns(6)
             .spacing([12.0, 2.0])
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Lot").strong());
-                ui.label(egui::RichText::new("In Stock").strong());
-                ui.label(egui::RichText::new("Copies").strong());
-                ui.label(egui::RichText::new("Stock Value").strong());
-                ui.label(egui::RichText::new("Sold").strong());
-                ui.label(egui::RichText::new("Revenue").strong());
+                header(ui, "Lot", LotSortColumn::Lot, state);
+                header(ui, "In Stock", LotSortColumn::InStock, state);
+                header(ui, "Copies", LotSortColumn::Copies, state);
+                header(ui, "Stock Value", LotSortColumn::StockValue, state);
+                header(ui, "Sold", LotSortColumn::Sold, state);
+                header(ui, "Revenue", LotSortColumn::Revenue, state);
                 ui.end_row();
 
                 let mut total_stock_value = 0.0;
                 let mut total_sold_copies: i64 = 0;
                 let mut total_revenue = 0.0;
 
-                for lot in lots {
+                for lot in &sorted {
                     ui.label(&lot.lot);
                     ui.label(lot.in_stock_listings.to_string());
                     ui.label(format!("×{}", lot.in_stock_copies));

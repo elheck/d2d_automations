@@ -17,7 +17,7 @@ use std::path::PathBuf;
 pub type DbResult<T> = Result<T, rusqlite::Error>;
 
 /// Per-lot revenue and stock breakdown.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LotBreakdown {
     pub lot: String,
     pub in_stock_listings: i64,
@@ -28,7 +28,7 @@ pub struct LotBreakdown {
 }
 
 /// One row in the "longest unsold" top-5 list.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OldestInStockEntry {
     pub name: String,
     /// Effective date: `listed_at` when available, otherwise `first_synced_at`.
@@ -39,7 +39,7 @@ pub struct OldestInStockEntry {
 }
 
 /// Aggregate statistics about the current inventory database contents.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct DbStats {
     /// Total number of article rows in the database (includes sold-out qty=0 listings)
     pub total_articles: i64,
