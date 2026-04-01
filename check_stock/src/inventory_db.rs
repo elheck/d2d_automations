@@ -16,6 +16,17 @@ use std::path::PathBuf;
 /// Result type for database operations
 pub type DbResult<T> = Result<T, rusqlite::Error>;
 
+/// Per-lot revenue and stock breakdown.
+#[derive(Debug)]
+pub struct LotBreakdown {
+    pub lot: String,
+    pub in_stock_listings: i64,
+    pub in_stock_copies: i64,
+    pub in_stock_value: f64,
+    pub sold_copies: i64,
+    pub sold_revenue: f64,
+}
+
 /// One row in the "longest unsold" top-5 list.
 #[derive(Debug)]
 pub struct OldestInStockEntry {
@@ -60,6 +71,8 @@ pub struct DbStats {
     pub condition_breakdown: Vec<(String, i64)>,
     /// Total copies by rarity, sorted by count descending
     pub rarity_breakdown: Vec<(String, i64)>,
+    /// Revenue and stock breakdown per lot (extracted from location field)
+    pub lot_breakdown: Vec<LotBreakdown>,
 }
 
 /// Statistics from a sync operation
@@ -119,7 +132,8 @@ const INVENTORY_CARDS_DDL: &str = "
         rarity          TEXT NOT NULL,
         listed_at       TEXT NOT NULL,
         first_synced_at TEXT NOT NULL,
-        last_synced_at  TEXT NOT NULL
+        last_synced_at  TEXT NOT NULL,
+        sold_quantity   INTEGER NOT NULL DEFAULT 0
     );
     CREATE UNIQUE INDEX idx_inventory_article_key
         ON inventory_cards (cardmarket_id, condition, language, is_foil, is_signed);
@@ -284,6 +298,23 @@ fn init_schema(conn: &Connection) -> DbResult<()> {
         conn.execute_batch(MIGRATION_V1_TO_V2)?;
     }
 
+    // Add sold_quantity column if missing (added for lot revenue tracking).
+    let has_sold_quantity: bool = conn
+        .query_row(
+            "SELECT 1 FROM pragma_table_info('inventory_cards') WHERE name='sold_quantity'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+
+    if !has_sold_quantity {
+        log::info!("Adding sold_quantity column to inventory_cards");
+        conn.execute_batch(
+            "ALTER TABLE inventory_cards ADD COLUMN sold_quantity INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+
     Ok(())
 }
 
@@ -324,6 +355,83 @@ pub fn sync_inventory(cards: &[Card]) -> DbResult<SyncStats> {
 pub fn get_db_stats() -> DbResult<DbStats> {
     let conn = open_db()?;
     get_db_stats_conn(&conn)
+}
+
+/// Extracts the lot number (e.g. `L0`, `L12`) from a location string.
+///
+/// Location format: `A-0-0-31-L0-R` — the lot is the first `-`-separated
+/// segment that starts with `L` followed by one or more digits.
+fn extract_lot_number(location: &str) -> Option<&str> {
+    location.split('-').find(|part| {
+        part.len() > 1 && part.starts_with('L') && part[1..].bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
+/// Builds the per-lot revenue breakdown from all inventory rows that carry a
+/// location with a recognisable lot number.
+fn lot_breakdown_from(conn: &Connection) -> DbResult<Vec<LotBreakdown>> {
+    let mut stmt = conn.prepare(
+        "SELECT location, quantity, CAST(price AS REAL), sold_quantity
+         FROM inventory_cards
+         WHERE location IS NOT NULL AND location != ''",
+    )?;
+
+    let mut lots: std::collections::HashMap<String, (i64, i64, f64, i64, f64)> =
+        std::collections::HashMap::new();
+
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, f64>(2)?,
+            r.get::<_, i64>(3)?,
+        ))
+    })?;
+
+    for row in rows {
+        let (location, qty, price, sold_qty) = row?;
+        if let Some(lot) = extract_lot_number(&location) {
+            if lot == "L0" {
+                continue;
+            }
+            let entry = lots.entry(lot.to_string()).or_default();
+            if qty > 0 {
+                entry.0 += 1; // in_stock_listings
+                entry.1 += qty; // in_stock_copies
+                entry.2 += price * qty as f64; // in_stock_value
+            }
+            entry.3 += sold_qty; // sold_copies
+            entry.4 += price * sold_qty as f64; // sold_revenue
+        }
+    }
+
+    let mut result: Vec<LotBreakdown> = lots
+        .into_iter()
+        .map(
+            |(
+                lot,
+                (in_stock_listings, in_stock_copies, in_stock_value, sold_copies, sold_revenue),
+            )| {
+                LotBreakdown {
+                    lot,
+                    in_stock_listings,
+                    in_stock_copies,
+                    in_stock_value,
+                    sold_copies,
+                    sold_revenue,
+                }
+            },
+        )
+        .collect();
+
+    // Sort by lot number numerically (L0, L1, L2, …)
+    result.sort_by(|a, b| {
+        let num_a: i64 = a.lot[1..].parse().unwrap_or(i64::MAX);
+        let num_b: i64 = b.lot[1..].parse().unwrap_or(i64::MAX);
+        num_a.cmp(&num_b)
+    });
+
+    Ok(result)
 }
 
 /// Inner stats query that accepts an explicit connection — used in tests.
@@ -445,6 +553,8 @@ fn get_db_stats_conn(conn: &Connection) -> DbResult<DbStats> {
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<DbResult<Vec<_>>>()?;
 
+    let lot_breakdown = lot_breakdown_from(conn)?;
+
     Ok(DbStats {
         total_articles,
         in_stock_articles,
@@ -461,6 +571,7 @@ fn get_db_stats_conn(conn: &Connection) -> DbResult<DbStats> {
         language_breakdown,
         condition_breakdown,
         rarity_breakdown,
+        lot_breakdown,
     })
 }
 
@@ -504,6 +615,12 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
                 ?19, ?20, ?21, ?21
             )
             ON CONFLICT(cardmarket_id, condition, language, is_foil, is_signed) DO UPDATE SET
+                sold_quantity   = CASE
+                    WHEN excluded.quantity < inventory_cards.quantity
+                    THEN inventory_cards.sold_quantity
+                         + (inventory_cards.quantity - excluded.quantity)
+                    ELSE inventory_cards.sold_quantity
+                END,
                 quantity        = excluded.quantity,
                 name            = excluded.name,
                 set_name        = excluded.set_name,
@@ -598,7 +715,9 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
             };
             tx.execute(
                 "UPDATE inventory_cards
-                 SET quantity = 0, last_synced_at = ?1
+                 SET sold_quantity = sold_quantity + quantity,
+                     quantity = 0,
+                     last_synced_at = ?1
                  WHERE cardmarket_id = ?2 AND condition = ?3 AND language = ?4
                    AND is_foil = ?5 AND is_signed = ?6",
                 params![new_date, id, condition, language, is_foil, is_signed],
@@ -875,6 +994,7 @@ mod tests {
         assert!(stats.language_breakdown.is_empty());
         assert!(stats.condition_breakdown.is_empty());
         assert!(stats.rarity_breakdown.is_empty());
+        assert!(stats.lot_breakdown.is_empty());
     }
 
     #[test]
@@ -1210,5 +1330,212 @@ mod tests {
         assert_eq!(row.7, Some("0".to_string()));
         assert_eq!(row.8, "Doppelland");
         assert_eq!(row.9, Some("A1_S1_R1_C1".to_string()));
+    }
+
+    // ==================== extract_lot_number Tests ====================
+
+    #[test]
+    fn extract_lot_from_full_location() {
+        assert_eq!(extract_lot_number("A-0-0-31-L0-R"), Some("L0"));
+    }
+
+    #[test]
+    fn extract_lot_multi_digit() {
+        assert_eq!(extract_lot_number("B-0-1-57-L12-R"), Some("L12"));
+    }
+
+    #[test]
+    fn extract_lot_no_suffix() {
+        assert_eq!(extract_lot_number("A-0-1-4-L3"), Some("L3"));
+    }
+
+    #[test]
+    fn extract_lot_no_lot_in_location() {
+        assert_eq!(extract_lot_number("A-0-1-4"), None);
+    }
+
+    #[test]
+    fn extract_lot_bare_l_not_a_lot() {
+        assert_eq!(extract_lot_number("A-0-1-4-L"), None);
+    }
+
+    // ==================== sold_quantity Tracking Tests ====================
+
+    #[test]
+    fn sold_quantity_tracked_on_full_removal() {
+        let mut conn = test_conn();
+        let mut card = make_card("1", "Bolt", "3");
+        card.location = Some("A-0-0-1-L0-R".to_string());
+        card.price = "2.00".to_string();
+        sync_inventory_conn(&mut conn, &[card], "2026-01-01").unwrap();
+
+        // Card removed from CSV → all 3 copies sold
+        sync_inventory_conn(&mut conn, &[], "2026-01-02").unwrap();
+
+        let sold: i64 = conn
+            .query_row(
+                "SELECT sold_quantity FROM inventory_cards WHERE cardmarket_id = '1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sold, 3);
+    }
+
+    #[test]
+    fn sold_quantity_tracked_on_partial_sale() {
+        let mut conn = test_conn();
+        let mut card = make_card("1", "Bolt", "5");
+        card.location = Some("A-0-0-1-L0-R".to_string());
+        sync_inventory_conn(&mut conn, &[card], "2026-01-01").unwrap();
+
+        // Qty drops from 5 to 2 → 3 sold
+        let mut card2 = make_card("1", "Bolt", "2");
+        card2.location = Some("A-0-0-1-L0-R".to_string());
+        sync_inventory_conn(&mut conn, &[card2], "2026-01-02").unwrap();
+
+        let sold: i64 = conn
+            .query_row(
+                "SELECT sold_quantity FROM inventory_cards WHERE cardmarket_id = '1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sold, 3);
+    }
+
+    #[test]
+    fn sold_quantity_not_incremented_on_restock() {
+        let mut conn = test_conn();
+        let card = make_card("1", "Bolt", "2");
+        sync_inventory_conn(&mut conn, &[card], "2026-01-01").unwrap();
+
+        // Qty increases from 2 to 5 → no sale
+        let card2 = make_card("1", "Bolt", "5");
+        sync_inventory_conn(&mut conn, &[card2], "2026-01-02").unwrap();
+
+        let sold: i64 = conn
+            .query_row(
+                "SELECT sold_quantity FROM inventory_cards WHERE cardmarket_id = '1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sold, 0);
+    }
+
+    #[test]
+    fn sold_quantity_accumulates_across_syncs() {
+        let mut conn = test_conn();
+        let card = make_card("1", "Bolt", "10");
+        sync_inventory_conn(&mut conn, &[card], "2026-01-01").unwrap();
+
+        // Sell 3
+        let card2 = make_card("1", "Bolt", "7");
+        sync_inventory_conn(&mut conn, &[card2], "2026-01-02").unwrap();
+
+        // Sell 2 more
+        let card3 = make_card("1", "Bolt", "5");
+        sync_inventory_conn(&mut conn, &[card3], "2026-01-03").unwrap();
+
+        let sold: i64 = conn
+            .query_row(
+                "SELECT sold_quantity FROM inventory_cards WHERE cardmarket_id = '1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sold, 5);
+    }
+
+    // ==================== Lot Breakdown Tests ====================
+
+    #[test]
+    fn lot_breakdown_groups_by_lot() {
+        let mut conn = test_conn();
+        let mut c1 = make_card("1", "Bolt", "2");
+        c1.price = "1.00".to_string();
+        c1.location = Some("A-0-0-1-L1-R".to_string());
+
+        let mut c2 = make_card("2", "Shock", "3");
+        c2.price = "0.50".to_string();
+        c2.location = Some("A-0-0-2-L1-R".to_string());
+
+        let mut c3 = make_card("3", "Giant Growth", "1");
+        c3.price = "5.00".to_string();
+        c3.location = Some("B-0-1-1-L2-R".to_string());
+
+        sync_inventory_conn(&mut conn, &[c1, c2, c3], "2026-01-01").unwrap();
+
+        let stats = get_db_stats_conn(&conn).unwrap();
+        assert_eq!(stats.lot_breakdown.len(), 2);
+
+        let l1 = &stats.lot_breakdown[0];
+        assert_eq!(l1.lot, "L1");
+        assert_eq!(l1.in_stock_listings, 2);
+        assert_eq!(l1.in_stock_copies, 5); // 2 + 3
+        assert!((l1.in_stock_value - 3.50).abs() < 0.01); // 1.00*2 + 0.50*3
+
+        let l2 = &stats.lot_breakdown[1];
+        assert_eq!(l2.lot, "L2");
+        assert_eq!(l2.in_stock_copies, 1);
+        assert!((l2.in_stock_value - 5.00).abs() < 0.01);
+    }
+
+    #[test]
+    fn lot_breakdown_tracks_sold_revenue() {
+        let mut conn = test_conn();
+        let mut c1 = make_card("1", "Bolt", "4");
+        c1.price = "2.00".to_string();
+        c1.location = Some("A-0-0-1-L3-R".to_string());
+
+        sync_inventory_conn(&mut conn, &[c1], "2026-01-01").unwrap();
+
+        // All 4 copies sold
+        sync_inventory_conn(&mut conn, &[], "2026-01-02").unwrap();
+
+        let stats = get_db_stats_conn(&conn).unwrap();
+        assert_eq!(stats.lot_breakdown.len(), 1);
+        let l3 = &stats.lot_breakdown[0];
+        assert_eq!(l3.sold_copies, 4);
+        assert!((l3.sold_revenue - 8.00).abs() < 0.01); // 2.00 * 4
+        assert_eq!(l3.in_stock_copies, 0);
+    }
+
+    #[test]
+    fn lot_breakdown_skips_l0_catch_all() {
+        let mut conn = test_conn();
+        let mut c1 = make_card("1", "Bolt", "2");
+        c1.location = Some("A-0-0-1-L0-R".to_string());
+
+        let mut c2 = make_card("2", "Shock", "1");
+        c2.location = Some("A-0-0-2-L1-R".to_string());
+
+        sync_inventory_conn(&mut conn, &[c1, c2], "2026-01-01").unwrap();
+
+        let stats = get_db_stats_conn(&conn).unwrap();
+        assert_eq!(stats.lot_breakdown.len(), 1);
+        assert_eq!(stats.lot_breakdown[0].lot, "L1");
+    }
+
+    #[test]
+    fn lot_breakdown_empty_without_locations() {
+        let mut conn = test_conn();
+        let card = make_card("1", "Bolt", "2");
+        sync_inventory_conn(&mut conn, &[card], "2026-01-01").unwrap();
+
+        let stats = get_db_stats_conn(&conn).unwrap();
+        assert!(stats.lot_breakdown.is_empty());
+    }
+
+    #[test]
+    fn lot_breakdown_skips_location_without_lot() {
+        let mut conn = test_conn();
+        let mut card = make_card("1", "Bolt", "2");
+        card.location = Some("A-0-1-4".to_string());
+        sync_inventory_conn(&mut conn, &[card], "2026-01-01").unwrap();
+
+        let stats = get_db_stats_conn(&conn).unwrap();
+        assert!(stats.lot_breakdown.is_empty());
     }
 }

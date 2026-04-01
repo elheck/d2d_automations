@@ -1,5 +1,5 @@
 use crate::{
-    inventory_db::{DbStats, OldestInStockEntry},
+    inventory_db::{DbStats, LotBreakdown, OldestInStockEntry},
     io::read_csv,
     stock_analysis::{format_stock_analysis_with_sort, SortOrder, StockAnalysis},
     ui::{
@@ -277,6 +277,11 @@ impl StockAnalysisScreen {
                     ui.label(text);
                 });
             }
+
+            if !stats.lot_breakdown.is_empty() {
+                ui.add_space(8.0);
+                Self::show_lot_breakdown(ui, &stats.lot_breakdown);
+            }
         });
     }
 
@@ -306,6 +311,56 @@ impl StockAnalysisScreen {
                     });
                     ui.end_row();
                 }
+            });
+    }
+
+    fn show_lot_breakdown(ui: &mut egui::Ui, lots: &[LotBreakdown]) {
+        ui.label(
+            egui::RichText::new("Revenue by Lot")
+                .strong()
+                .size(14.0)
+                .color(style::TEXT_PRIMARY),
+        );
+        ui.add_space(4.0);
+
+        egui::Grid::new("lot_breakdown")
+            .num_columns(6)
+            .spacing([12.0, 2.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Lot").strong());
+                ui.label(egui::RichText::new("In Stock").strong());
+                ui.label(egui::RichText::new("Copies").strong());
+                ui.label(egui::RichText::new("Stock Value").strong());
+                ui.label(egui::RichText::new("Sold").strong());
+                ui.label(egui::RichText::new("Revenue").strong());
+                ui.end_row();
+
+                let mut total_stock_value = 0.0;
+                let mut total_sold_copies: i64 = 0;
+                let mut total_revenue = 0.0;
+
+                for lot in lots {
+                    ui.label(&lot.lot);
+                    ui.label(lot.in_stock_listings.to_string());
+                    ui.label(format!("×{}", lot.in_stock_copies));
+                    ui.label(format!("€{:.2}", lot.in_stock_value));
+                    ui.label(format!("×{}", lot.sold_copies));
+                    ui.label(format!("€{:.2}", lot.sold_revenue));
+                    ui.end_row();
+
+                    total_stock_value += lot.in_stock_value;
+                    total_sold_copies += lot.sold_copies;
+                    total_revenue += lot.sold_revenue;
+                }
+
+                // Totals row
+                ui.label(egui::RichText::new("Total").strong());
+                ui.label("");
+                ui.label("");
+                ui.label(egui::RichText::new(format!("€{total_stock_value:.2}")).strong());
+                ui.label(egui::RichText::new(format!("×{total_sold_copies}")).strong());
+                ui.label(egui::RichText::new(format!("€{total_revenue:.2}")).strong());
+                ui.end_row();
             });
     }
 
