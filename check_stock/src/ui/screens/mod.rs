@@ -1,3 +1,4 @@
+mod bin_analysis;
 mod picking;
 mod pricing;
 mod search;
@@ -6,6 +7,7 @@ mod stock_checker;
 mod stock_listing;
 mod welcome;
 
+pub use bin_analysis::BinAnalysisScreen;
 pub use picking::{PickingScreen, PickingState};
 pub use pricing::PricingScreen;
 pub use search::SearchScreen;

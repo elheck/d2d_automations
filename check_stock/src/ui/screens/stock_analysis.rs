@@ -1,7 +1,6 @@
 use crate::{
     inventory_db::{DbStats, LotBreakdown, OldestInStockEntry},
     io::read_csv,
-    stock_analysis::{format_stock_analysis_with_sort, SortOrder, StockAnalysis},
     ui::{
         components::FilePicker,
         state::{Screen, StockAnalysisState},
@@ -9,7 +8,6 @@ use crate::{
     },
 };
 use eframe::egui;
-use log::info;
 
 pub struct StockAnalysisScreen;
 
@@ -52,83 +50,8 @@ impl StockAnalysisScreen {
                     // ── Database stats panel ────────────────────────────────
                     if let Some(stats) = &state.db_stats {
                         Self::show_db_stats(ui, stats);
-                        ui.add_space(10.0);
                     } else if let Some(err) = &state.db_stats_error {
                         style::status_error(ui, &format!("Stats error: {err}"));
-                        ui.add_space(10.0);
-                    }
-
-                    ui.add_space(2.0);
-
-                    // ── Bin analysis controls ───────────────────────────────
-                    style::section_frame().show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new("Bin Capacity Analysis")
-                                .strong()
-                                .color(style::TEXT_PRIMARY),
-                        );
-                        ui.add_space(6.0);
-
-                        ui.horizontal(|ui| {
-                            ui.label("Minimum Free Slots:");
-                            ui.add(egui::Slider::new(&mut state.free_slots, 1..=30).text("slots"));
-                        });
-
-                        ui.add_space(5.0);
-
-                        ui.horizontal(|ui| {
-                            ui.label("Sort by:");
-                            egui::ComboBox::from_label("")
-                                .selected_text(match state.sort_order {
-                                    SortOrder::ByFreeSlots => "Free Slots (Descending)",
-                                    SortOrder::ByLocation => "Location (Ascending)",
-                                })
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut state.sort_order,
-                                        SortOrder::ByFreeSlots,
-                                        "Free Slots (Descending)",
-                                    );
-                                    ui.selectable_value(
-                                        &mut state.sort_order,
-                                        SortOrder::ByLocation,
-                                        "Location (Ascending)",
-                                    );
-                                });
-                        });
-
-                        ui.add_space(10.0);
-
-                        if style::primary_button(ui, "Analyze Stock").clicked() {
-                            if let Err(e) = Self::analyze_stock(state) {
-                                state.output = format!("Error: {e}");
-                            }
-                        }
-                    });
-
-                    ui.add_space(8.0);
-                    ui.separator();
-
-                    if !state.output.is_empty() {
-                        ui.add_space(6.0);
-                        if style::secondary_button(ui, "Save Analysis to File").clicked() {
-                            if let Some(path) = rfd::FileDialog::new()
-                                .set_file_name("stock_analysis.txt")
-                                .add_filter("Text Files", &["txt"])
-                                .save_file()
-                            {
-                                if let Err(e) = std::fs::write(&path, &state.output) {
-                                    state.output = format!("Error saving file: {e}");
-                                }
-                            }
-                        }
-                        ui.add_space(4.0);
-                        ui.add(
-                            egui::TextEdit::multiline(&mut state.output)
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(20)
-                                .font(egui::TextStyle::Monospace),
-                        );
                     }
                 });
         });
@@ -362,29 +285,5 @@ impl StockAnalysisScreen {
                 ui.label(egui::RichText::new(format!("€{total_revenue:.2}")).strong());
                 ui.end_row();
             });
-    }
-
-    fn analyze_stock(state: &mut StockAnalysisState) -> Result<(), Box<dyn std::error::Error>> {
-        if state.inventory_path.is_empty() {
-            return Err("Please select an inventory file".into());
-        }
-
-        info!(
-            "Starting stock analysis with {} free slots threshold",
-            state.free_slots
-        );
-
-        let inventory = read_csv(&state.inventory_path)?;
-        let analyzer = StockAnalysis::new(inventory);
-        let stats = analyzer.analyze_with_free_slots(state.free_slots);
-
-        info!(
-            "Found {} bins with {} or more free slots",
-            stats.available_bins.len(),
-            state.free_slots
-        );
-
-        state.output = format_stock_analysis_with_sort(&stats, state.sort_order);
-        Ok(())
     }
 }

@@ -5,7 +5,8 @@ egui desktop app for Magic: The Gathering card inventory management.
 ## Screens
 
 - **Stock Checker** — Match inventory CSV against wantslists, multi-language card matching
-- **Stock Analysis** — Bin capacity utilization, free-slot analysis, and per-lot revenue tracking
+- **Stock Analysis** — Inventory overview, per-lot revenue tracking, and sales metrics
+- **Bin Analysis** — Bin capacity utilization and free-slot analysis
 - **Magic Singles Listing** — Card lookup via Scryfall by set code + collector number, with images and Cardmarket prices
 - **Search Cards** — Interactive inventory search with filtering
 - **Picking** — Order picking workflow (reached via Stock Checker results)

@@ -13,6 +13,7 @@ pub enum Screen {
     Welcome,
     StockChecker,
     StockAnalysis,
+    BinAnalysis,
     StockListing,
     Search,
     Picking,
@@ -74,27 +75,29 @@ impl Default for AppState {
     }
 }
 
+#[derive(Default)]
 pub struct StockAnalysisState {
     pub inventory_path: String,
-    pub output: String,
-    pub free_slots: i32,
-    pub sort_order: SortOrder,
     pub db_stats: Option<crate::inventory_db::DbStats>,
     pub db_stats_error: Option<String>,
     /// Set to true after the first stats load attempt so we don't query on every frame.
     pub stats_loaded: bool,
 }
 
-impl Default for StockAnalysisState {
+pub struct BinAnalysisState {
+    pub inventory_path: String,
+    pub output: String,
+    pub free_slots: i32,
+    pub sort_order: SortOrder,
+}
+
+impl Default for BinAnalysisState {
     fn default() -> Self {
         Self {
             inventory_path: String::new(),
             output: String::new(),
             free_slots: 5,
             sort_order: SortOrder::ByFreeSlots,
-            db_stats: None,
-            db_stats_error: None,
-            stats_loaded: false,
         }
     }
 }
