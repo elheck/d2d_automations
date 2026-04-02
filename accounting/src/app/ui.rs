@@ -9,6 +9,8 @@ use super::{InvoiceApp, ProcessingState};
 
 impl eframe::App for InvoiceApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.render_order_preview_window(ctx);
+
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.vertical_centered(|ui| {
@@ -106,10 +108,15 @@ impl InvoiceApp {
 
             // Orders loaded info
             if !self.orders.is_empty() {
-                ui.colored_label(
-                    egui::Color32::GREEN,
-                    format!("Loaded {} orders", self.orders.len()),
-                );
+                ui.horizontal(|ui| {
+                    ui.colored_label(
+                        egui::Color32::GREEN,
+                        format!("Loaded {} orders", self.orders.len()),
+                    );
+                    if ui.button("Review Orders").clicked() {
+                        self.show_order_preview = true;
+                    }
+                });
             }
         });
     }
@@ -410,5 +417,129 @@ impl InvoiceApp {
                     });
             });
         }
+    }
+
+    fn render_order_preview_window(&mut self, ctx: &egui::Context) {
+        if !self.show_order_preview {
+            return;
+        }
+
+        let mut open = self.show_order_preview;
+        egui::Window::new("Order Preview")
+            .open(&mut open)
+            .resizable(true)
+            .default_size([900.0, 500.0])
+            .show(ctx, |ui| {
+                ui.label(format!("{} orders to be invoiced:", self.orders.len()));
+                ui.add_space(5.0);
+
+                let total: f64 = self
+                    .orders
+                    .iter()
+                    .filter_map(|o| o.total_value.replace(',', ".").parse::<f64>().ok())
+                    .sum();
+                ui.colored_label(
+                    egui::Color32::LIGHT_BLUE,
+                    format!("Total value: {total:.2} EUR"),
+                );
+                ui.add_space(5.0);
+
+                egui::ScrollArea::both().show(ui, |ui| {
+                    egui_extras::TableBuilder::new(ui)
+                        .striped(true)
+                        .resizable(true)
+                        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                        .column(egui_extras::Column::auto().at_least(70.0)) // Order ID
+                        .column(egui_extras::Column::auto().at_least(80.0)) // Date
+                        .column(egui_extras::Column::auto().at_least(120.0)) // Customer
+                        .column(egui_extras::Column::auto().at_least(100.0)) // Country
+                        .column(egui_extras::Column::auto().at_least(40.0)) // Items
+                        .column(egui_extras::Column::auto().at_least(80.0)) // Merchandise
+                        .column(egui_extras::Column::auto().at_least(60.0)) // Shipping
+                        .column(egui_extras::Column::auto().at_least(70.0)) // Total
+                        .column(egui_extras::Column::remainder()) // Description
+                        .header(20.0, |mut header| {
+                            header.col(|ui| {
+                                ui.strong("Order ID");
+                            });
+                            header.col(|ui| {
+                                ui.strong("Date");
+                            });
+                            header.col(|ui| {
+                                ui.strong("Customer");
+                            });
+                            header.col(|ui| {
+                                ui.strong("Country");
+                            });
+                            header.col(|ui| {
+                                ui.strong("Items");
+                            });
+                            header.col(|ui| {
+                                ui.strong("Merch.");
+                            });
+                            header.col(|ui| {
+                                ui.strong("Shipping");
+                            });
+                            header.col(|ui| {
+                                ui.strong("Total");
+                            });
+                            header.col(|ui| {
+                                ui.strong("Description");
+                            });
+                        })
+                        .body(|mut body| {
+                            for order in &self.orders {
+                                let line_count = order.items.len().max(1);
+                                let row_height = line_count as f32 * 18.0;
+                                body.row(row_height, |mut row| {
+                                    row.col(|ui| {
+                                        ui.label(&order.order_id);
+                                    });
+                                    row.col(|ui| {
+                                        ui.label(&order.date_of_purchase);
+                                    });
+                                    row.col(|ui| {
+                                        ui.label(&order.name);
+                                    });
+                                    row.col(|ui| {
+                                        ui.label(&order.country);
+                                    });
+                                    row.col(|ui| {
+                                        ui.label(order.article_count.to_string());
+                                    });
+                                    row.col(|ui| {
+                                        ui.label(format!(
+                                            "{} {}",
+                                            &order.merchandise_value, &order.currency
+                                        ));
+                                    });
+                                    row.col(|ui| {
+                                        ui.label(format!(
+                                            "{} {}",
+                                            &order.shipment_costs, &order.currency
+                                        ));
+                                    });
+                                    row.col(|ui| {
+                                        ui.label(format!(
+                                            "{} {}",
+                                            &order.total_value, &order.currency
+                                        ));
+                                    });
+                                    row.col(|ui| {
+                                        ui.vertical(|ui| {
+                                            for item in &order.items {
+                                                ui.label(format!(
+                                                    "• {}x {}",
+                                                    item.quantity, item.localized_product_name
+                                                ));
+                                            }
+                                        });
+                                    });
+                                });
+                            }
+                        });
+                });
+            });
+        self.show_order_preview = open;
     }
 }

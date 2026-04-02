@@ -36,6 +36,8 @@ pub struct InvoiceApp {
     workflow_book: bool,
     // PDF download folder
     pdf_download_path: Option<PathBuf>,
+    // Order preview window
+    show_order_preview: bool,
 }
 
 impl Default for InvoiceApp {
@@ -74,6 +76,8 @@ impl Default for InvoiceApp {
             workflow_book: false,
             // PDF download path - default to None
             pdf_download_path: None,
+            // Order preview window - default to closed
+            show_order_preview: false,
         }
     }
 }
