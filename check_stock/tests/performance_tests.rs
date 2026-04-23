@@ -23,6 +23,8 @@ fn create_test_card(
         is_foil: "false".to_string(),
         is_playset: None,
         is_signed: "false".to_string(),
+        is_first_ed: None,
+        is_reverse_holo: None,
         price: price.to_string(),
         comment: "".to_string(),
         location: Some(format!("A{}_S1_R1_C1", id)),

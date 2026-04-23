@@ -1,5 +1,25 @@
 use serde::Deserialize;
 
+/// Maps a CSV condition value (either short form "NM" or long form "near_mint")
+/// to the canonical short form ("NM", "EX", "GD", "LP", "PL", "PO").
+///
+/// Cardmarket's legacy export used short codes; the inventory report format uses
+/// snake_case full names. Both formats must be supported in filters and sort keys.
+/// Unknown values are returned unchanged (uppercased + trimmed).
+pub fn canonical_condition(s: &str) -> String {
+    let trimmed = s.trim().to_lowercase();
+    let trimmed = trimmed.replace([' ', '-'], "_");
+    match trimmed.as_str() {
+        "nm" | "mint" | "m" | "near_mint" => "NM".to_string(),
+        "ex" | "excellent" => "EX".to_string(),
+        "gd" | "good" => "GD".to_string(),
+        "lp" | "light_played" | "lightly_played" => "LP".to_string(),
+        "pl" | "played" => "PL".to_string(),
+        "po" | "poor" => "PO".to_string(),
+        _ => s.trim().to_uppercase(),
+    }
+}
+
 /// Represents the supported card languages
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
@@ -88,23 +108,27 @@ pub struct Card {
     pub language: String,
     #[serde(rename = "isFoil")]
     pub is_foil: String,
-    #[serde(rename = "isPlayset")]
+    #[serde(rename = "isPlayset", default)]
     pub is_playset: Option<String>,
     #[serde(rename = "isSigned")]
     pub is_signed: String,
+    #[serde(rename = "isFirstEd", default)]
+    pub is_first_ed: Option<String>,
+    #[serde(rename = "isReverseHolo", default)]
+    pub is_reverse_holo: Option<String>,
     pub price: String,
     pub comment: String,
     pub location: Option<String>,
-    #[serde(rename = "nameDE")]
+    #[serde(rename = "nameDE", default)]
     pub name_de: String,
-    #[serde(rename = "nameES")]
+    #[serde(rename = "nameES", default)]
     pub name_es: String,
-    #[serde(rename = "nameFR")]
+    #[serde(rename = "nameFR", default)]
     pub name_fr: String,
-    #[serde(rename = "nameIT")]
+    #[serde(rename = "nameIT", default)]
     pub name_it: String,
     pub rarity: String,
-    #[serde(rename = "listedAt")]
+    #[serde(rename = "listedAt", default)]
     pub listed_at: String,
 }
 
@@ -127,6 +151,22 @@ impl Card {
             .unwrap_or(false)
     }
 
+    /// Returns true if this card is a first edition printing
+    pub fn is_first_ed_card(&self) -> bool {
+        self.is_first_ed
+            .as_deref()
+            .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    /// Returns true if this card is reverse holographic
+    pub fn is_reverse_holo_card(&self) -> bool {
+        self.is_reverse_holo
+            .as_deref()
+            .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
     /// Returns a list of special conditions for this card (e.g., "Foil", "Signed")
     pub fn special_conditions(&self) -> Vec<&'static str> {
         let mut conditions = Vec::new();
@@ -135,6 +175,12 @@ impl Card {
         }
         if self.is_signed_card() {
             conditions.push("Signed");
+        }
+        if self.is_first_ed_card() {
+            conditions.push("1st Ed");
+        }
+        if self.is_reverse_holo_card() {
+            conditions.push("Reverse Holo");
         }
         conditions
     }
@@ -162,6 +208,8 @@ impl Card {
             is_foil: "false".to_string(),
             is_playset: None,
             is_signed: "false".to_string(),
+            is_first_ed: None,
+            is_reverse_holo: None,
             price: "1.00".to_string(),
             comment: "".to_string(),
             location: None,
@@ -383,6 +431,73 @@ mod tests {
         card.is_signed = "true".to_string();
         let conditions = card.special_conditions();
         assert_eq!(conditions, vec!["Foil", "Signed"]);
+    }
+
+    #[test]
+    fn test_card_is_first_ed_none() {
+        let card = create_test_card();
+        assert!(!card.is_first_ed_card());
+    }
+
+    #[test]
+    fn test_card_is_first_ed_true() {
+        let mut card = create_test_card();
+        card.is_first_ed = Some("true".to_string());
+        assert!(card.is_first_ed_card());
+    }
+
+    #[test]
+    fn test_card_is_reverse_holo_true() {
+        let mut card = create_test_card();
+        card.is_reverse_holo = Some("true".to_string());
+        assert!(card.is_reverse_holo_card());
+    }
+
+    #[test]
+    fn test_card_special_conditions_first_ed_and_reverse_holo() {
+        let mut card = create_test_card();
+        card.is_first_ed = Some("true".to_string());
+        card.is_reverse_holo = Some("true".to_string());
+        let conditions = card.special_conditions();
+        assert_eq!(conditions, vec!["1st Ed", "Reverse Holo"]);
+    }
+
+    // ==================== canonical_condition Tests ====================
+
+    #[test]
+    fn test_canonical_condition_short_form() {
+        assert_eq!(canonical_condition("NM"), "NM");
+        assert_eq!(canonical_condition("EX"), "EX");
+        assert_eq!(canonical_condition("LP"), "LP");
+    }
+
+    #[test]
+    fn test_canonical_condition_long_form() {
+        assert_eq!(canonical_condition("near_mint"), "NM");
+        assert_eq!(canonical_condition("excellent"), "EX");
+        assert_eq!(canonical_condition("good"), "GD");
+        assert_eq!(canonical_condition("light_played"), "LP");
+        assert_eq!(canonical_condition("played"), "PL");
+        assert_eq!(canonical_condition("poor"), "PO");
+    }
+
+    #[test]
+    fn test_canonical_condition_case_insensitive() {
+        assert_eq!(canonical_condition("Near_Mint"), "NM");
+        assert_eq!(canonical_condition("nm"), "NM");
+        assert_eq!(canonical_condition("NEAR_MINT"), "NM");
+    }
+
+    #[test]
+    fn test_canonical_condition_whitespace_and_hyphen() {
+        assert_eq!(canonical_condition("near mint"), "NM");
+        assert_eq!(canonical_condition("light-played"), "LP");
+        assert_eq!(canonical_condition(" NM "), "NM");
+    }
+
+    #[test]
+    fn test_canonical_condition_unknown_returned_uppercased() {
+        assert_eq!(canonical_condition("weird"), "WEIRD");
     }
 
     #[test]

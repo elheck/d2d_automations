@@ -163,21 +163,6 @@ impl SearchScreen {
                     .checkbox(&mut state.selected_fields.comment, "Comment")
                     .changed();
 
-                if state.search_in_all_languages {
-                    search_fields_changed |= ui
-                        .checkbox(&mut state.selected_fields.name_de, "German")
-                        .changed();
-                    search_fields_changed |= ui
-                        .checkbox(&mut state.selected_fields.name_es, "Spanish")
-                        .changed();
-                    search_fields_changed |= ui
-                        .checkbox(&mut state.selected_fields.name_fr, "French")
-                        .changed();
-                    search_fields_changed |= ui
-                        .checkbox(&mut state.selected_fields.name_it, "Italian")
-                        .changed();
-                }
-
                 if search_fields_changed {
                     Self::perform_search(state);
                 }
@@ -546,12 +531,13 @@ impl SearchScreen {
             }
         }
 
-        // Check language-specific name fields
+        // Also match legacy translated names when present (older CSV exports).
         if state.search_in_all_languages
-            && (check_field(state.selected_fields.name_de, &card.name_de)
-                || check_field(state.selected_fields.name_es, &card.name_es)
-                || check_field(state.selected_fields.name_fr, &card.name_fr)
-                || check_field(state.selected_fields.name_it, &card.name_it))
+            && state.selected_fields.name
+            && (check_field(true, &card.name_de)
+                || check_field(true, &card.name_es)
+                || check_field(true, &card.name_fr)
+                || check_field(true, &card.name_it))
         {
             return true;
         }

@@ -359,7 +359,7 @@ pub fn format_update_stock_csv(matched_cards: &[MatchedCard]) -> String {
 
     let mut wtr = WriterBuilder::new().has_headers(true).from_writer(vec![]);
 
-    // Write header
+    // Header matches the inventory-report CSV schema used by Cardmarket.
     let _ = wtr.write_record([
         "cardmarketId",
         "quantity",
@@ -370,15 +370,12 @@ pub fn format_update_stock_csv(matched_cards: &[MatchedCard]) -> String {
         "condition",
         "language",
         "isFoil",
-        "isPlayset",
         "isSigned",
+        "isFirstEd",
+        "isReverseHolo",
         "price",
         "comment",
         "location",
-        "nameDE",
-        "nameES",
-        "nameFR",
-        "nameIT",
         "rarity",
     ]);
 
@@ -395,15 +392,12 @@ pub fn format_update_stock_csv(matched_cards: &[MatchedCard]) -> String {
             &card.condition,
             &card.language,
             &card.is_foil,
-            card.is_playset.as_deref().unwrap_or(""),
             &card.is_signed,
+            card.is_first_ed.as_deref().unwrap_or("false"),
+            card.is_reverse_holo.as_deref().unwrap_or("false"),
             &card.price,
             &card.comment,
             card.location.as_deref().unwrap_or(""),
-            &card.name_de,
-            &card.name_es,
-            &card.name_fr,
-            &card.name_it,
             &card.rarity,
         ]);
     }
@@ -434,15 +428,12 @@ pub fn format_price_diff_csv(
         "condition",
         "language",
         "isFoil",
-        "isPlayset",
         "isSigned",
+        "isFirstEd",
+        "isReverseHolo",
         "price",
         "comment",
         "location",
-        "nameDE",
-        "nameES",
-        "nameFR",
-        "nameIT",
         "rarity",
     ]);
 
@@ -462,15 +453,12 @@ pub fn format_price_diff_csv(
             &card.condition,
             &card.language,
             &card.is_foil,
-            card.is_playset.as_deref().unwrap_or(""),
             &card.is_signed,
+            card.is_first_ed.as_deref().unwrap_or("false"),
+            card.is_reverse_holo.as_deref().unwrap_or("false"),
             &price_str,
             &card.comment,
             card.location.as_deref().unwrap_or(""),
-            &card.name_de,
-            &card.name_es,
-            &card.name_fr,
-            &card.name_it,
             &card.rarity,
         ]);
     }

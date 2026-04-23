@@ -12,21 +12,31 @@ pub fn read_csv(path: &str) -> Result<Vec<Card>, Box<dyn std::error::Error>> {
         .from_path(path)?;
 
     let mut cards = Vec::new();
-    let mut skipped = 0;
+    let mut skipped_empty = 0;
+    let mut skipped_zero = 0;
 
     for result in rdr.deserialize() {
         let card: Card = result?;
-        if !card.price.trim().is_empty() && !card.quantity.trim().is_empty() {
-            cards.push(card);
-        } else {
-            skipped += 1;
+        if card.price.trim().is_empty() || card.quantity.trim().is_empty() {
+            skipped_empty += 1;
+            continue;
         }
+        // The inventory-report CSV emits rows with quantity 0 both as summary
+        // placeholders and as "last-known shelf" entries for sold-out variants.
+        // Neither represents real inventory and they'd only dilute the DB sync's
+        // representative-picking / zeroing logic, so drop them at the read layer.
+        if card.quantity.trim().parse::<i64>().ok() == Some(0) {
+            skipped_zero += 1;
+            continue;
+        }
+        cards.push(card);
     }
 
     info!(
-        "Loaded {} cards from inventory (skipped {} with empty price/quantity)",
+        "Loaded {} cards from inventory (skipped {} with empty price/quantity, {} with quantity 0)",
         cards.len(),
-        skipped
+        skipped_empty,
+        skipped_zero
     );
     Ok(cards)
 }

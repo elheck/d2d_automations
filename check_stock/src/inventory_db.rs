@@ -8,10 +8,41 @@
 //! - Multiple CSV rows for the same card variant (same condition/language/foil/signed)
 //!   in different physical locations are merged: quantities are summed, one DB row kept.
 
-use crate::models::Card;
+use crate::models::{canonical_condition, Card, Language};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
 use std::path::PathBuf;
+
+/// Normalise a boolean flag string to the canonical form used in the DB.
+///
+/// The legacy Cardmarket export wrote `""` for false and `"1"` for true; the
+/// inventory-report CSV uses `"false"`/`"true"`. Both sync to the same variant
+/// key by folding them onto the legacy encoding here. Without this, loading a
+/// new-format CSV against a DB populated from the legacy format would cause
+/// every existing variant to look missing and every CSV row to look new —
+/// `sold_quantity` would be incorrectly inflated by the "zeroed" ghost rows.
+fn normalize_flag(s: &str) -> String {
+    match s.trim().to_lowercase().as_str() {
+        "1" | "true" => "1".to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Normalise a language value to canonical capitalised form (`"English"`, …).
+/// Unknown values pass through unchanged so we never silently discard data.
+fn normalize_language(s: &str) -> String {
+    Language::parse(s)
+        .map(|l| l.as_str().to_string())
+        .unwrap_or_else(|| s.to_string())
+}
+
+/// Returns true if `card.location` is set and not just whitespace.
+fn card_has_location(card: &Card) -> bool {
+    card.location
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+}
 
 /// Result type for database operations
 pub type DbResult<T> = Result<T, rusqlite::Error>;
@@ -582,22 +613,39 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
     let mut stats = SyncStats::default();
 
     // Pre-aggregate cards by (cardmarket_id, condition, language, is_foil, is_signed),
-    // summing quantities. The same card variant can appear in multiple CSV rows when it is
-    // stored across different physical locations; the DB keeps one row per variant.
+    // summing quantities. The key components are normalised to the canonical form stored
+    // in the DB so the legacy Cardmarket export and the new inventory-report CSV produce
+    // identical variant keys (see `normalize_flag` / `normalize_language` /
+    // `canonical_condition` for the encodings used).
     #[allow(clippy::type_complexity)]
-    let mut agg: std::collections::HashMap<(&str, &str, &str, &str, &str), (&Card, i64)> =
-        std::collections::HashMap::new();
+    let mut agg: std::collections::HashMap<
+        (String, String, String, String, String),
+        (&Card, i64),
+    > = std::collections::HashMap::new();
     for card in cards {
         let key = (
-            card.cardmarket_id.as_str(),
-            card.condition.as_str(),
-            card.language.as_str(),
-            card.is_foil.as_str(),
-            card.is_signed.as_str(),
+            card.cardmarket_id.clone(),
+            canonical_condition(&card.condition),
+            normalize_language(&card.language),
+            normalize_flag(&card.is_foil),
+            normalize_flag(&card.is_signed),
         );
         let qty: i64 = card.quantity.trim().parse().unwrap_or(0);
         let entry = agg.entry(key).or_insert((card, 0));
         entry.1 += qty;
+
+        // The inventory-report CSV emits a placeholder "summary" row (quantity 0,
+        // empty location) *before* the real per-location row for a variant. If the
+        // summary row is seen first, `or_insert` keeps it as the representative and
+        // the real location is lost. Prefer any row with a non-empty location over
+        // one without — that's the only information the DB's single `location`
+        // column can carry, and an empty one is never useful on the "longest unsold"
+        // screen.
+        let rep_has_loc = card_has_location(entry.0);
+        let new_has_loc = card_has_location(card);
+        if new_has_loc && !rep_has_loc {
+            entry.0 = card;
+        }
     }
 
     // Phase 1: upsert all aggregated card variants
@@ -644,19 +692,19 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
                 -- first_synced_at is intentionally excluded: preserved from the original INSERT.",
         )?;
 
-        for (rep_card, total_qty) in agg.values() {
+        for ((id, cond, lang, foil, signed), (rep_card, total_qty)) in &agg {
             stmt.execute(params![
-                rep_card.cardmarket_id,
+                id,
                 total_qty,
                 rep_card.name,
                 rep_card.set,
                 rep_card.set_code,
                 rep_card.cn,
-                rep_card.condition,
-                rep_card.language,
-                rep_card.is_foil,
+                cond,
+                lang,
+                foil,
                 rep_card.is_playset,
-                rep_card.is_signed,
+                signed,
                 rep_card.price,
                 rep_card.comment,
                 rep_card.location,
@@ -673,15 +721,16 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
     }
 
     // Phase 2: zero out card variants no longer in the CSV (identified by composite key).
+    // Normalise the same way as the aggregation above so keys line up with DB rows.
     let csv_keys: HashSet<String> = cards
         .iter()
         .map(|c| {
             article_key(
                 &c.cardmarket_id,
-                &c.condition,
-                &c.language,
-                &c.is_foil,
-                &c.is_signed,
+                &canonical_condition(&c.condition),
+                &normalize_language(&c.language),
+                &normalize_flag(&c.is_foil),
+                &normalize_flag(&c.is_signed),
             )
         })
         .collect();
@@ -764,6 +813,8 @@ mod tests {
             is_foil: "".to_string(),
             is_playset: None,
             is_signed: "".to_string(),
+            is_first_ed: None,
+            is_reverse_holo: None,
             price: "1.00".to_string(),
             comment: "".to_string(),
             location: None,
@@ -1037,6 +1088,181 @@ mod tests {
         assert_eq!(stats.language_breakdown[0].1, 5);
         assert_eq!(stats.condition_breakdown.len(), 2);
         assert_eq!(stats.rarity_breakdown.len(), 2);
+    }
+
+    #[test]
+    fn inventory_report_summary_row_does_not_erase_real_location() {
+        // Regression: the inventory-report CSV emits a placeholder row with
+        // quantity 0 and empty location *before* the real per-location row.
+        // Aggregation must not pick the placeholder as the representative,
+        // otherwise the Longest-Unsold screen loses the location.
+        let mut conn = test_conn();
+
+        let mut summary = make_card("510275", "Brazen Freebooter", "0");
+        summary.location = Some(String::new());
+
+        let mut real = make_card("510275", "Brazen Freebooter", "37");
+        real.location = Some("A-0-0-25-L0-R".to_string());
+
+        sync_inventory_conn(&mut conn, &[summary, real], "2026-01-01").unwrap();
+
+        let location: Option<String> = conn
+            .query_row(
+                "SELECT location FROM inventory_cards WHERE cardmarket_id = '510275'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(location.as_deref(), Some("A-0-0-25-L0-R"));
+
+        let qty: i64 = conn
+            .query_row(
+                "SELECT quantity FROM inventory_cards WHERE cardmarket_id = '510275'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(qty, 37, "summary row quantity must still be summed in");
+    }
+
+    #[test]
+    fn inventory_report_summary_row_does_not_erase_location_regardless_of_order() {
+        // Same scenario but the real row is seen FIRST, then the summary.
+        // The summary must not overwrite the already-good representative.
+        let mut conn = test_conn();
+
+        let mut real = make_card("510275", "Brazen Freebooter", "37");
+        real.location = Some("A-0-0-25-L0-R".to_string());
+
+        let mut summary = make_card("510275", "Brazen Freebooter", "0");
+        summary.location = Some(String::new());
+
+        sync_inventory_conn(&mut conn, &[real, summary], "2026-01-01").unwrap();
+
+        let location: Option<String> = conn
+            .query_row(
+                "SELECT location FROM inventory_cards WHERE cardmarket_id = '510275'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(location.as_deref(), Some("A-0-0-25-L0-R"));
+    }
+
+    #[test]
+    fn new_format_csv_merges_with_legacy_db_row_no_phantom_sale() {
+        // Regression: a legacy-format DB row (condition "NM", language "English",
+        // is_foil "", is_signed "") must merge with a new-format inventory-report row
+        // (condition "near_mint", language "english", is_foil "false", is_signed "false")
+        // — NOT get zeroed out while the new one is inserted alongside.
+        let mut conn = test_conn();
+
+        // Seed a legacy-format DB row with 4 copies and no prior sales.
+        let legacy = make_card("42", "Bolt", "4");
+        assert_eq!(legacy.condition, "NM");
+        assert_eq!(legacy.language, "English");
+        assert_eq!(legacy.is_foil, "");
+        assert_eq!(legacy.is_signed, "");
+        sync_inventory_conn(&mut conn, &[legacy], "2026-01-01").unwrap();
+
+        // Sync a new-format card representing the same variant with qty unchanged.
+        let mut new_fmt = make_card("42", "Bolt", "4");
+        new_fmt.condition = "near_mint".to_string();
+        new_fmt.language = "english".to_string();
+        new_fmt.is_foil = "false".to_string();
+        new_fmt.is_signed = "false".to_string();
+        let stats = sync_inventory_conn(&mut conn, &[new_fmt], "2026-01-02").unwrap();
+
+        // Exactly one row, still 4 copies, nothing zeroed, no phantom sale recorded.
+        assert_eq!(count_rows(&conn), 1);
+        assert_eq!(stats.upserted, 1);
+        assert_eq!(stats.zeroed, 0);
+        let sold: i64 = conn
+            .query_row(
+                "SELECT sold_quantity FROM inventory_cards WHERE cardmarket_id = '42'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sold, 0, "no sales occurred — sold_quantity must stay 0");
+
+        // first_synced_at preserved from the original legacy insert.
+        let (_, first, _) = get_row(&conn, "42").unwrap();
+        assert_eq!(first, "2026-01-01");
+    }
+
+    #[test]
+    fn new_format_partial_sale_attributed_correctly_against_legacy_row() {
+        // Same variant, but the new sync reports only 1 copy remaining → 3 sold.
+        let mut conn = test_conn();
+        let legacy = make_card("42", "Bolt", "4");
+        sync_inventory_conn(&mut conn, &[legacy], "2026-01-01").unwrap();
+
+        let mut new_fmt = make_card("42", "Bolt", "1");
+        new_fmt.condition = "near_mint".to_string();
+        new_fmt.language = "english".to_string();
+        new_fmt.is_foil = "false".to_string();
+        new_fmt.is_signed = "false".to_string();
+        sync_inventory_conn(&mut conn, &[new_fmt], "2026-01-02").unwrap();
+
+        let (qty, _, _) = get_row(&conn, "42").unwrap();
+        assert_eq!(qty, 1);
+        let sold: i64 = conn
+            .query_row(
+                "SELECT sold_quantity FROM inventory_cards WHERE cardmarket_id = '42'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sold, 3);
+        assert_eq!(count_rows(&conn), 1, "must not create a duplicate row");
+    }
+
+    #[test]
+    fn new_format_foil_variant_matches_legacy_one_encoding() {
+        // Legacy foil variants are stored as is_foil = "1"; the inventory-report CSV
+        // sends "true". Both must hit the same row.
+        let mut conn = test_conn();
+        let mut legacy_foil = make_card("99", "Shock", "2");
+        legacy_foil.is_foil = "1".to_string();
+        sync_inventory_conn(&mut conn, &[legacy_foil], "2026-01-01").unwrap();
+
+        let mut new_foil = make_card("99", "Shock", "2");
+        new_foil.condition = "near_mint".to_string();
+        new_foil.language = "english".to_string();
+        new_foil.is_foil = "true".to_string();
+        new_foil.is_signed = "false".to_string();
+        sync_inventory_conn(&mut conn, &[new_foil], "2026-01-02").unwrap();
+
+        assert_eq!(count_rows(&conn), 1);
+        let stored_foil: String = conn
+            .query_row(
+                "SELECT is_foil FROM inventory_cards WHERE cardmarket_id = '99'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_foil, "1", "foil flag stored in canonical form");
+    }
+
+    #[test]
+    fn normalize_flag_folds_representations() {
+        assert_eq!(normalize_flag("true"), "1");
+        assert_eq!(normalize_flag("TRUE"), "1");
+        assert_eq!(normalize_flag("1"), "1");
+        assert_eq!(normalize_flag("false"), "");
+        assert_eq!(normalize_flag("FALSE"), "");
+        assert_eq!(normalize_flag("0"), "");
+        assert_eq!(normalize_flag(""), "");
+    }
+
+    #[test]
+    fn normalize_language_capitalises() {
+        assert_eq!(normalize_language("english"), "English");
+        assert_eq!(normalize_language("German"), "German");
+        assert_eq!(normalize_language("en"), "English");
+        // Unknown values pass through to avoid silent data loss.
+        assert_eq!(normalize_language("klingon"), "klingon");
     }
 
     #[test]

@@ -4,7 +4,7 @@ egui desktop app for Magic: The Gathering card inventory management.
 
 ## Screens
 
-- **Stock Checker** — Match inventory CSV against wantslists, multi-language card matching
+- **Stock Checker** — Match inventory CSV against wantslists
 - **Stock Analysis** — Inventory overview, per-lot revenue tracking, and sales metrics
 - **Bin Analysis** — Bin capacity utilization and free-slot analysis
 - **Magic Singles Listing** — Card lookup via Scryfall by set code + collector number, with images and Cardmarket prices
@@ -14,7 +14,10 @@ egui desktop app for Magic: The Gathering card inventory management.
 
 ## Data Sources
 
-- **Inventory**: Cardmarket CSV stock export (semicolon-separated)
+- **Inventory**: Cardmarket *inventory-report* CSV (comma-separated). Legacy *export* CSVs
+  (with `nameDE`/`nameES`/`nameFR`/`nameIT` / `listedAt` columns) also load. Condition values
+  may be either short codes (`NM`, `EX`, `GD`, `LP`, `PL`) or the inventory-report long form
+  (`near_mint`, `excellent`, `good`, `light_played`, `played`, `poor`).
 - **Wantslists**: Simple `quantity name` text format
 - **Scryfall API**: Card data, images
 - **Cardmarket CDN**: Price guide (~50MB, all MTG products)

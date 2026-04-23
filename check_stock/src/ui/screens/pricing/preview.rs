@@ -1,5 +1,5 @@
 use crate::formatters::format_price_diff_csv;
-use crate::models::Card;
+use crate::models::{canonical_condition, Card};
 use crate::ui::{state::PricingState, style};
 use eframe::egui;
 use std::collections::HashMap;
@@ -20,13 +20,14 @@ const PREVIEW_HEADERS: [&str; 8] = [
 const PREVIEW_ROW_H: f32 = 18.0;
 
 pub(super) fn condition_rank(cond: &str) -> u8 {
-    match cond.to_uppercase().as_str() {
+    match canonical_condition(cond).as_str() {
         "NM" => 0,
         "EX" => 1,
         "GD" => 2,
         "LP" => 3,
         "PL" => 4,
-        _ => 5,
+        "PO" => 5,
+        _ => 6,
     }
 }
 
@@ -178,10 +179,11 @@ pub(super) fn show_preview_window(ctx: &egui::Context, state: &mut PricingState)
                             } else {
                                 (c.price.clone(), egui::Color32::from_rgb(160, 215, 140))
                             };
+                        let cond_display = canonical_condition(&c.condition);
                         let cells: [(&str, egui::Color32); 8] = [
                             (c.name.as_str(), egui::Color32::WHITE),
                             (c.set.as_str(), egui::Color32::from_rgb(140, 155, 180)),
-                            (c.condition.as_str(), egui::Color32::WHITE),
+                            (cond_display.as_str(), egui::Color32::WHITE),
                             (c.language.as_str(), egui::Color32::WHITE),
                             (
                                 if c.is_foil_card() { "✓" } else { "" },

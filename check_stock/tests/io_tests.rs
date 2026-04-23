@@ -123,6 +123,86 @@ fn test_read_csv_only_headers() {
 }
 
 #[test]
+fn test_read_csv_inventory_report_format() {
+    // Inventory-report format: no localised names, no listedAt, adds isFirstEd/isReverseHolo,
+    // boolean-valued flags, lowercase language, snake_case condition values.
+    let mut temp_file = NamedTempFile::new().unwrap();
+    let content = r#"cardmarketId,quantity,name,set,setCode,cn,condition,language,isFoil,isSigned,isFirstEd,isReverseHolo,price,comment,location,rarity
+510275,37,Brazen Freebooter,Commander Legends,CMR,164,near_mint,english,false,false,false,false,0.05,"",A-0-0-25-L0-R,Common
+9,2,Leonin Den-Guard,Mirrodin,MRD,9,light_played,english,false,false,false,false,0.02,"",A-0-0-68-L0-R,Common
+"#;
+    write!(temp_file, "{}", content).unwrap();
+
+    let cards = read_csv(temp_file.path().to_str().unwrap()).unwrap();
+    assert_eq!(cards.len(), 2);
+
+    assert_eq!(cards[0].cardmarket_id, "510275");
+    assert_eq!(cards[0].quantity, "37");
+    assert_eq!(cards[0].name, "Brazen Freebooter");
+    assert_eq!(cards[0].condition, "near_mint");
+    assert_eq!(cards[0].language, "english");
+    assert_eq!(cards[0].is_foil, "false");
+    assert_eq!(cards[0].is_signed, "false");
+    assert_eq!(cards[0].is_first_ed.as_deref(), Some("false"));
+    assert_eq!(cards[0].is_reverse_holo.as_deref(), Some("false"));
+    assert_eq!(cards[0].location.as_deref(), Some("A-0-0-25-L0-R"));
+    // Fields absent from inventory-report default to empty/None.
+    assert_eq!(cards[0].name_de, "");
+    assert_eq!(cards[0].listed_at, "");
+    assert_eq!(cards[0].is_playset, None);
+}
+
+#[test]
+fn test_read_csv_real_inventory_report_file() {
+    // Integration test against the actual inventory-report CSV shipped in the repo root.
+    // Guards against regressions in schema compatibility (new fields, lowercase values, etc.).
+    let path = "inventory-report-45.csv";
+    if !std::path::Path::new(path).exists() {
+        eprintln!("Skipping: {} not found in working directory", path);
+        return;
+    }
+    let cards = read_csv(path).expect("should parse real inventory-report CSV");
+    assert!(
+        !cards.is_empty(),
+        "real inventory CSV must yield some cards"
+    );
+
+    // Sanity: the schema fields we care about are populated (not all empty strings).
+    let has_near_mint = cards.iter().any(|c| c.condition == "near_mint");
+    assert!(
+        has_near_mint,
+        "expected at least one card with condition 'near_mint'"
+    );
+    let has_english = cards.iter().any(|c| c.language == "english");
+    assert!(
+        has_english,
+        "expected at least one card with language 'english'"
+    );
+    // New boolean flags must have deserialised for every row.
+    assert!(cards.iter().all(|c| c.is_first_ed.is_some()));
+    assert!(cards.iter().all(|c| c.is_reverse_holo.is_some()));
+}
+
+#[test]
+fn test_read_csv_inventory_report_skips_zero_quantity() {
+    // Inventory-report CSVs emit rows with quantity 0 as placeholders/sold-out markers.
+    // `read_csv` drops them — DB-sync's Phase 2 still zeros existing DB rows that
+    // disappear from the CSV via the variant-key comparison.
+    let mut temp_file = NamedTempFile::new().unwrap();
+    let content = r#"cardmarketId,quantity,name,set,setCode,cn,condition,language,isFoil,isSigned,isFirstEd,isReverseHolo,price,comment,location,rarity
+510275,0,Brazen Freebooter,Commander Legends,CMR,164,near_mint,english,false,false,false,false,0.05,"","",Common
+510275,37,Brazen Freebooter,Commander Legends,CMR,164,near_mint,english,false,false,false,false,0.05,"",A-0-0-25-L0-R,Common
+9,0,Leonin Den-Guard,Mirrodin,MRD,9,light_played,english,false,false,false,false,0.02,"",A-0-0-68-L0-R,Common
+"#;
+    write!(temp_file, "{}", content).unwrap();
+
+    let cards = read_csv(temp_file.path().to_str().unwrap()).unwrap();
+    assert_eq!(cards.len(), 1, "only the qty=37 row should survive");
+    assert_eq!(cards[0].quantity, "37");
+    assert_eq!(cards[0].location.as_deref(), Some("A-0-0-25-L0-R"));
+}
+
+#[test]
 fn test_read_csv_with_whitespace() {
     let mut temp_file = NamedTempFile::new().unwrap();
     let content = r#"cardmarketId,quantity,name,set,setCode,cn,condition,language,isFoil,isPlayset,isSigned,price,comment,location,nameDE,nameES,nameFR,nameIT,rarity,listedAt

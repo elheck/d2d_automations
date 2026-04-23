@@ -1,4 +1,4 @@
-use crate::models::Card;
+use crate::models::{canonical_condition, Card};
 use crate::ui::state::{
     CachedLatestPrice, ConditionFilter, FoilFilter, GraphNode, LanguageFilter, NodeId, NodeKind,
     RarityFilter, Wire,
@@ -255,7 +255,7 @@ pub(super) fn filter_indices(kind: &NodeKind, indices: Vec<usize>, cards: &[Card
             let target = condition.as_str();
             indices
                 .into_iter()
-                .filter(|&i| cards[i].condition.eq_ignore_ascii_case(target))
+                .filter(|&i| canonical_condition(&cards[i].condition) == target)
                 .collect()
         }
 

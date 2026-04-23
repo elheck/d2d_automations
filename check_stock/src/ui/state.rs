@@ -229,10 +229,6 @@ pub struct SearchFields {
     pub rarity: bool,
     pub price: bool,
     pub comment: bool,
-    pub name_de: bool,
-    pub name_es: bool,
-    pub name_fr: bool,
-    pub name_it: bool,
 }
 
 // ── Node graph types ─────────────────────────────────────────────────────────
@@ -766,10 +762,6 @@ impl Default for SearchState {
                 rarity: false,
                 price: false,
                 comment: false,
-                name_de: true,
-                name_es: true,
-                name_fr: true,
-                name_it: true,
             },
             selected_cards: Vec::new(),
             quantity_inputs: std::collections::HashMap::new(),

@@ -33,6 +33,8 @@ fn make_card(
         is_foil: is_foil.into(),
         is_playset: None,
         is_signed: "false".into(),
+        is_first_ed: None,
+        is_reverse_holo: None,
         price: price.into(),
         comment: String::new(),
         location: location.map(String::from),
@@ -135,6 +137,63 @@ fn filter_condition_case_insensitive() {
         &cards,
     );
     assert_eq!(result, vec![0, 1]);
+}
+
+#[test]
+fn filter_condition_matches_inventory_report_long_form() {
+    // Card conditions come from the inventory-report CSV as "near_mint", "light_played", etc.
+    // The short-code ConditionFilter still has to match.
+    let cards = vec![
+        make_card(
+            "A",
+            "near_mint",
+            "english",
+            "false",
+            "1.0",
+            "Common",
+            "Set",
+            "s1",
+            None,
+        ),
+        make_card(
+            "B",
+            "light_played",
+            "english",
+            "false",
+            "1.0",
+            "Common",
+            "Set",
+            "s1",
+            None,
+        ),
+        make_card(
+            "C",
+            "excellent",
+            "english",
+            "false",
+            "1.0",
+            "Common",
+            "Set",
+            "s1",
+            None,
+        ),
+    ];
+    let nm = filter_indices(
+        &NodeKind::FilterCondition {
+            condition: ConditionFilter::Nm,
+        },
+        all_indices(&cards),
+        &cards,
+    );
+    assert_eq!(nm, vec![0]);
+    let lp = filter_indices(
+        &NodeKind::FilterCondition {
+            condition: ConditionFilter::Lp,
+        },
+        all_indices(&cards),
+        &cards,
+    );
+    assert_eq!(lp, vec![1]);
 }
 
 // ── filter_indices: FilterLanguage ────────────────────────────────────────────
@@ -1591,9 +1650,22 @@ fn condition_rank_case_insensitive() {
 
 #[test]
 fn condition_rank_unknown_is_lowest_priority() {
-    assert_eq!(condition_rank("UNKNOWN"), 5);
-    assert_eq!(condition_rank(""), 5);
+    // "PO" (Poor) now has its own rank, so unknown values sort below it.
+    assert_eq!(condition_rank("UNKNOWN"), 6);
+    assert_eq!(condition_rank(""), 6);
     assert!(condition_rank("PL") < condition_rank("UNKNOWN"));
+    assert!(condition_rank("PO") < condition_rank("UNKNOWN"));
+}
+
+#[test]
+fn condition_rank_accepts_inventory_report_long_form() {
+    // The inventory-report CSV uses snake_case full names; the rank must agree with short codes.
+    assert_eq!(condition_rank("near_mint"), condition_rank("NM"));
+    assert_eq!(condition_rank("excellent"), condition_rank("EX"));
+    assert_eq!(condition_rank("good"), condition_rank("GD"));
+    assert_eq!(condition_rank("light_played"), condition_rank("LP"));
+    assert_eq!(condition_rank("played"), condition_rank("PL"));
+    assert_eq!(condition_rank("poor"), condition_rank("PO"));
 }
 
 // ── sort_preview ──────────────────────────────────────────────────────────────
