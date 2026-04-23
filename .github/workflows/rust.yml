@@ -58,6 +58,7 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
+          ~/.cargo/advisory-db
           target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
     
@@ -171,6 +172,7 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
+          ~/.cargo/advisory-db
           accounting/target
         key: ${{ runner.os }}-accounting-cargo-${{ hashFiles('accounting/Cargo.lock') }}
     
@@ -219,6 +221,23 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+
+    - name: Cache advisory database
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/advisory-db
+        key: advisory-db-${{ github.run_id }}
+        restore-keys: advisory-db-
+
+    - name: Security audit
+      run: cargo audit
+      working-directory: ./inventory_sync
+
     - name: Set up QEMU (for multi-arch builds)
       uses: docker/setup-qemu-action@v3
 
@@ -246,9 +265,7 @@ jobs:
           echo '=== Running Tests ===' &&
           cargo test --verbose &&
           echo '=== Building Release ===' &&
-          cargo build --release &&
-          echo '=== Security Audit ===' &&
-          cargo audit
+          cargo build --release
         "
 
     - name: Build production image
@@ -304,7 +321,6 @@ jobs:
         echo "- Linting (cargo clippy)" >> $GITHUB_STEP_SUMMARY
         echo "- Unit tests (cargo test)" >> $GITHUB_STEP_SUMMARY
         echo "- Release build (cargo build --release)" >> $GITHUB_STEP_SUMMARY
-        echo "- Security audit (cargo audit)" >> $GITHUB_STEP_SUMMARY
     
     - name: Test Summary
       if: always()
