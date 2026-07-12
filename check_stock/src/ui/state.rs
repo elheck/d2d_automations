@@ -18,6 +18,7 @@ pub enum Screen {
     Search,
     Picking,
     Pricing,
+    BuyHelper,
 }
 
 #[derive(PartialEq)]
@@ -735,6 +736,71 @@ impl Default for PricingState {
             prices_fetching: false,
             show_diff_output: false,
             diff_output_content: String::new(),
+        }
+    }
+}
+
+/// State for the Card Buy Helper screen.
+///
+/// Holds the loaded card export plus the adjustable offer parameters. This
+/// screen is read-only: cards are only held in memory to compute an offer and
+/// are **never** written to the inventory database.
+pub struct BuyHelperState {
+    pub csv_path: String,
+    pub cards: Vec<crate::models::Card>,
+    pub load_error: Option<String>,
+    // ── Rarity toggles: which rarities count as individually-valued singles ──
+    pub single_common: bool,
+    pub single_uncommon: bool,
+    pub single_rare: bool,
+    pub single_mythic: bool,
+    // ── Price threshold rule ────────────────────────────────────────────────
+    pub use_min_price: bool,
+    pub min_price: f64,
+    // ── Offer rates ─────────────────────────────────────────────────────────
+    pub single_buy_percent: f64,
+    pub bulk_rate: f64,
+    pub bulk_batch: u32,
+    // ── Detailed CSV output window ──────────────────────────────────────────
+    pub show_output_window: bool,
+    pub output_content: String,
+}
+
+impl Default for BuyHelperState {
+    fn default() -> Self {
+        let defaults = crate::buy_helper::BuyParams::default();
+        Self {
+            csv_path: String::new(),
+            cards: Vec::new(),
+            load_error: None,
+            single_common: defaults.single_common,
+            single_uncommon: defaults.single_uncommon,
+            single_rare: defaults.single_rare,
+            single_mythic: defaults.single_mythic,
+            use_min_price: defaults.min_single_price.is_some(),
+            min_price: defaults.min_single_price.unwrap_or(0.50),
+            single_buy_percent: defaults.single_buy_percent,
+            bulk_rate: defaults.bulk_rate,
+            bulk_batch: defaults.bulk_batch,
+            show_output_window: false,
+            output_content: String::new(),
+        }
+    }
+}
+
+impl BuyHelperState {
+    /// Build the pure [`BuyParams`](crate::buy_helper::BuyParams) from the
+    /// current UI field values.
+    pub fn params(&self) -> crate::buy_helper::BuyParams {
+        crate::buy_helper::BuyParams {
+            single_common: self.single_common,
+            single_uncommon: self.single_uncommon,
+            single_rare: self.single_rare,
+            single_mythic: self.single_mythic,
+            min_single_price: self.use_min_price.then_some(self.min_price),
+            single_buy_percent: self.single_buy_percent,
+            bulk_rate: self.bulk_rate,
+            bulk_batch: self.bulk_batch,
         }
     }
 }

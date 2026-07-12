@@ -11,6 +11,7 @@ egui desktop app for Magic: The Gathering card inventory management.
 - **Search Cards** — Interactive inventory search with filtering
 - **Picking** — Order picking workflow (reached via Stock Checker results)
 - **Pricing** — Node-based visual editor for filtering and pricing stock from CSV inventory
+- **Card Buy Helper** — Value a purchase offer from a card export CSV: split cards into individually-priced singles (by rarity and/or price threshold) versus bulk (flat rate per N cards), see the total offer, and export a breakdown CSV. Strictly read-only — never writes to the inventory database.
 
 ## Data Sources
 

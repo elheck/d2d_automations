@@ -3,13 +3,14 @@ use eframe::egui;
 
 pub struct WelcomeScreen;
 
-const TILES: [(&str, &str); 6] = [
+const TILES: [(&str, &str); 7] = [
     ("Stock Checker", "Verify card stock\nagainst order lists"),
     ("Stock Analysis", "Analyse inventory\ntrends and signals"),
     ("Bin Analysis", "Bin capacity and\nfree-slot analysis"),
     ("Magic Singles Listing", "Generate listings\nfor Cardmarket"),
     ("Search Cards", "Find cards by name\nor location"),
     ("Pricing", "Price stock from\nCSV inventory"),
+    ("Card Buy Helper", "Value a buy offer\nfrom a card export"),
 ];
 
 impl WelcomeScreen {
@@ -41,7 +42,7 @@ impl WelcomeScreen {
             let mut clicked: Option<usize> = None;
 
             ui.allocate_ui_with_layout(
-                egui::vec2(grid_w, tile_h * 2.0 + gap * 2.0),
+                egui::vec2(grid_w, tile_h * 3.0 + gap * 2.0),
                 egui::Layout::left_to_right(egui::Align::TOP).with_main_wrap(true),
                 |ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
@@ -61,7 +62,8 @@ impl WelcomeScreen {
                     2 => Screen::BinAnalysis,
                     3 => Screen::StockListing,
                     4 => Screen::Search,
-                    _ => Screen::Pricing,
+                    5 => Screen::Pricing,
+                    _ => Screen::BuyHelper,
                 };
             }
         });
