@@ -21,6 +21,7 @@ pub enum Screen {
     BuyHelper,
     Mispricing,
     Consolidation,
+    Restock,
 }
 
 #[derive(PartialEq)]
@@ -911,6 +912,47 @@ impl Default for MispricingState {
             sort_desc: true,
             filter: VerdictFilter::default(),
             guide_rx: None,
+        }
+    }
+}
+
+// ── Restock screen ────────────────────────────────────────────────────────────
+
+/// Which column the restock table is sorted by.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum RestockSort {
+    /// Copies sold per week over the sell-through window.
+    #[default]
+    Velocity,
+    SoldCopies,
+    Revenue,
+    Days,
+    Price,
+    Name,
+}
+
+/// State for the read-only Restock Recommendations screen.
+pub struct RestockState {
+    /// Minimum lifetime sold copies for a variant to count (filters one-offs).
+    pub min_copies: i64,
+    /// The ranked report, if it has been built.
+    pub rows: Option<Vec<crate::restock::RankedRestock>>,
+    pub error: Option<String>,
+    /// Guards the one-shot auto-load when the screen is first shown.
+    pub loaded: bool,
+    pub sort: RestockSort,
+    pub sort_desc: bool,
+}
+
+impl Default for RestockState {
+    fn default() -> Self {
+        Self {
+            min_copies: 2,
+            rows: None,
+            error: None,
+            loaded: false,
+            sort: RestockSort::default(),
+            sort_desc: true,
         }
     }
 }

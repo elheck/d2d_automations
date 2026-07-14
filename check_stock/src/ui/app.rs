@@ -4,12 +4,12 @@ use egui::ViewportBuilder;
 use super::{
     screens::{
         BinAnalysisScreen, BuyHelperScreen, ConsolidationScreen, ConsolidationState,
-        MispricingScreen, PickingScreen, PickingState, PricingScreen, SearchScreen,
+        MispricingScreen, PickingScreen, PickingState, PricingScreen, RestockScreen, SearchScreen,
         StockAnalysisScreen, StockCheckerScreen, StockListingScreen, WelcomeScreen,
     },
     state::{
-        AppState, BinAnalysisState, BuyHelperState, MispricingState, PricingState, Screen,
-        SearchState, StockAnalysisState, StockListingState,
+        AppState, BinAnalysisState, BuyHelperState, MispricingState, PricingState, RestockState,
+        Screen, SearchState, StockAnalysisState, StockListingState,
     },
 };
 
@@ -25,6 +25,7 @@ pub struct StockCheckerApp {
     buy_helper_state: BuyHelperState,
     mispricing_state: MispricingState,
     consolidation_state: ConsolidationState,
+    restock_state: RestockState,
 }
 
 impl eframe::App for StockCheckerApp {
@@ -97,6 +98,13 @@ impl eframe::App for StockCheckerApp {
                     ctx,
                     &mut self.app_state.current_screen,
                     &mut self.consolidation_state,
+                );
+            }
+            Screen::Restock => {
+                RestockScreen::show(
+                    ctx,
+                    &mut self.app_state.current_screen,
+                    &mut self.restock_state,
                 );
             }
         }

@@ -92,6 +92,54 @@ pub struct InStockCard {
     pub effective_date: String,
 }
 
+/// One per-variant sale recorded during a sync: `copies` of a variant left stock
+/// as a sale on `date`, at the `price` they were listed at when they sold.
+///
+/// Events are deltas, never totals — the same variant may have many rows (one per
+/// sync that saw its quantity drop), and summing `copies` per variant matches the
+/// increments applied to `inventory_cards.sold_quantity` since event recording
+/// began. Discards (write-offs) never produce events.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SoldEvent {
+    pub date: String,
+    pub cardmarket_id: String,
+    pub condition: String,
+    pub language: String,
+    /// Normalised flag: `"1"` for foil, empty otherwise.
+    pub is_foil: String,
+    /// Normalised flag: `"1"` for signed, empty otherwise.
+    pub is_signed: String,
+    pub copies: i64,
+    /// Listed unit price at the time of sale, in EUR.
+    pub price: f64,
+}
+
+/// A sold-out variant (quantity 0, `sold_quantity` > 0) — raw input for the
+/// restock recommendations report (see [`crate::restock`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RestockCandidate {
+    pub cardmarket_id: String,
+    pub name: String,
+    pub set_code: String,
+    pub cn: String,
+    pub condition: String,
+    pub language: String,
+    pub is_foil: bool,
+    pub rarity: String,
+    /// Total copies sold over the variant's lifetime (`sold_quantity`).
+    pub sold_copies: i64,
+    /// Σ copies × sale price from `sold_events`; copies sold before event
+    /// recording began are valued at the last listed price.
+    pub realized_revenue: f64,
+    /// The price the variant was last listed at, in EUR.
+    pub last_price: f64,
+    /// Effective listing date: `listed_at` when available, else `first_synced_at`.
+    pub listed_date: String,
+    /// Date of the last recorded sale; falls back to `last_synced_at` (the sync
+    /// that zeroed the variant) for pre-event-log history.
+    pub sold_out_date: String,
+}
+
 /// One daily inventory snapshot row. `sold_*_cumulative` are running totals since
 /// the first sync, so a period's activity is the difference between two rows.
 #[derive(Debug, Clone, PartialEq)]
@@ -268,6 +316,28 @@ const INVENTORY_SNAPSHOTS_DDL: &str = "
     );
 ";
 
+// Per-variant sale log: one row per sold delta detected during a sync. Whereas
+// `inventory_cards.sold_quantity` and the snapshots only carry cumulative totals,
+// these rows say *which* variant sold *when* and at what listed price — the basis
+// for per-card velocity, restock recommendations and realized-price analysis.
+// A same-day re-sync may append several rows for one variant; they are deltas,
+// so summing them is always correct.
+const SOLD_EVENTS_DDL: &str = "
+    CREATE TABLE IF NOT EXISTS sold_events (
+        date          TEXT NOT NULL,
+        cardmarket_id TEXT NOT NULL,
+        condition     TEXT NOT NULL,
+        language      TEXT NOT NULL,
+        is_foil       TEXT NOT NULL,
+        is_signed     TEXT NOT NULL,
+        copies        INTEGER NOT NULL,
+        price         REAL NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sold_events_variant
+        ON sold_events (cardmarket_id, condition, language, is_foil, is_signed);
+    CREATE INDEX IF NOT EXISTS idx_sold_events_date ON sold_events (date);
+";
+
 // Migration v1 → v2: replace single cardmarket_id PRIMARY KEY with composite UNIQUE key.
 const MIGRATION_V1_TO_V2: &str = "
     BEGIN;
@@ -391,7 +461,8 @@ fn init_schema(conn: &Connection) -> DbResult<()> {
 
     if !table_exists {
         conn.execute_batch(INVENTORY_CARDS_DDL)?;
-        return conn.execute_batch(INVENTORY_SNAPSHOTS_DDL);
+        conn.execute_batch(INVENTORY_SNAPSHOTS_DDL)?;
+        return conn.execute_batch(SOLD_EVENTS_DDL);
     }
 
     // v3 is identified by idx_inventory_article_key_v3 (6-field key including location).
@@ -445,9 +516,11 @@ fn init_schema(conn: &Connection) -> DbResult<()> {
         )?;
     }
 
-    // Snapshot table is orthogonal to the card-schema migrations; ensure it exists
-    // on every open regardless of which card-schema version we came from.
+    // Snapshot and sold-event tables are orthogonal to the card-schema migrations;
+    // ensure they exist on every open regardless of which card-schema version we
+    // came from.
     conn.execute_batch(INVENTORY_SNAPSHOTS_DDL)?;
+    conn.execute_batch(SOLD_EVENTS_DDL)?;
 
     Ok(())
 }
@@ -611,6 +684,93 @@ fn get_in_stock_cards_conn(conn: &Connection) -> DbResult<Vec<InStockCard>> {
             price: r.get(9)?,
             location: r.get(10)?,
             effective_date: r.get(11)?,
+        })
+    })?
+    .collect()
+}
+
+/// Returns every recorded sold event, oldest first.
+pub fn get_sold_events() -> DbResult<Vec<SoldEvent>> {
+    let conn = open_db()?;
+    get_sold_events_conn(&conn)
+}
+
+/// Inner query that accepts an explicit connection — used in tests.
+fn get_sold_events_conn(conn: &Connection) -> DbResult<Vec<SoldEvent>> {
+    conn.prepare(
+        "SELECT date, cardmarket_id, condition, language, is_foil, is_signed, copies, price
+         FROM sold_events ORDER BY date ASC, rowid ASC",
+    )?
+    .query_map([], |r| {
+        Ok(SoldEvent {
+            date: r.get(0)?,
+            cardmarket_id: r.get(1)?,
+            condition: r.get(2)?,
+            language: r.get(3)?,
+            is_foil: r.get(4)?,
+            is_signed: r.get(5)?,
+            copies: r.get(6)?,
+            price: r.get(7)?,
+        })
+    })?
+    .collect()
+}
+
+/// Returns every sold-out variant (quantity 0, sold copies > 0) enriched with
+/// its sale history — the raw input for the restock recommendations report.
+pub fn get_restock_candidates() -> DbResult<Vec<RestockCandidate>> {
+    let conn = open_db()?;
+    get_restock_candidates_conn(&conn)
+}
+
+/// Inner query that accepts an explicit connection — used in tests.
+///
+/// Realized revenue sums the per-sale prices from `sold_events`; any copies sold
+/// before event recording existed (sold_quantity larger than the events' total)
+/// are valued at the variant's last listed price. The sold-out date prefers the
+/// last event date and falls back to `last_synced_at`, which for a zeroed row is
+/// the day the sync zeroed it.
+fn get_restock_candidates_conn(conn: &Connection) -> DbResult<Vec<RestockCandidate>> {
+    conn.prepare(
+        "SELECT c.cardmarket_id, c.name, c.set_code, c.cn, c.condition, c.language,
+                (c.is_foil = '1' OR LOWER(c.is_foil) = 'true') AS foil,
+                c.rarity, c.sold_quantity,
+                CAST(c.price AS REAL) AS last_price,
+                COALESCE(NULLIF(c.listed_at, ''), c.first_synced_at) AS listed_date,
+                COALESCE(e.last_sale_date, c.last_synced_at) AS sold_out_date,
+                COALESCE(e.revenue, 0.0)
+                    + MAX(c.sold_quantity - COALESCE(e.copies, 0), 0)
+                      * CAST(c.price AS REAL) AS realized_revenue
+         FROM inventory_cards c
+         LEFT JOIN (
+             SELECT cardmarket_id, condition, language, is_foil, is_signed,
+                    MAX(date) AS last_sale_date,
+                    SUM(copies) AS copies,
+                    SUM(copies * price) AS revenue
+             FROM sold_events
+             GROUP BY cardmarket_id, condition, language, is_foil, is_signed
+         ) e ON e.cardmarket_id = c.cardmarket_id
+            AND e.condition = c.condition
+            AND e.language = c.language
+            AND e.is_foil = c.is_foil
+            AND e.is_signed = c.is_signed
+         WHERE c.quantity = 0 AND c.sold_quantity > 0",
+    )?
+    .query_map([], |r| {
+        Ok(RestockCandidate {
+            cardmarket_id: r.get(0)?,
+            name: r.get(1)?,
+            set_code: r.get(2)?,
+            cn: r.get(3)?,
+            condition: r.get(4)?,
+            language: r.get(5)?,
+            is_foil: r.get(6)?,
+            rarity: r.get(7)?,
+            sold_copies: r.get(8)?,
+            last_price: r.get(9)?,
+            listed_date: r.get(10)?,
+            sold_out_date: r.get(11)?,
+            realized_revenue: r.get(12)?,
         })
     })?
     .collect()
@@ -959,6 +1119,39 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
         }
     }
 
+    // Pre-sync DB state, read once: used to detect per-variant sold deltas (this
+    // sync's quantity drops) and to find rows that vanished from the CSV (phase 2).
+    // Tuple layout: key fields, quantity, listed price, last_synced_at.
+    #[allow(clippy::type_complexity)]
+    let db_rows: Vec<(String, String, String, String, String, i64, f64, String)> = tx
+        .prepare(
+            "SELECT cardmarket_id, condition, language, is_foil, is_signed,
+                    quantity, CAST(price AS REAL), last_synced_at FROM inventory_cards",
+        )?
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+            ))
+        })?
+        .collect::<DbResult<Vec<_>>>()?;
+
+    let db_qty_price: std::collections::HashMap<String, (i64, f64)> = db_rows
+        .iter()
+        .map(|(id, cond, lang, foil, signed, qty, price, _)| {
+            (article_key(id, cond, lang, foil, signed), (*qty, *price))
+        })
+        .collect();
+
+    // Sold events detected this sync: (key fields..., copies, price at sale).
+    let mut sold_events: Vec<(String, String, String, String, String, i64, f64)> = Vec::new();
+
     // Phase 1: upsert all aggregated card variants
     {
         let mut stmt = tx.prepare_cached(
@@ -1004,6 +1197,23 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
         )?;
 
         for ((id, cond, lang, foil, signed), (rep_card, total_qty)) in &agg {
+            // Mirror the upsert's sold_quantity CASE: a lower CSV quantity than the
+            // stored one means the difference sold, at the price it was listed at.
+            if let Some((old_qty, old_price)) =
+                db_qty_price.get(&article_key(id, cond, lang, foil, signed))
+            {
+                if total_qty < old_qty {
+                    sold_events.push((
+                        id.clone(),
+                        cond.clone(),
+                        lang.clone(),
+                        foil.clone(),
+                        signed.clone(),
+                        old_qty - total_qty,
+                        *old_price,
+                    ));
+                }
+            }
             stmt.execute(params![
                 id,
                 total_qty,
@@ -1046,26 +1256,9 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
         })
         .collect();
 
-    // Collect all article keys, quantities, and timestamps from DB.
-    let db_rows: Vec<(String, String, String, String, String, i64, String)> = tx
-        .prepare(
-            "SELECT cardmarket_id, condition, language, is_foil, is_signed,
-                    quantity, last_synced_at FROM inventory_cards",
-        )?
-        .query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-            ))
-        })?
-        .collect::<DbResult<Vec<_>>>()?;
-
-    for (id, condition, language, is_foil, is_signed, quantity, last_synced_at) in &db_rows {
+    // Phase 1 only touched CSV variants, so the pre-sync rows read above are still
+    // accurate for everything the CSV no longer contains.
+    for (id, condition, language, is_foil, is_signed, quantity, price, last_synced_at) in &db_rows {
         let key = article_key(id, condition, language, is_foil, is_signed);
         if !csv_keys.contains(&key) && *quantity > 0 {
             let new_date = if last_synced_at == today {
@@ -1082,8 +1275,35 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
                    AND is_foil = ?5 AND is_signed = ?6",
                 params![new_date, id, condition, language, is_foil, is_signed],
             )?;
+            sold_events.push((
+                id.clone(),
+                condition.clone(),
+                language.clone(),
+                is_foil.clone(),
+                is_signed.clone(),
+                *quantity,
+                *price,
+            ));
             stats.zeroed += 1;
         }
+    }
+
+    // Phase 2b: persist the sold deltas detected above. Rows are appended, never
+    // updated — a same-day re-sync that sells more copies simply adds another
+    // delta row for the same variant/date.
+    if !sold_events.is_empty() {
+        let mut stmt = tx.prepare_cached(
+            "INSERT INTO sold_events
+                (date, cardmarket_id, condition, language, is_foil, is_signed, copies, price)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )?;
+        for (id, cond, lang, foil, signed, copies, price) in &sold_events {
+            stmt.execute(params![today, id, cond, lang, foil, signed, copies, price])?;
+        }
+        log::info!(
+            "Inventory DB sync: recorded {} sold event(s)",
+            sold_events.len()
+        );
     }
 
     // Phase 3: record today's snapshot from the now-current table state. Cumulative
@@ -2355,5 +2575,142 @@ mod tests {
         let stats = get_db_stats_conn(&conn, "2026-07-14").unwrap();
         assert_eq!(stats.aging_buckets.len(), 5);
         assert_eq!(stats.aging_buckets[4].copies, 2, "old card in 365+ bucket");
+    }
+
+    // ==================== Sold-Event Recording Tests ====================
+
+    #[test]
+    fn sync_records_sold_event_on_partial_sale() {
+        let mut conn = test_conn();
+        let mut card = make_card("1", "Bolt", "5");
+        card.price = "2.50".to_string();
+        sync_inventory_conn(&mut conn, &[card], "2026-01-01").unwrap();
+
+        // Qty drops 5 → 2; the new CSV carries a raised price, but the sale must
+        // be valued at the price the copies were listed at when they sold.
+        let mut card2 = make_card("1", "Bolt", "2");
+        card2.price = "4.00".to_string();
+        sync_inventory_conn(&mut conn, &[card2], "2026-01-02").unwrap();
+
+        let events = get_sold_events_conn(&conn).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].date, "2026-01-02");
+        assert_eq!(events[0].cardmarket_id, "1");
+        assert_eq!(events[0].copies, 3);
+        assert_eq!(events[0].price, 2.50);
+    }
+
+    #[test]
+    fn sync_records_sold_event_on_zeroing() {
+        let mut conn = test_conn();
+        let mut card = make_card("1", "Bolt", "3");
+        card.price = "2.00".to_string();
+        sync_inventory_conn(&mut conn, &[card], "2026-01-01").unwrap();
+
+        // Card vanished from the CSV → all 3 copies sold.
+        sync_inventory_conn(&mut conn, &[], "2026-01-05").unwrap();
+
+        let events = get_sold_events_conn(&conn).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].date, "2026-01-05");
+        assert_eq!(events[0].copies, 3);
+        assert_eq!(events[0].price, 2.00);
+    }
+
+    #[test]
+    fn sync_records_no_event_for_new_restocked_or_unchanged() {
+        let mut conn = test_conn();
+        let card = make_card("1", "Bolt", "2");
+        sync_inventory_conn(&mut conn, &[card], "2026-01-01").unwrap();
+
+        // Restock (2 → 5), plus a brand-new variant, plus unchanged next sync.
+        let card2 = make_card("1", "Bolt", "5");
+        let new_card = make_card("2", "Shock", "4");
+        sync_inventory_conn(&mut conn, &[card2.clone(), new_card.clone()], "2026-01-02").unwrap();
+        sync_inventory_conn(&mut conn, &[card2, new_card], "2026-01-03").unwrap();
+
+        assert!(get_sold_events_conn(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn sold_events_accumulate_as_deltas_across_syncs() {
+        let mut conn = test_conn();
+        sync_inventory_conn(&mut conn, &[make_card("1", "Bolt", "10")], "2026-01-01").unwrap();
+        sync_inventory_conn(&mut conn, &[make_card("1", "Bolt", "7")], "2026-01-02").unwrap();
+        sync_inventory_conn(&mut conn, &[make_card("1", "Bolt", "5")], "2026-01-03").unwrap();
+
+        let events = get_sold_events_conn(&conn).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].copies, 3);
+        assert_eq!(events[1].copies, 2);
+        let total: i64 = events.iter().map(|e| e.copies).sum();
+        assert_eq!(total, sold_qty(&conn, "1"), "events mirror sold_quantity");
+    }
+
+    #[test]
+    fn discard_records_no_sold_event() {
+        let mut conn = test_conn();
+        let card = make_card("1", "Bolt", "10");
+        sync_inventory_conn(&mut conn, &[card.clone()], "2026-01-01").unwrap();
+
+        discard_cards_conn(&mut conn, &[(card, 4)]).unwrap();
+
+        assert!(
+            get_sold_events_conn(&conn).unwrap().is_empty(),
+            "write-offs are not sales"
+        );
+    }
+
+    // ==================== Restock Candidate Tests ====================
+
+    #[test]
+    fn restock_candidates_only_sold_out_variants_with_sales() {
+        let mut conn = test_conn();
+        let sold_out = make_card("1", "Bolt", "3");
+        let still_stocked = make_card("2", "Shock", "5");
+        let never_sold = make_card("3", "Opt", "0");
+        sync_inventory_conn(
+            &mut conn,
+            &[sold_out, still_stocked.clone(), never_sold.clone()],
+            "2026-01-01",
+        )
+        .unwrap();
+        // Bolt sells out; Shock only drops to 4 (still in stock); Opt never sold.
+        let partial = make_card("2", "Shock", "4");
+        sync_inventory_conn(&mut conn, &[partial, never_sold], "2026-01-10").unwrap();
+
+        let cands = get_restock_candidates_conn(&conn).unwrap();
+        assert_eq!(cands.len(), 1);
+        assert_eq!(cands[0].cardmarket_id, "1");
+        assert_eq!(cands[0].sold_copies, 3);
+        // make_card lists at 2026-01-01; the zeroing sync dates the sale.
+        assert_eq!(cands[0].listed_date, "2026-01-01");
+        assert_eq!(cands[0].sold_out_date, "2026-01-10");
+        assert_eq!(cands[0].realized_revenue, 3.0, "3 copies × €1.00");
+    }
+
+    #[test]
+    fn restock_revenue_tops_up_copies_sold_before_event_log() {
+        let mut conn = test_conn();
+        let mut card = make_card("1", "Bolt", "0");
+        card.price = "2.00".to_string();
+        sync_inventory_conn(&mut conn, &[card], "2026-01-01").unwrap();
+        // Simulate pre-event-log history: 5 copies sold with no sold_events rows.
+        conn.execute(
+            "UPDATE inventory_cards SET sold_quantity = 5 WHERE cardmarket_id = '1'",
+            [],
+        )
+        .unwrap();
+
+        let cands = get_restock_candidates_conn(&conn).unwrap();
+        assert_eq!(cands.len(), 1);
+        assert_eq!(
+            cands[0].realized_revenue, 10.0,
+            "untracked copies valued at last listed price"
+        );
+        assert_eq!(
+            cands[0].sold_out_date, "2026-01-01",
+            "falls back to last_synced_at without events"
+        );
     }
 }
