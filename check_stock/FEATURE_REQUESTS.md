@@ -2,9 +2,77 @@
 
 This document contains feature requests for the Check Stock Application.
 
-## Code Review Findings & Technical Debt
+## Business Analytics & Pricing Roadmap
 
-*Last reviewed: 2026-02-12*
+*Added: 2026-07-14. Derived from a capability review of the price guide + inventory
+DB assets. The **Mispricing / Margin Report** and **Sales Velocity & Dead-Stock
+Aging** items from this batch are being implemented now; everything below is
+queued for later.*
+
+### Tier 1 — Highest business impact
+
+#### Automated repricing against the market → Cardmarket-uploadable CSV
+The highest-leverage feature. The Cardmarket price guide (`trend/avg/low/avg1/avg7/avg30`,
+foil & non-foil) is already fetched and wired into the pricing nodes via
+`CachedLatestPrice`. Turn the read-only Mispricing report into an *action*:
+- Let the Pricing node graph **emit** a repriced CSV, not just filter. This is the
+  intended use for the deliberately-removed price-transform nodes (`PriceMultiply`,
+  `PriceFloor`, …) — re-add them here. Rules like "trend × 0.95, floor 0.10, round to
+  Cardmarket price ticks", configurable per condition/rarity.
+- Export in Cardmarket's stock-update format so the loop closes:
+  export → reprice → re-upload.
+- **Reuses**: `PriceGuide`, `CachedLatestPrice::price_for`, existing node eval, and the
+  new `mispricing` module.
+- **Security note**: this feature *writes prices meant for upload*. Keep a mandatory
+  dry-run/preview + explicit confirm before any export; never auto-upload.
+- **Effort**: medium-high (mostly reconnecting existing pieces).
+
+### Tier 2 — Strong quality-of-life
+
+#### Richer wantslist / decklist import
+Stock Checker currently only parses `quantity name`. Add importers for **Moxfield /
+Archidekt / MTGO `.dek` / MTG Arena** export formats, plus set-scoped lines. Makes the
+Stock Checker usable directly from how buylists and deck requests actually arrive.
+- **Location**: `io::read_wantslist`, `card_matching`.
+- **Effort**: medium.
+
+#### Picking route optimization
+`parse_location_code` already decodes `A-S-R-C`. Sort the picking list into an actual
+**walk order** (aisle serpentine) instead of card order — real time savings on
+multi-item orders.
+- **Location**: `ui/screens/picking.rs`, `card_matching::parse_location_code`.
+- **Effort**: low-medium.
+
+#### Bin consolidation suggestions
+Bin Analysis reports free slots; the inverse is more actionable: "these half-empty bins
+for lot L4 could merge", and flag the same variant fragmented across many locations
+(the DB already sums those).
+- **Location**: `stock_analysis.rs` (bin logic), `inventory_db`.
+- **Effort**: medium.
+
+#### Buy Helper → market-aware valuation
+Buy Helper values singles off the CSV's own `price` column (the seller's export).
+Optionally value against the **live price guide** instead for accuracy. Stays
+strictly read-only.
+- **Location**: `buy_helper.rs` (`compute_summary`/`classify`), `api::cardmarket::PriceGuide`.
+- **Effort**: low.
+
+### Tier 3 — Robustness / polish
+
+#### Price-guide freshness indicator
+Show when the ~50MB price guide was last fetched and auto-refresh if stale. Cheap trust
+signal for any repricing decision.
+
+#### CSV import validation report
+Surface how many rows loaded, skipped, or had unparseable prices/conditions on import,
+instead of silently defaulting to `0`.
+- **Location**: `io::read_csv`, screens that call it.
+
+#### Persist Pricing node graphs
+Save/load named node graphs so repricing recipes are reusable across sessions.
+- **Location**: `ui/state.rs` (`NodeGraph`, already `Serialize`/`Deserialize`), pricing screen.
+
+
 
 ### Overall Assessment: Grade A- (85/100)
 
