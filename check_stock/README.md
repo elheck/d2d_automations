@@ -8,7 +8,21 @@ egui desktop app for Magic: The Gathering card inventory management.
 - **Stock Analysis** — Inventory overview, per-lot revenue tracking, sales metrics,
   **sales velocity** (copies/revenue per week from daily snapshots), and **dead-stock
   aging** (in-stock cards bucketed by how long they've been listed)
-- **Bin Analysis** — Bin capacity utilization and free-slot analysis
+- **Bin Analysis** — Bin capacity utilization and free-slot analysis, plus two
+  consolidation tools:
+  - **Consolidation suggestions** — empties sparse bins into fuller ones (preferring
+    bins that already hold the same card, then closest by proximity). The planner
+    tries several source orderings and keeps the best plan (most bins freed, then
+    least walking).
+  - **Fragmented-variant report** — finds card variants scattered across multiple
+    bins regardless of fill and gathers each into a single bin.
+
+  Both open an **interactive move list** (card-image tiles grouped by source bin,
+  with a "Mark Moved" toggle and progress bar) for all piles or a single chosen
+  source bin. The CSV export lives in that list and includes **only the piles you
+  tick as moved**, so it reflects what you actually did. Read-only — never writes to
+  the inventory DB; moves apply when you re-load an updated CSV, and each card keeps
+  its lot/side so per-lot revenue is unaffected.
 - **Magic Singles Listing** — Card lookup via Scryfall by set code + collector number, with images and Cardmarket prices
 - **Search Cards** — Interactive inventory search with filtering
 - **Picking** — Order picking workflow (reached via Stock Checker results)

@@ -1,5 +1,6 @@
 pub mod aging;
 pub mod api;
+pub mod bin_consolidation;
 pub mod buy_helper;
 pub mod cache;
 pub mod card_matching;
@@ -16,6 +17,7 @@ pub mod wantslist;
 
 // Re-export commonly used items
 pub use api::{fetch_card, PriceGuide, ScryfallCard};
+pub use bin_consolidation::{plan_consolidation, ConsolidationPlan, Move as BinMove};
 pub use cache::{fetch_card_cached, CardCache, ImageCache};
 pub use card_matching::{find_matching_cards, MatchedCard};
 pub use deck_fetch::{fetch_deck, parse_deck_url, DeckSource};

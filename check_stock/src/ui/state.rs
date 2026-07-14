@@ -20,6 +20,7 @@ pub enum Screen {
     Pricing,
     BuyHelper,
     Mispricing,
+    Consolidation,
 }
 
 #[derive(PartialEq)]
@@ -104,6 +105,18 @@ pub struct BinAnalysisState {
     pub output: String,
     pub free_slots: i32,
     pub sort_order: SortOrder,
+    /// Highest bin load (cards) still treated as "sparse" for consolidation.
+    pub merge_threshold: i32,
+    /// Human-readable consolidation report shown in the UI.
+    pub consolidation_output: String,
+    /// Moves from the latest sparse-bin plan, used to open the interactive list.
+    pub consolidation_moves: Vec<crate::bin_consolidation::Move>,
+    /// Latest fragmented-variant report (independent of bin fill).
+    pub fragmented: Vec<crate::bin_consolidation::FragmentedVariant>,
+    /// Report text for the fragmented-variant section.
+    pub fragmented_output: String,
+    /// Moves that consolidate each fragmented variant into one bin.
+    pub defrag_moves: Vec<crate::bin_consolidation::Move>,
 }
 
 impl Default for BinAnalysisState {
@@ -113,6 +126,12 @@ impl Default for BinAnalysisState {
             output: String::new(),
             free_slots: 5,
             sort_order: SortOrder::ByFreeSlots,
+            merge_threshold: 20,
+            consolidation_output: String::new(),
+            consolidation_moves: Vec::new(),
+            fragmented: Vec::new(),
+            fragmented_output: String::new(),
+            defrag_moves: Vec::new(),
         }
     }
 }

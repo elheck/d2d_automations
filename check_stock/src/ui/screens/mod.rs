@@ -1,5 +1,6 @@
 mod bin_analysis;
 mod buy_helper;
+mod consolidation;
 mod mispricing;
 mod picking;
 mod pricing;
@@ -11,6 +12,7 @@ mod welcome;
 
 pub use bin_analysis::BinAnalysisScreen;
 pub use buy_helper::BuyHelperScreen;
+pub use consolidation::{ConsolidationScreen, ConsolidationState};
 pub use mispricing::MispricingScreen;
 pub use picking::{PickingScreen, PickingState};
 pub use pricing::PricingScreen;

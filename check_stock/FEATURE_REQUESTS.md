@@ -49,12 +49,32 @@ multi-item orders.
 - **Location**: `ui/screens/picking.rs`, `card_matching::parse_location_code`.
 - **Effort**: low-medium.
 
-#### Bin consolidation suggestions
-Bin Analysis reports free slots; the inverse is more actionable: "these half-empty bins
-for lot L4 could merge", and flag the same variant fragmented across many locations
-(the DB already sums those).
-- **Location**: `stock_analysis.rs` (bin logic), `inventory_db`.
-- **Effort**: medium.
+#### Bin consolidation suggestions ✅ Done
+Implemented in the pure [`bin_consolidation`](src/bin_consolidation.rs) module, surfaced
+in the Bin Analysis screen. Empties bins filled at/below a chosen threshold (slider up to
+the full 60-card bin) by spreading each bin's piles across other bins that have room —
+only when a whole bin can be cleared, and never moving a card twice. Each pile's target
+is chosen by a multi-factor ranking: prefer a **keeper** bin (not itself scheduled to be
+emptied) → a bin **already holding the same variant** (de-fragmentation) → the **closest**
+bin by weighted aisle/shelf/row/column proximity → tightest pack → name. Reports the
+total move distance and exports a Cardmarket-style move CSV via `to_update_csv`. An
+**interactive move list** ([`ui/screens/consolidation.rs`](src/ui/screens/consolidation.rs))
+renders the moves as Scryfall card-image tiles grouped by source bin, each with a
+destination and a "Mark Moved" toggle + progress bar (mirrors the picking list).
+**Read-only**: never writes to the inventory DB (moves apply on the next CSV re-load);
+each pile keeps its lot/side suffix, so per-lot revenue tracking is undisturbed.
+
+A dedicated **fragmented-variant report** (`fragmented_variants`) plus a threshold-independent
+**defrag plan** (`plan_variant_defrag`) that gathers each scattered variant into one bin are
+implemented and surfaced in the Bin Analysis screen (own section, report + move list + CSV).
+The sparse-bin planner is no longer a single greedy pass: `plan_consolidation` runs several
+source-ordering strategies and keeps the best plan (most bins freed, then least distance, then
+fewest cards) — a stronger heuristic, still not a proven global optimum. The interactive move
+list can be opened for **all** piles or for a **single chosen source bin**.
+
+Follow-up ideas: tunable factor weights in the UI; a true globally-optimal repack (ILP/branch
+& bound) if the greedy ensemble proves insufficient; an in-app "apply to DB" that rewrites
+locations without a CSV round-trip (would need care around the one-location-per-variant DB model).
 
 #### Buy Helper → market-aware valuation
 Buy Helper values singles off the CSV's own `price` column (the seller's export).
