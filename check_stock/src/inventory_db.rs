@@ -2651,7 +2651,7 @@ mod tests {
     fn discard_records_no_sold_event() {
         let mut conn = test_conn();
         let card = make_card("1", "Bolt", "10");
-        sync_inventory_conn(&mut conn, &[card.clone()], "2026-01-01").unwrap();
+        sync_inventory_conn(&mut conn, std::slice::from_ref(&card), "2026-01-01").unwrap();
 
         discard_cards_conn(&mut conn, &[(card, 4)]).unwrap();
 

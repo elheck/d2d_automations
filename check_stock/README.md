@@ -39,6 +39,12 @@ egui desktop app for Magic: The Gathering card inventory management.
   cards, the revenue upside of repricing, and capital stuck above market. Fetches the
   price guide from the Cardmarket CDN or loads it from a local JSON file. Strictly
   read-only — it reports, it never writes prices.
+- **Restock Report** — Sold-out variants (quantity 0, copies sold > 0) ranked by
+  sell-through speed (copies/week over the listing → last-sale window), with a
+  minimum-copies filter to hide one-off sales and a buy-list CSV export. Answers
+  "what should I buy again?". Backed by the per-variant **sold-events log**: every
+  inventory sync records which variant sold how many copies on what date and at
+  what listed price (discards/write-offs never count as sales). Strictly read-only.
 
 ## Data Sources
 

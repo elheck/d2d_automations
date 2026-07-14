@@ -38,6 +38,9 @@ inventory_sync is a standalone server application that runs continuously on a se
 
 **Status**: Planned
 
+
+### Added 
+- historical pricing data from cardscaner.local find best things to buy right now and at what price, including shipping maybe.
 ---
 
 ## How to Request Features
