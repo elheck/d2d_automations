@@ -49,7 +49,9 @@ impl StockAnalysisScreen {
 
                     // ── Database stats panel ────────────────────────────────
                     if let Some(db_stats) = state.db_stats.clone() {
-                        Self::show_db_stats(ui, &db_stats, state);
+                        if Self::show_db_stats(ui, &db_stats, state) {
+                            Self::refresh_stats(state);
+                        }
                     } else if let Some(err) = &state.db_stats_error {
                         style::status_error(ui, &format!("Stats error: {err}"));
                     }
@@ -69,7 +71,10 @@ impl StockAnalysisScreen {
         }
     }
 
-    fn show_db_stats(ui: &mut egui::Ui, stats: &DbStats, state: &mut StockAnalysisState) {
+    /// Renders the stats panel. Returns `true` when a lot cost was edited and the
+    /// stats should be reloaded from the database on the next frame.
+    fn show_db_stats(ui: &mut egui::Ui, stats: &DbStats, state: &mut StockAnalysisState) -> bool {
+        let mut needs_refresh = false;
         style::section_frame().show(ui, |ui| {
             ui.label(
                 egui::RichText::new("Database Overview")
@@ -215,9 +220,11 @@ impl StockAnalysisScreen {
 
             if !stats.lot_breakdown.is_empty() {
                 ui.add_space(8.0);
-                Self::show_lot_breakdown(ui, &stats.lot_breakdown, state);
+                needs_refresh |= Self::show_lot_breakdown(ui, &stats.lot_breakdown, state);
             }
         });
+
+        needs_refresh
     }
 
     fn show_velocity(ui: &mut egui::Ui, v: &SalesVelocity) {
@@ -338,18 +345,31 @@ impl StockAnalysisScreen {
             });
     }
 
+    /// Renders the per-lot cost & margin table with editable acquisition costs.
+    /// Returns `true` when a cost was saved or cleared and the stats should be
+    /// reloaded.
     fn show_lot_breakdown(
         ui: &mut egui::Ui,
         lots: &[LotBreakdown],
         state: &mut StockAnalysisState,
-    ) {
+    ) -> bool {
         ui.label(
-            egui::RichText::new("Revenue by Lot")
+            egui::RichText::new("Lot Cost & Margin")
                 .strong()
                 .size(14.0)
                 .color(style::TEXT_PRIMARY),
         );
+        ui.add_space(2.0);
+        ui.label(
+            egui::RichText::new("Click a Cost cell to record or correct a lot's purchase price")
+                .size(11.0)
+                .color(style::TEXT_MUTED),
+        );
         ui.add_space(4.0);
+
+        if let Some(err) = &state.lot_cost_error {
+            style::status_error(ui, &format!("Lot cost error: {err}"));
+        }
 
         // Sort lots
         let mut sorted: Vec<&LotBreakdown> = lots.iter().collect();
@@ -371,6 +391,18 @@ impl StockAnalysisScreen {
                 LotSortColumn::Revenue => a
                     .sold_revenue
                     .partial_cmp(&b.sold_revenue)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                // Lots without a recorded cost sort as if their cost/margin were
+                // the lowest, so the ones you've actually priced surface together.
+                LotSortColumn::Cost => a
+                    .cost
+                    .unwrap_or(f64::NEG_INFINITY)
+                    .partial_cmp(&b.cost.unwrap_or(f64::NEG_INFINITY))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                LotSortColumn::Margin => a
+                    .realized_margin_fraction()
+                    .unwrap_or(f64::NEG_INFINITY)
+                    .partial_cmp(&b.realized_margin_fraction().unwrap_or(f64::NEG_INFINITY))
                     .unwrap_or(std::cmp::Ordering::Equal),
             };
             if asc {
@@ -406,8 +438,16 @@ impl StockAnalysisScreen {
                 }
             };
 
+        // Pending edit-buffer state pulled out of `state` so egui can borrow it as
+        // `&mut String` inside the grid; written back after the closure. Actions
+        // (save/clear) are collected and applied to the DB afterwards to keep the
+        // grid closure free of DB borrows.
+        let mut edit = state.lot_cost_edit.take();
+        let mut save: Option<(String, f64)> = None;
+        let mut clear: Option<String> = None;
+
         egui::Grid::new("lot_breakdown")
-            .num_columns(6)
+            .num_columns(9)
             .spacing([12.0, 2.0])
             .show(ui, |ui| {
                 header(ui, "Lot", LotSortColumn::Lot, state);
@@ -416,11 +456,15 @@ impl StockAnalysisScreen {
                 header(ui, "Stock Value", LotSortColumn::StockValue, state);
                 header(ui, "Sold", LotSortColumn::Sold, state);
                 header(ui, "Revenue", LotSortColumn::Revenue, state);
+                header(ui, "Cost", LotSortColumn::Cost, state);
+                header(ui, "Margin", LotSortColumn::Margin, state);
+                ui.label(egui::RichText::new("Payback").strong());
                 ui.end_row();
 
                 let mut total_stock_value = 0.0;
                 let mut total_sold_copies: i64 = 0;
                 let mut total_revenue = 0.0;
+                let mut total_cost = 0.0;
 
                 for lot in &sorted {
                     ui.label(&lot.lot);
@@ -429,21 +473,157 @@ impl StockAnalysisScreen {
                     ui.label(format!("€{:.2}", lot.in_stock_value));
                     ui.label(format!("×{}", lot.sold_copies));
                     ui.label(format!("€{:.2}", lot.sold_revenue));
+
+                    // ── Cost cell (editable) ─────────────────────────────────
+                    let editing = edit.as_ref().is_some_and(|(l, _)| l == &lot.lot);
+                    if editing {
+                        let id = egui::Id::new(("lot_cost_edit", &lot.lot));
+                        let buf = &mut edit.as_mut().unwrap().1;
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(buf)
+                                .id(id)
+                                .desired_width(70.0)
+                                .hint_text("€"),
+                        );
+                        // Focus the field exactly once, on the first frame of the edit.
+                        // Requesting focus every frame would re-grab it after Enter and
+                        // block the field from ever committing or losing focus to a click.
+                        let focus_flag = egui::Id::new(("lot_cost_focus_done", &lot.lot));
+                        let already_focused = ui.data(|d| d.get_temp::<bool>(focus_flag)).is_some();
+                        if !already_focused {
+                            resp.request_focus();
+                            ui.data_mut(|d| d.insert_temp(focus_flag, true));
+                        }
+                        // Commit on Enter or when focus leaves the field (e.g. clicking
+                        // another cell). An empty value clears the recorded cost.
+                        let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if resp.lost_focus() || enter_pressed {
+                            let trimmed = buf.trim().replace(',', ".");
+                            if trimmed.is_empty() {
+                                clear = Some(lot.lot.clone());
+                            } else if let Ok(v) = trimmed.parse::<f64>() {
+                                if v >= 0.0 {
+                                    save = Some((lot.lot.clone(), v));
+                                }
+                            }
+                            edit = None;
+                            ui.data_mut(|d| d.remove::<bool>(focus_flag));
+                        }
+                    } else {
+                        let label = lot
+                            .cost
+                            .map(|c| format!("€{c:.2}"))
+                            .unwrap_or_else(|| "— set".to_string());
+                        let color = if lot.cost.is_some() {
+                            style::TEXT_PRIMARY
+                        } else {
+                            style::TEXT_MUTED
+                        };
+                        let clicked = ui
+                            .add(
+                                egui::Label::new(egui::RichText::new(label).color(color))
+                                    .sense(egui::Sense::click()),
+                            )
+                            .clicked();
+                        if clicked {
+                            let initial = lot.cost.map(|c| format!("{c:.2}")).unwrap_or_default();
+                            edit = Some((lot.lot.clone(), initial));
+                            // Clear any stale focus marker so the field grabs focus on
+                            // its first render below.
+                            let focus_flag = egui::Id::new(("lot_cost_focus_done", &lot.lot));
+                            ui.data_mut(|d| d.remove::<bool>(focus_flag));
+                        }
+                    }
+
+                    // ── Margin ───────────────────────────────────────────────
+                    match lot.realized_margin_fraction() {
+                        Some(m) => {
+                            let color = if m >= 0.0 {
+                                style::COLOR_SUCCESS
+                            } else {
+                                style::COLOR_ERROR
+                            };
+                            ui.label(
+                                egui::RichText::new(format!("{:+.0}%", m * 100.0)).color(color),
+                            );
+                        }
+                        None => {
+                            ui.label(egui::RichText::new("—").color(style::TEXT_MUTED));
+                        }
+                    }
+
+                    // ── Payback status ───────────────────────────────────────
+                    match (lot.is_recouped(), lot.cost_to_recoup()) {
+                        (Some(true), _) => {
+                            ui.label(
+                                egui::RichText::new("\u{2713} recouped")
+                                    .color(style::COLOR_SUCCESS),
+                            );
+                        }
+                        (Some(false), Some(remaining)) => {
+                            ui.label(
+                                egui::RichText::new(format!("€{remaining:.2} to go"))
+                                    .color(style::COLOR_ERROR),
+                            );
+                        }
+                        _ => {
+                            ui.label(egui::RichText::new("—").color(style::TEXT_MUTED));
+                        }
+                    }
                     ui.end_row();
 
                     total_stock_value += lot.in_stock_value;
                     total_sold_copies += lot.sold_copies;
                     total_revenue += lot.sold_revenue;
+                    total_cost += lot.cost.unwrap_or(0.0);
                 }
 
                 // Totals row
+                let total_margin = if total_cost > 0.0 {
+                    Some((total_revenue - total_cost) / total_cost)
+                } else {
+                    None
+                };
                 ui.label(egui::RichText::new("Total").strong());
                 ui.label("");
                 ui.label("");
                 ui.label(egui::RichText::new(format!("€{total_stock_value:.2}")).strong());
                 ui.label(egui::RichText::new(format!("×{total_sold_copies}")).strong());
                 ui.label(egui::RichText::new(format!("€{total_revenue:.2}")).strong());
+                ui.label(egui::RichText::new(format!("€{total_cost:.2}")).strong());
+                match total_margin {
+                    Some(m) => {
+                        ui.label(egui::RichText::new(format!("{:+.0}%", m * 100.0)).strong());
+                    }
+                    None => {
+                        ui.label(egui::RichText::new("—").strong());
+                    }
+                }
+                ui.label("");
                 ui.end_row();
             });
+
+        state.lot_cost_edit = edit;
+
+        // Apply any DB action collected during rendering.
+        let mut needs_refresh = false;
+        if let Some((lot, cost)) = save {
+            match crate::inventory_db::set_lot_cost(&lot, cost) {
+                Ok(()) => {
+                    state.lot_cost_error = None;
+                    needs_refresh = true;
+                }
+                Err(e) => state.lot_cost_error = Some(e.to_string()),
+            }
+        } else if let Some(lot) = clear {
+            match crate::inventory_db::delete_lot_cost(&lot) {
+                Ok(()) => {
+                    state.lot_cost_error = None;
+                    needs_refresh = true;
+                }
+                Err(e) => state.lot_cost_error = Some(e.to_string()),
+            }
+        }
+        needs_refresh
     }
 }

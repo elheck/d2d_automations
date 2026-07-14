@@ -5,9 +5,13 @@ egui desktop app for Magic: The Gathering card inventory management.
 ## Screens
 
 - **Stock Checker** — Match inventory CSV against wantslists
-- **Stock Analysis** — Inventory overview, per-lot revenue tracking, sales metrics,
-  **sales velocity** (copies/revenue per week from daily snapshots), and **dead-stock
-  aging** (in-stock cards bucketed by how long they've been listed)
+- **Stock Analysis** — Inventory overview, sales metrics, **sales velocity**
+  (copies/revenue per week from daily snapshots), **dead-stock aging** (in-stock
+  cards bucketed by how long they've been listed), and a **Lot Cost & Margin**
+  table: per-lot revenue, remaining stock value, and — once you record a lot's
+  acquisition cost — realized margin % and payback status. Click a Cost cell to
+  enter or correct a lot's purchase price; the figure is saved to the inventory DB
+  (`lot_costs` table) and can be edited or cleared at any time.
 - **Bin Analysis** — Bin capacity utilization and free-slot analysis, plus two
   consolidation tools:
   - **Consolidation suggestions** — empties sparse bins into fuller ones (preferring

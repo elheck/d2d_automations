@@ -56,6 +56,35 @@ pub struct LotBreakdown {
     pub in_stock_value: f64,
     pub sold_copies: i64,
     pub sold_revenue: f64,
+    /// Recorded acquisition cost for the whole lot, in EUR. `None` when no cost
+    /// has been entered yet, which is distinct from a recorded cost of `0.0`.
+    pub cost: Option<f64>,
+}
+
+impl LotBreakdown {
+    /// Realized margin as a fraction of cost: `(revenue − cost) / cost`.
+    ///
+    /// Based only on money already earned (unsold stock is excluded). Returns
+    /// `None` when no cost is recorded, or when the cost is `0.0` (margin is
+    /// undefined — division by zero).
+    pub fn realized_margin_fraction(&self) -> Option<f64> {
+        match self.cost {
+            Some(cost) if cost > 0.0 => Some((self.sold_revenue - cost) / cost),
+            _ => None,
+        }
+    }
+
+    /// Whether the lot has paid for itself: recorded revenue ≥ recorded cost.
+    /// `None` when no cost is recorded.
+    pub fn is_recouped(&self) -> Option<bool> {
+        self.cost.map(|cost| self.sold_revenue >= cost)
+    }
+
+    /// Cost still to recoup before the lot breaks even, in EUR (never negative).
+    /// `None` when no cost is recorded.
+    pub fn cost_to_recoup(&self) -> Option<f64> {
+        self.cost.map(|cost| (cost - self.sold_revenue).max(0.0))
+    }
 }
 
 /// One row in the "longest unsold" top-5 list.
@@ -338,6 +367,18 @@ const SOLD_EVENTS_DDL: &str = "
     CREATE INDEX IF NOT EXISTS idx_sold_events_date ON sold_events (date);
 ";
 
+// Manually recorded acquisition cost per lot. One row per lot ID (e.g. `L12`),
+// storing the total price paid for that purchase. Orthogonal to the card schema;
+// created on every open like the snapshot and sold-event tables. `updated_at`
+// records when the figure was last edited so a correction is auditable.
+const LOT_COSTS_DDL: &str = "
+    CREATE TABLE IF NOT EXISTS lot_costs (
+        lot        TEXT PRIMARY KEY,
+        cost       REAL NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+";
+
 // Migration v1 → v2: replace single cardmarket_id PRIMARY KEY with composite UNIQUE key.
 const MIGRATION_V1_TO_V2: &str = "
     BEGIN;
@@ -462,7 +503,8 @@ fn init_schema(conn: &Connection) -> DbResult<()> {
     if !table_exists {
         conn.execute_batch(INVENTORY_CARDS_DDL)?;
         conn.execute_batch(INVENTORY_SNAPSHOTS_DDL)?;
-        return conn.execute_batch(SOLD_EVENTS_DDL);
+        conn.execute_batch(SOLD_EVENTS_DDL)?;
+        return conn.execute_batch(LOT_COSTS_DDL);
     }
 
     // v3 is identified by idx_inventory_article_key_v3 (6-field key including location).
@@ -521,6 +563,7 @@ fn init_schema(conn: &Connection) -> DbResult<()> {
     // came from.
     conn.execute_batch(INVENTORY_SNAPSHOTS_DDL)?;
     conn.execute_batch(SOLD_EVENTS_DDL)?;
+    conn.execute_batch(LOT_COSTS_DDL)?;
 
     Ok(())
 }
@@ -651,6 +694,37 @@ fn discard_cards_conn(conn: &mut Connection, discards: &[(Card, i64)]) -> DbResu
 pub fn get_db_stats() -> DbResult<DbStats> {
     let conn = open_db()?;
     get_db_stats_conn(&conn, &today_date())
+}
+
+/// Records (or corrects) the total acquisition cost for a lot, in EUR.
+///
+/// Upserts by lot ID: entering a cost for a lot that already has one overwrites
+/// it, so a mistaken buy price can be fixed. `cost` must be non-negative.
+pub fn set_lot_cost(lot: &str, cost: f64) -> DbResult<()> {
+    let conn = open_db()?;
+    set_lot_cost_conn(&conn, lot, cost, &today_date())
+}
+
+/// Inner upsert that accepts an explicit connection and date — used in tests.
+fn set_lot_cost_conn(conn: &Connection, lot: &str, cost: f64, today: &str) -> DbResult<()> {
+    conn.execute(
+        "INSERT INTO lot_costs (lot, cost, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(lot) DO UPDATE SET cost = excluded.cost, updated_at = excluded.updated_at",
+        params![lot, cost, today],
+    )?;
+    Ok(())
+}
+
+/// Removes the recorded acquisition cost for a lot, if any.
+pub fn delete_lot_cost(lot: &str) -> DbResult<()> {
+    let conn = open_db()?;
+    delete_lot_cost_conn(&conn, lot)
+}
+
+/// Inner delete that accepts an explicit connection — used in tests.
+fn delete_lot_cost_conn(conn: &Connection, lot: &str) -> DbResult<()> {
+    conn.execute("DELETE FROM lot_costs WHERE lot = ?1", params![lot])?;
+    Ok(())
 }
 
 /// Returns every in-stock card variant (quantity > 0) from the database.
@@ -857,6 +931,13 @@ fn extract_lot_number(location: &str) -> Option<&str> {
     })
 }
 
+/// Loads all recorded per-lot acquisition costs into a `lot → cost` map.
+fn lot_costs_map(conn: &Connection) -> DbResult<std::collections::HashMap<String, f64>> {
+    conn.prepare("SELECT lot, cost FROM lot_costs")?
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))?
+        .collect()
+}
+
 /// Builds the per-lot revenue breakdown from all inventory rows that carry a
 /// location with a recognisable lot number.
 fn lot_breakdown_from(conn: &Connection) -> DbResult<Vec<LotBreakdown>> {
@@ -895,6 +976,8 @@ fn lot_breakdown_from(conn: &Connection) -> DbResult<Vec<LotBreakdown>> {
         }
     }
 
+    let costs = lot_costs_map(conn)?;
+
     let mut result: Vec<LotBreakdown> = lots
         .into_iter()
         .map(
@@ -902,6 +985,7 @@ fn lot_breakdown_from(conn: &Connection) -> DbResult<Vec<LotBreakdown>> {
                 lot,
                 (in_stock_listings, in_stock_copies, in_stock_value, sold_copies, sold_revenue),
             )| {
+                let cost = costs.get(&lot).copied();
                 LotBreakdown {
                     lot,
                     in_stock_listings,
@@ -909,6 +993,7 @@ fn lot_breakdown_from(conn: &Connection) -> DbResult<Vec<LotBreakdown>> {
                     in_stock_value,
                     sold_copies,
                     sold_revenue,
+                    cost,
                 }
             },
         )
@@ -2430,6 +2515,130 @@ mod tests {
 
         let stats = get_db_stats_conn(&conn, "2026-07-14").unwrap();
         assert!(stats.lot_breakdown.is_empty());
+    }
+
+    // ==================== lot acquisition cost & margin ====================
+
+    /// Convenience: build a `LotBreakdown` with only the fields the margin math
+    /// depends on; other fields are irrelevant to the assertions.
+    fn lot_with(cost: Option<f64>, sold_revenue: f64) -> LotBreakdown {
+        LotBreakdown {
+            lot: "L1".to_string(),
+            in_stock_listings: 0,
+            in_stock_copies: 0,
+            in_stock_value: 0.0,
+            sold_copies: 0,
+            sold_revenue,
+            cost,
+        }
+    }
+
+    #[test]
+    fn margin_fraction_none_without_cost() {
+        assert!(lot_with(None, 50.0).realized_margin_fraction().is_none());
+    }
+
+    #[test]
+    fn margin_fraction_none_for_zero_cost() {
+        // Division by zero is undefined, not "infinite margin".
+        assert!(lot_with(Some(0.0), 50.0)
+            .realized_margin_fraction()
+            .is_none());
+    }
+
+    #[test]
+    fn margin_fraction_profit_and_loss() {
+        // Cost 100, revenue 150 → +50%.
+        let profit = lot_with(Some(100.0), 150.0)
+            .realized_margin_fraction()
+            .unwrap();
+        assert!((profit - 0.5).abs() < 1e-9);
+
+        // Cost 100, revenue 40 → -60%.
+        let loss = lot_with(Some(100.0), 40.0)
+            .realized_margin_fraction()
+            .unwrap();
+        assert!((loss + 0.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn recouped_and_cost_to_recoup() {
+        let paid = lot_with(Some(100.0), 100.0);
+        assert_eq!(paid.is_recouped(), Some(true));
+        assert_eq!(paid.cost_to_recoup(), Some(0.0));
+
+        let over = lot_with(Some(100.0), 130.0);
+        assert_eq!(over.is_recouped(), Some(true));
+        assert_eq!(over.cost_to_recoup(), Some(0.0)); // never negative
+
+        let under = lot_with(Some(100.0), 60.0);
+        assert_eq!(under.is_recouped(), Some(false));
+        assert_eq!(under.cost_to_recoup(), Some(40.0));
+
+        let none = lot_with(None, 60.0);
+        assert_eq!(none.is_recouped(), None);
+        assert_eq!(none.cost_to_recoup(), None);
+    }
+
+    #[test]
+    fn set_lot_cost_inserts_then_updates() {
+        let conn = test_conn();
+        set_lot_cost_conn(&conn, "L5", 42.50, "2026-01-01").unwrap();
+        let cost = lot_costs_map(&conn).unwrap();
+        assert_eq!(cost.get("L5").copied(), Some(42.50));
+
+        // Correcting the buy price overwrites in place (no duplicate row).
+        set_lot_cost_conn(&conn, "L5", 30.00, "2026-01-02").unwrap();
+        let cost = lot_costs_map(&conn).unwrap();
+        assert_eq!(cost.len(), 1);
+        assert_eq!(cost.get("L5").copied(), Some(30.00));
+
+        let updated_at: String = conn
+            .query_row(
+                "SELECT updated_at FROM lot_costs WHERE lot = 'L5'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(updated_at, "2026-01-02");
+    }
+
+    #[test]
+    fn delete_lot_cost_removes_entry() {
+        let conn = test_conn();
+        set_lot_cost_conn(&conn, "L5", 42.50, "2026-01-01").unwrap();
+        delete_lot_cost_conn(&conn, "L5").unwrap();
+        assert!(lot_costs_map(&conn).unwrap().is_empty());
+        // Deleting a non-existent lot is a no-op, not an error.
+        delete_lot_cost_conn(&conn, "L5").unwrap();
+    }
+
+    #[test]
+    fn lot_breakdown_populates_recorded_cost() {
+        let mut conn = test_conn();
+        let mut c1 = make_card("1", "Bolt", "4");
+        c1.price = "2.00".to_string();
+        c1.location = Some("A-0-0-1-L3-R".to_string());
+        sync_inventory_conn(&mut conn, &[c1], "2026-01-01").unwrap();
+        set_lot_cost_conn(&conn, "L3", 5.00, "2026-01-01").unwrap();
+
+        let stats = get_db_stats_conn(&conn, "2026-07-14").unwrap();
+        let l3 = &stats.lot_breakdown[0];
+        assert_eq!(l3.cost, Some(5.00));
+        // Revenue is 0 so far → margin -100%, still €5 to recoup.
+        assert_eq!(l3.is_recouped(), Some(false));
+        assert_eq!(l3.cost_to_recoup(), Some(5.00));
+    }
+
+    #[test]
+    fn lot_breakdown_cost_is_none_when_unrecorded() {
+        let mut conn = test_conn();
+        let mut c1 = make_card("1", "Bolt", "2");
+        c1.location = Some("A-0-0-1-L1-R".to_string());
+        sync_inventory_conn(&mut conn, &[c1], "2026-01-01").unwrap();
+
+        let stats = get_db_stats_conn(&conn, "2026-07-14").unwrap();
+        assert_eq!(stats.lot_breakdown[0].cost, None);
     }
 
     // ==================== snapshots / velocity / in-stock ====================

@@ -88,6 +88,8 @@ pub enum LotSortColumn {
     StockValue,
     Sold,
     Revenue,
+    Cost,
+    Margin,
 }
 
 #[derive(Default)]
@@ -99,6 +101,11 @@ pub struct StockAnalysisState {
     pub stats_loaded: bool,
     pub lot_sort_column: LotSortColumn,
     pub lot_sort_ascending: bool,
+    /// Lot whose acquisition cost is currently being edited, plus the raw text in
+    /// its input field. `None` when no cost cell is in edit mode.
+    pub lot_cost_edit: Option<(String, String)>,
+    /// Surfaced when saving or clearing a lot cost fails; shown near the table.
+    pub lot_cost_error: Option<String>,
 }
 
 pub struct BinAnalysisState {
