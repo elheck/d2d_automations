@@ -223,7 +223,7 @@ impl Card {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WantsEntry {
     pub quantity: i32,
     pub name: String,

@@ -3,7 +3,7 @@ use crate::{
     formatters::{
         format_invoice_list, format_picking_list, format_regular_output, format_update_stock_csv,
     },
-    io::{read_csv, read_wantslist},
+    io::{load_wantslist, read_csv},
     models::{Card, WantsEntry},
     ui::{
         components::{FilePicker, OutputWindow},
@@ -168,6 +168,14 @@ impl StockCheckerScreen {
                     }
                 }
                 FilePicker::new("Wantslist:", &mut state.wantslist_path).show(ui);
+                ui.label(
+                    egui::RichText::new(
+                        "Accepts a file (plain lists and Arena / MTGO / Moxfield / Archidekt / \
+                         MTGGoldfish exports) or a pasted Moxfield / Archidekt deck link.",
+                    )
+                    .size(11.0)
+                    .color(style::TEXT_MUTED),
+                );
             });
 
             ui.add_space(8.0);
@@ -268,7 +276,7 @@ impl StockCheckerScreen {
         );
 
         let inventory = read_csv(&state.inventory_path)?;
-        let wantslist = read_wantslist(&state.wantslist_path)?;
+        let wantslist = load_wantslist(&state.wantslist_path)?;
 
         state.all_matches.clear();
         state.selected.clear();

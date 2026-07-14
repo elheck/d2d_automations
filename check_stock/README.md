@@ -26,7 +26,13 @@ egui desktop app for Magic: The Gathering card inventory management.
   (with `nameDE`/`nameES`/`nameFR`/`nameIT` / `listedAt` columns) also load. Condition values
   may be either short codes (`NM`, `EX`, `GD`, `LP`, `PL`) or the inventory-report long form
   (`near_mint`, `excellent`, `good`, `light_played`, `played`, `poor`).
-- **Wantslists**: Simple `quantity name` text format
+- **Wantslists / decklists**: `quantity name` text, plus the common deck-export
+  formats — MTG Arena, MTGO, Moxfield, Archidekt and MTGGoldfish. Set codes,
+  collector numbers, foil/etched markers (`*F*`/`*E*`), category `[…]` and tag
+  `^…^` annotations, `SB:` sideboard prefixes and section headers are handled;
+  `4x`/`4X` quantities are accepted; duplicate card names are merged. The
+  Wantslist field also accepts a pasted **Moxfield or Archidekt deck link**
+  (e.g. `https://moxfield.com/decks/<id>`), which is fetched over the network.
 - **Scryfall API**: Card data, images
 - **Cardmarket CDN**: Price guide (~50MB, all MTG products)
 

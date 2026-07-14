@@ -1,7 +1,7 @@
 use crate::models::{Card, WantsEntry};
-use log::{debug, info, warn};
-use std::fs::File;
-use std::io::{self, BufRead};
+use crate::wantslist::parse_wantslist;
+use log::info;
+use std::io;
 
 pub fn read_csv(path: &str) -> Result<Vec<Card>, Box<dyn std::error::Error>> {
     info!("Reading inventory CSV from: {}", path);
@@ -41,44 +41,35 @@ pub fn read_csv(path: &str) -> Result<Vec<Card>, Box<dyn std::error::Error>> {
     Ok(cards)
 }
 
-fn parse_wants_line(line: &str) -> Option<(i32, String)> {
-    let parts: Vec<&str> = line.trim().splitn(2, ' ').collect();
-    if parts.len() != 2 {
-        return None;
+/// Loads a wantslist from either a **deck URL** or a **file path**.
+///
+/// If `input` is a recognised Moxfield or Archidekt deck link, the deck is
+/// fetched over the network ([`crate::deck_fetch`]); otherwise `input` is treated
+/// as a file path and read via [`read_wantslist`]. Both paths return the same
+/// merged [`WantsEntry`] list, so the caller is agnostic to the source.
+pub fn load_wantslist(input: &str) -> Result<Vec<WantsEntry>, String> {
+    match crate::deck_fetch::parse_deck_url(input) {
+        Some(source) => crate::deck_fetch::fetch_deck(&source),
+        None => read_wantslist(input).map_err(|e| e.to_string()),
     }
-
-    let quantity = parts[0].parse().ok()?;
-    let name = parts[1].to_string();
-    Some((quantity, name))
 }
 
+/// Reads a wantslist / decklist file and parses it via [`parse_wantslist`],
+/// which understands the common community export formats (plain, Arena, MTGO,
+/// Moxfield, Archidekt, MTGGoldfish). Duplicate card names are merged.
 pub fn read_wantslist(path: &str) -> Result<Vec<WantsEntry>, io::Error> {
     info!("Reading wantslist from: {}", path);
 
-    let file = File::open(path)?;
-    let reader = io::BufReader::new(file);
-    let mut wants = Vec::new();
-    let mut skipped_lines = 0;
+    let content = std::fs::read_to_string(path)?;
+    let parsed = parse_wantslist(&content);
 
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim().is_empty() || line.trim() == "Deck" {
-            continue;
-        }
-
-        if let Some((quantity, name)) = parse_wants_line(&line) {
-            debug!("Parsed want: {} x {}", quantity, name);
-            wants.push(WantsEntry { quantity, name });
-        } else {
-            warn!("Could not parse wantslist line: {}", line);
-            skipped_lines += 1;
-        }
+    for line in &parsed.unparseable {
+        log::warn!("Could not parse wantslist line: {}", line);
     }
-
     info!(
         "Loaded {} entries from wantslist (skipped {} unparseable lines)",
-        wants.len(),
-        skipped_lines
+        parsed.entries.len(),
+        parsed.unparseable.len()
     );
-    Ok(wants)
+    Ok(parsed.entries)
 }

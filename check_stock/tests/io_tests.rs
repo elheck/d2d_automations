@@ -337,12 +337,14 @@ fn test_read_wantslist_with_whitespace() {
     let wants = read_wantslist(temp_file.path().to_str().unwrap()).unwrap();
     assert_eq!(wants.len(), 3);
 
+    // The richer parser normalises whitespace between quantity and name; names
+    // are returned trimmed (matching was already case/space-insensitive).
     assert_eq!(wants[0].quantity, 4);
-    assert_eq!(wants[0].name, "  Lightning Bolt"); // Leading spaces preserved in name
+    assert_eq!(wants[0].name, "Lightning Bolt");
     assert_eq!(wants[1].quantity, 2);
     assert_eq!(wants[1].name, "Force of Will");
     assert_eq!(wants[2].quantity, 1);
-    assert_eq!(wants[2].name, "   Black Lotus"); // Leading spaces preserved in name
+    assert_eq!(wants[2].name, "Black Lotus");
 }
 
 #[test]
@@ -441,15 +443,17 @@ mod edge_cases {
     }
 
     #[test]
-    fn test_read_wantslist_with_negative_quantity() {
+    fn test_read_wantslist_rejects_negative_quantity() {
         let mut temp_file = NamedTempFile::new().unwrap();
         let content = "-1 Negative Card\n4 Normal Card";
         write!(temp_file, "{}", content).unwrap();
 
+        // A negative "want" is meaningless; the richer parser skips it as
+        // unparseable rather than emitting a negative-quantity entry.
         let wants = read_wantslist(temp_file.path().to_str().unwrap()).unwrap();
-        assert_eq!(wants.len(), 2);
-        assert_eq!(wants[0].quantity, -1); // Negative quantities are parsed
-        assert_eq!(wants[1].quantity, 4);
+        assert_eq!(wants.len(), 1);
+        assert_eq!(wants[0].quantity, 4);
+        assert_eq!(wants[0].name, "Normal Card");
     }
 
     #[test]

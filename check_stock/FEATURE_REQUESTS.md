@@ -29,12 +29,18 @@ foil & non-foil) is already fetched and wired into the pricing nodes via
 
 ### Tier 2 — Strong quality-of-life
 
-#### Richer wantslist / decklist import
-Stock Checker currently only parses `quantity name`. Add importers for **Moxfield /
-Archidekt / MTGO `.dek` / MTG Arena** export formats, plus set-scoped lines. Makes the
-Stock Checker usable directly from how buylists and deck requests actually arrive.
-- **Location**: `io::read_wantslist`, `card_matching`.
-- **Effort**: medium.
+#### Richer wantslist / decklist import ✅ Done
+Implemented in the pure [`wantslist`](src/wantslist.rs) module (delegated to from
+`io::read_wantslist`). Parses plain `quantity name`, `4x`/`4X` quantities, and MTG
+Arena / MTGO / Moxfield / Archidekt / MTGGoldfish exports: strips set codes,
+collector numbers, foil/etched markers, `[category]` / `^tag^` annotations, `SB:`
+prefixes and section headers, and merges duplicate names. Deck-based `.dek` XML was
+intentionally left out (all target tools export the supported text format).
+
+Additionally, the Wantslist field accepts a pasted **Moxfield / Archidekt deck link**
+([`deck_fetch`](src/deck_fetch.rs)): the deck is fetched from each site's public JSON
+API and converted to wants (`io::load_wantslist` dispatches URL vs file). JSON shaping
+is pure/tested; only the HTTP call needs the network.
 
 #### Picking route optimization
 `parse_location_code` already decodes `A-S-R-C`. Sort the picking list into an actual
