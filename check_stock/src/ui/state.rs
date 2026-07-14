@@ -223,6 +223,16 @@ pub struct SelectedSearchCard {
     pub quantity: i32,
 }
 
+/// What the "Selected Cards" action performs on the current selection.
+#[derive(PartialEq, Clone, Copy)]
+pub enum SearchAction {
+    /// Send the selection to the Stock Checker lists (default).
+    AddToLists,
+    /// Write the selection off as discarded: reduce inventory without counting
+    /// it as sold, and export a negative-delta stock-update CSV.
+    Discard,
+}
+
 pub struct SearchState {
     pub csv_path: String,
     pub search_term: String,
@@ -238,6 +248,8 @@ pub struct SearchState {
     pub results_per_page: usize,
     pub selected_cards: Vec<SelectedSearchCard>,
     pub quantity_inputs: std::collections::HashMap<usize, i32>,
+    /// Whether the selection is sent to lists or written off as discarded.
+    pub action_mode: SearchAction,
 }
 
 #[derive(Default)]
@@ -929,6 +941,7 @@ impl Default for SearchState {
             },
             selected_cards: Vec::new(),
             quantity_inputs: std::collections::HashMap::new(),
+            action_mode: SearchAction::AddToLists,
         }
     }
 }

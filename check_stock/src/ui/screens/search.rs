@@ -1,14 +1,16 @@
 use crate::{
+    card_matching::MatchedCard,
+    formatters::format_update_stock_csv,
     io::read_csv,
     ui::{
         components::FilePicker,
         screens::PickingState,
-        state::{AppState, Screen, SearchState, SelectedSearchCard},
+        state::{AppState, Screen, SearchAction, SearchState, SelectedSearchCard},
         style,
     },
 };
 use eframe::egui;
-use log::{debug, info};
+use log::{debug, error, info};
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -217,15 +219,130 @@ impl SearchScreen {
                 }
 
                 ui.add_space(5.0);
+
+                // Mode selector: send to lists, or write off as discarded stock.
                 ui.horizontal(|ui| {
-                    if style::primary_button(ui, "Proceed to Lists").clicked() {
-                        Self::proceed_to_lists(app_state, state, picking_state);
-                    }
-                    if style::secondary_button(ui, "Clear All").clicked() {
-                        state.selected_cards.clear();
-                    }
+                    ui.label("Action:");
+                    ui.radio_value(
+                        &mut state.action_mode,
+                        SearchAction::AddToLists,
+                        "Add to lists",
+                    );
+                    ui.radio_value(
+                        &mut state.action_mode,
+                        SearchAction::Discard,
+                        "Discard (remove without affecting revenue)",
+                    );
                 });
+
+                ui.add_space(5.0);
+                match state.action_mode {
+                    SearchAction::AddToLists => {
+                        ui.horizontal(|ui| {
+                            if style::primary_button(ui, "Proceed to Lists").clicked() {
+                                Self::proceed_to_lists(app_state, state, picking_state);
+                            }
+                            if style::secondary_button(ui, "Clear All").clicked() {
+                                state.selected_cards.clear();
+                            }
+                        });
+                    }
+                    SearchAction::Discard => {
+                        ui.label(
+                            egui::RichText::new(
+                                "Reduces inventory and exports a negative-delta stock-update CSV. \
+                                 Discarded copies are NOT counted as sold. Import the CSV into \
+                                 Cardmarket before your next inventory sync.",
+                            )
+                            .color(style::TEXT_MUTED),
+                        );
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if style::primary_button(ui, "Discard & Export CSV…").clicked() {
+                                Self::perform_discard(state);
+                            }
+                            if style::secondary_button(ui, "Clear All").clicked() {
+                                state.selected_cards.clear();
+                            }
+                        });
+                    }
+                }
             });
+    }
+
+    /// Writes off the selected cards as discarded stock: exports a negative-delta
+    /// stock-update CSV (the save dialog acts as the confirmation gate), reduces the
+    /// inventory DB without touching `sold_quantity`, decrements the in-memory
+    /// quantities so the results reflect the write-off, and clears the selection.
+    fn perform_discard(state: &mut SearchState) {
+        if state.selected_cards.is_empty() {
+            return;
+        }
+
+        // Build the negative-delta CSV from the current selection. The exporter
+        // negates quantities, so pass the copies as-is.
+        let matched: Vec<MatchedCard> = state
+            .selected_cards
+            .iter()
+            .map(|sc| MatchedCard {
+                card: &sc.card,
+                quantity: sc.quantity,
+                set_name: sc.card.set.clone(),
+            })
+            .collect();
+        let csv = format_update_stock_csv(&matched);
+
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name("discarded_cards.csv")
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            // Cancelled — abort without altering the DB or the selection.
+            info!("Discard cancelled: no export file chosen");
+            return;
+        };
+
+        if let Err(e) = std::fs::write(&path, csv) {
+            error!("Failed to save discard CSV: {e}");
+            return;
+        }
+
+        // Apply the write-off to the inventory DB (revenue unaffected).
+        let discards: Vec<(crate::models::Card, i64)> = state
+            .selected_cards
+            .iter()
+            .map(|sc| (sc.card.clone(), sc.quantity as i64))
+            .collect();
+        match crate::inventory_db::discard_cards(&discards) {
+            Ok(stats) => info!(
+                "Discarded {} copies across {} variants",
+                stats.copies_discarded, stats.variants_updated
+            ),
+            Err(e) => log::warn!("Inventory DB discard failed: {e}"),
+        }
+
+        // Reflect the reduced stock in the loaded card lists so the results and
+        // remaining-stock caps stay accurate without a reload. Match on the full
+        // variant identity (not just the shared product id) and reduce the first
+        // matching row in each list.
+        let same_variant = |a: &crate::models::Card, b: &crate::models::Card| {
+            a.cardmarket_id == b.cardmarket_id
+                && a.condition == b.condition
+                && a.language == b.language
+                && a.is_foil == b.is_foil
+                && a.is_signed == b.is_signed
+        };
+        for sc in &state.selected_cards {
+            for list in [&mut state.cards, &mut state.filtered_cards] {
+                if let Some(card) = list.iter_mut().find(|c| same_variant(c, &sc.card)) {
+                    let current: i32 = card.quantity.parse().unwrap_or(0);
+                    card.quantity = (current - sc.quantity).max(0).to_string();
+                }
+            }
+        }
+
+        state.selected_cards.clear();
+        state.quantity_inputs.clear();
     }
 
     fn show_search_results(ui: &mut egui::Ui, state: &mut SearchState) {

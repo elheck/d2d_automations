@@ -188,6 +188,16 @@ pub struct SyncStats {
     pub zeroed: usize,
 }
 
+/// Statistics from a discard (write-off) operation.
+#[derive(Debug, Default, PartialEq)]
+pub struct DiscardStats {
+    /// Number of distinct DB variant rows whose quantity was reduced.
+    pub variants_updated: usize,
+    /// Total copies actually removed from stock (after clamping at the row's
+    /// available quantity).
+    pub copies_discarded: i64,
+}
+
 /// Returns the path to the inventory database file.
 fn db_path() -> PathBuf {
     dirs::data_dir()
@@ -473,6 +483,95 @@ fn today_date() -> String {
 pub fn sync_inventory(cards: &[Card]) -> DbResult<SyncStats> {
     let mut conn = open_db()?;
     sync_inventory_conn(&mut conn, cards, &today_date())
+}
+
+/// Writes off (discards) copies of card variants **without** recording them as
+/// sales.
+///
+/// Each `(card, quantity)` pair reduces the matching DB row's `quantity` by
+/// `quantity`, clamped so it never goes below zero. Crucially, `sold_quantity`
+/// is left untouched — a discard is stock leaving the shelf that was *not* sold,
+/// so it must not inflate tracked revenue. Multiple pairs targeting the same
+/// variant (e.g. the same card picked from two locations) are summed first.
+///
+/// The caller is expected to also export a stock-update CSV of the same copies
+/// and import it into Cardmarket, so the next full inventory sync sees the drop
+/// already reflected in both places and records no phantom sale.
+///
+/// Errors are returned to the caller; call sites treat them as non-fatal.
+pub fn discard_cards(discards: &[(Card, i64)]) -> DbResult<DiscardStats> {
+    let mut conn = open_db()?;
+    discard_cards_conn(&mut conn, discards)
+}
+
+/// Inner discard that accepts an explicit connection — used in tests.
+fn discard_cards_conn(conn: &mut Connection, discards: &[(Card, i64)]) -> DbResult<DiscardStats> {
+    // Aggregate requested copies by the same canonical variant key the sync uses,
+    // so two rows for the same variant (different physical locations) collapse into
+    // a single UPDATE and clamp against the one merged DB row.
+    let mut agg: std::collections::HashMap<(String, String, String, String, String), i64> =
+        std::collections::HashMap::new();
+    for (card, qty) in discards {
+        if *qty <= 0 {
+            continue;
+        }
+        let key = (
+            card.cardmarket_id.clone(),
+            canonical_condition(&card.condition),
+            normalize_language(&card.language),
+            normalize_flag(&card.is_foil),
+            normalize_flag(&card.is_signed),
+        );
+        *agg.entry(key).or_insert(0) += *qty;
+    }
+
+    let tx = conn.transaction()?;
+    let mut stats = DiscardStats::default();
+
+    for ((id, cond, lang, foil, signed), requested) in &agg {
+        // Read the current quantity so we can clamp and report the true amount
+        // removed. sold_quantity is deliberately never referenced here.
+        let current: Option<i64> = tx
+            .query_row(
+                "SELECT quantity FROM inventory_cards
+                 WHERE cardmarket_id = ?1 AND condition = ?2 AND language = ?3
+                   AND is_foil = ?4 AND is_signed = ?5",
+                params![id, cond, lang, foil, signed],
+                |r| r.get(0),
+            )
+            .optional()?;
+
+        let Some(current) = current else {
+            log::warn!(
+                "Discard skipped: no DB row for variant {id}/{cond}/{lang} (foil={foil}, signed={signed})"
+            );
+            continue;
+        };
+
+        let removed = (*requested).min(current.max(0));
+        if removed == 0 {
+            continue;
+        }
+
+        tx.execute(
+            "UPDATE inventory_cards SET quantity = quantity - ?1
+             WHERE cardmarket_id = ?2 AND condition = ?3 AND language = ?4
+               AND is_foil = ?5 AND is_signed = ?6",
+            params![removed, id, cond, lang, foil, signed],
+        )?;
+        stats.variants_updated += 1;
+        stats.copies_discarded += removed;
+    }
+
+    tx.commit()?;
+    if stats.variants_updated > 0 {
+        log::info!(
+            "Inventory DB discard: {} copies written off across {} variants (revenue unaffected)",
+            stats.copies_discarded,
+            stats.variants_updated
+        );
+    }
+    Ok(stats)
 }
 
 /// Queries aggregate statistics from the local inventory database.
@@ -1902,6 +2001,124 @@ mod tests {
             )
             .unwrap();
         assert_eq!(sold, 5);
+    }
+
+    // ==================== Discard (write-off) Tests ====================
+
+    fn sold_qty(conn: &Connection, id: &str) -> i64 {
+        conn.query_row(
+            "SELECT sold_quantity FROM inventory_cards WHERE cardmarket_id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn discard_reduces_quantity_without_touching_sold() {
+        let mut conn = test_conn();
+        let mut card = make_card("1", "Bolt", "10");
+        card.price = "2.00".to_string();
+        sync_inventory_conn(&mut conn, &[card.clone()], "2026-01-01").unwrap();
+
+        let stats = discard_cards_conn(&mut conn, &[(card, 3)]).unwrap();
+        assert_eq!(stats.variants_updated, 1);
+        assert_eq!(stats.copies_discarded, 3);
+
+        let (qty, _, _) = get_row(&conn, "1").unwrap();
+        assert_eq!(qty, 7, "quantity reduced by the discarded amount");
+        assert_eq!(
+            sold_qty(&conn, "1"),
+            0,
+            "discards must never count as sales"
+        );
+    }
+
+    #[test]
+    fn discard_does_not_inflate_revenue_on_next_sync() {
+        // End-to-end: discard, then re-sync a CSV that reflects the reduced stock
+        // (as the exported update CSV would after being imported into Cardmarket).
+        // No copies must be attributed as sold.
+        let mut conn = test_conn();
+        let card10 = make_card("1", "Bolt", "10");
+        sync_inventory_conn(&mut conn, std::slice::from_ref(&card10), "2026-01-01").unwrap();
+
+        discard_cards_conn(&mut conn, &[(card10, 4)]).unwrap();
+
+        // Cardmarket now reports the post-discard quantity of 6.
+        let card6 = make_card("1", "Bolt", "6");
+        sync_inventory_conn(&mut conn, &[card6], "2026-01-02").unwrap();
+
+        assert_eq!(
+            sold_qty(&conn, "1"),
+            0,
+            "no phantom sale after discard sync"
+        );
+        let (qty, _, _) = get_row(&conn, "1").unwrap();
+        assert_eq!(qty, 6);
+    }
+
+    #[test]
+    fn discard_clamps_at_available_quantity() {
+        let mut conn = test_conn();
+        let card = make_card("1", "Bolt", "2");
+        sync_inventory_conn(&mut conn, std::slice::from_ref(&card), "2026-01-01").unwrap();
+
+        // Ask to discard more than exist.
+        let stats = discard_cards_conn(&mut conn, &[(card, 5)]).unwrap();
+        assert_eq!(stats.copies_discarded, 2, "clamped to available stock");
+        let (qty, _, _) = get_row(&conn, "1").unwrap();
+        assert_eq!(qty, 0);
+    }
+
+    #[test]
+    fn discard_sums_same_variant_across_entries() {
+        // Same variant selected from two physical locations must collapse into one
+        // clamped write-off, not two independent ones.
+        let mut conn = test_conn();
+        let card = make_card("1", "Bolt", "5");
+        sync_inventory_conn(&mut conn, std::slice::from_ref(&card), "2026-01-01").unwrap();
+
+        let stats = discard_cards_conn(&mut conn, &[(card.clone(), 2), (card, 2)]).unwrap();
+        assert_eq!(stats.variants_updated, 1);
+        assert_eq!(stats.copies_discarded, 4);
+        let (qty, _, _) = get_row(&conn, "1").unwrap();
+        assert_eq!(qty, 1);
+    }
+
+    #[test]
+    fn discard_ignores_unknown_variant() {
+        let mut conn = test_conn();
+        let known = make_card("1", "Bolt", "3");
+        sync_inventory_conn(&mut conn, &[known], "2026-01-01").unwrap();
+
+        let ghost = make_card("999", "Nonexistent", "3");
+        let stats = discard_cards_conn(&mut conn, &[(ghost, 1)]).unwrap();
+        assert_eq!(stats, DiscardStats::default(), "no rows touched");
+        let (qty, _, _) = get_row(&conn, "1").unwrap();
+        assert_eq!(qty, 3);
+    }
+
+    #[test]
+    fn discard_matches_new_format_variant_against_legacy_row() {
+        // A discard sourced from a new-format inventory-report row (snake_case
+        // condition, lowercase language, "false" flags) must still hit the
+        // canonical legacy-encoded DB row.
+        let mut conn = test_conn();
+        let legacy = make_card("42", "Bolt", "4");
+        sync_inventory_conn(&mut conn, &[legacy], "2026-01-01").unwrap();
+
+        let mut new_fmt = make_card("42", "Bolt", "0");
+        new_fmt.condition = "near_mint".to_string();
+        new_fmt.language = "english".to_string();
+        new_fmt.is_foil = "false".to_string();
+        new_fmt.is_signed = "false".to_string();
+        let stats = discard_cards_conn(&mut conn, &[(new_fmt, 1)]).unwrap();
+
+        assert_eq!(stats.variants_updated, 1);
+        let (qty, _, _) = get_row(&conn, "42").unwrap();
+        assert_eq!(qty, 3);
+        assert_eq!(sold_qty(&conn, "42"), 0);
     }
 
     // ==================== Lot Breakdown Tests ====================

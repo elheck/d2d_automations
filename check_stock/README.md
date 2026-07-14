@@ -24,7 +24,13 @@ egui desktop app for Magic: The Gathering card inventory management.
   the inventory DB; moves apply when you re-load an updated CSV, and each card keeps
   its lot/side so per-lot revenue is unaffected.
 - **Magic Singles Listing** — Card lookup via Scryfall by set code + collector number, with images and Cardmarket prices
-- **Search Cards** — Interactive inventory search with filtering
+- **Search Cards** — Interactive inventory search with filtering. Selected cards
+  can either be sent to the Stock Checker lists, or **discarded**: choose the
+  "Discard (remove without affecting revenue)" action to write cards off as junk.
+  This reduces the inventory DB *without* counting them as sold (tracked revenue is
+  unaffected) and exports a negative-delta stock-update CSV. Import that CSV into
+  Cardmarket before your next inventory sync so the drop is already reflected in
+  both places and no phantom sale is recorded.
 - **Picking** — Order picking workflow (reached via Stock Checker results)
 - **Pricing** — Node-based visual editor for filtering and pricing stock from CSV inventory
 - **Card Buy Helper** — Value a purchase offer from a card export CSV: split cards into individually-priced singles (by rarity and/or price threshold) versus bulk (flat rate per N cards), see the total offer, and export a breakdown CSV. Strictly read-only — never writes to the inventory database.
