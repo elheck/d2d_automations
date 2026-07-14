@@ -201,7 +201,7 @@ async fn run_sync(db: &Arc<Mutex<Connection>>) {
     };
 
     // Insert price history (only if not already present for this date)
-    {
+    let scan_date = {
         let mut conn = db.lock().unwrap();
         match insert_price_history(&mut conn, &guide, &catalog) {
             Ok(result) => {
@@ -212,18 +212,35 @@ async fn run_sync(db: &Arc<Mutex<Connection>>) {
                         result.price_date,
                         result.no_product
                     );
+                    // Only recompute buy signals when new data actually landed.
+                    Some(result.price_date)
                 } else {
                     log::info!(
                         "Price data for {} already exists, {} entries skipped",
                         result.price_date,
                         result.skipped
                     );
+                    None
                 }
             }
             Err(e) => {
                 log::error!("Failed to insert price history: {}", e);
                 return;
             }
+        }
+    };
+
+    // Refresh the precomputed buy-signal ranking so it's ready for the web client.
+    // Runs once per day, right after fresh price data is ingested.
+    if let Some(price_date) = scan_date {
+        let mut conn = db.lock().unwrap();
+        match inventory_sync::scanner::run_scan(
+            &mut conn,
+            inventory_sync::scanner::DEFAULT_MIN_PRICE,
+            &price_date,
+        ) {
+            Ok(count) => log::info!("Computed {} buy signals for {}", count, price_date),
+            Err(e) => log::error!("Failed to compute buy signals: {}", e),
         }
     }
 

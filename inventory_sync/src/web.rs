@@ -15,10 +15,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
 use crate::database::{
-    get_id_expansion_for_product, get_latest_prices_bulk, get_price_history, get_product_by_id,
-    search_products_by_name, upsert_expansion_name,
+    get_buy_signals, get_id_expansion_for_product, get_latest_price_date, get_latest_prices_bulk,
+    get_price_history, get_product_by_id, search_products_by_name, upsert_expansion_name,
 };
-use crate::database::{LatestPrice, PriceHistoryPoint, ProductSearchResult};
+use crate::database::{BuySignalScan, LatestPrice, PriceHistoryPoint, ProductSearchResult};
 use crate::image_cache::{fetch_card_info_cached, fetch_image_cached, ImageCache};
 use crate::indicators::{
     calculate_all_indicators, calculate_cardmarket_signals, CardmarketSignals, TechnicalIndicators,
@@ -266,6 +266,75 @@ async fn latest_prices_handler(
     }
 }
 
+/// Buy-signals query parameters.
+#[derive(Deserialize)]
+struct BuySignalsParams {
+    #[serde(default = "default_buy_signals_limit")]
+    limit: usize,
+}
+
+fn default_buy_signals_limit() -> usize {
+    100
+}
+
+/// Maximum number of buy signals a single request may ask for.
+const MAX_BUY_SIGNALS_LIMIT: usize = 500;
+
+/// GET /api/buy-signals?limit=100
+///
+/// Returns the precomputed ranked list of undervalued dip-buy candidates.
+///
+/// The ranking is refreshed once per day after new price data is ingested. If it
+/// has never been computed yet (e.g. right after first startup) but price history
+/// exists, it is computed lazily on this request so the view is never empty.
+async fn buy_signals_handler(
+    State(state): State<AppState>,
+    Query(params): Query<BuySignalsParams>,
+) -> Result<Json<ApiResponse<BuySignalScan>>, StatusCode> {
+    let limit = params.limit.min(MAX_BUY_SIGNALS_LIMIT);
+    let mut conn = state.db.lock().unwrap();
+
+    // Lazily compute on first view if the daily scan hasn't run yet.
+    let scan = match get_buy_signals(&conn, limit) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Buy signals lookup error: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    if scan.computed_at.is_none() {
+        if let Ok(Some(price_date)) = get_latest_price_date(&conn) {
+            log::info!(
+                "No buy-signal scan yet; computing on demand for {}",
+                price_date
+            );
+            if let Err(e) =
+                crate::scanner::run_scan(&mut conn, crate::scanner::DEFAULT_MIN_PRICE, &price_date)
+            {
+                log::error!("On-demand buy-signal scan failed: {}", e);
+            }
+            return match get_buy_signals(&conn, limit) {
+                Ok(s) => Ok(Json(ApiResponse {
+                    success: true,
+                    data: Some(s),
+                    error: None,
+                })),
+                Err(e) => {
+                    log::error!("Buy signals lookup error: {}", e);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            };
+        }
+    }
+
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some(scan),
+        error: None,
+    }))
+}
+
 /// Build the web server router
 pub fn create_router(db: Arc<Mutex<Connection>>, image_cache: Arc<ImageCache>) -> Router {
     let state = AppState { db, image_cache };
@@ -275,6 +344,7 @@ pub fn create_router(db: Arc<Mutex<Connection>>, image_cache: Arc<ImageCache>) -
         .route("/api/health", get(health_handler))
         .route("/api/search", get(search_handler))
         .route("/api/prices/{id}", get(prices_handler))
+        .route("/api/buy-signals", get(buy_signals_handler))
         .route("/api/latest-prices", post(latest_prices_handler))
         .route("/api/card-image/{id}", get(card_image_handler))
         .route("/api/card-info/{id}", get(card_info_handler))
@@ -344,6 +414,14 @@ mod tests {
 
         // Test that AppState is Clone
         let _state2 = state.clone();
+    }
+
+    #[test]
+    fn test_buy_signals_default_limit() {
+        let params = BuySignalsParams {
+            limit: default_buy_signals_limit(),
+        };
+        assert_eq!(params.limit, 100);
     }
 
     #[test]

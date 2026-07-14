@@ -66,6 +66,24 @@ pub fn init_schema(conn: &Connection) -> DbResult<()> {
             id_expansion INTEGER PRIMARY KEY,
             name TEXT NOT NULL
         );
+
+        -- Precomputed buy-signal scan results.
+        -- Refreshed once per day after new price data is ingested, so the web
+        -- client can read a ready-made ranking instead of scanning on request.
+        -- `payload` holds the JSON-serialized BuySignal; `rank` preserves order.
+        CREATE TABLE IF NOT EXISTS buy_signals (
+            rank INTEGER PRIMARY KEY,
+            id_product INTEGER NOT NULL,
+            score REAL NOT NULL,
+            payload TEXT NOT NULL
+        );
+
+        -- Single-row metadata for the buy-signal scan (when it last ran).
+        CREATE TABLE IF NOT EXISTS buy_signals_meta (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            computed_at TEXT NOT NULL,
+            price_date TEXT NOT NULL
+        );
         ",
     )?;
 
@@ -479,6 +497,182 @@ pub fn get_latest_prices_bulk(conn: &Connection, ids: &[u64]) -> DbResult<Vec<La
         }
     }
     Ok(results)
+}
+
+/// A single product's recent price series, used by the buy-signal scanner.
+///
+/// Rows are ordered oldest → newest. Metadata (name, expansion) is joined in so
+/// the scanner can build a self-contained result without a second query per card.
+#[derive(Debug, Clone)]
+pub struct ProductPriceSeries {
+    pub id_product: u64,
+    pub name: String,
+    pub category_name: String,
+    pub id_expansion: u64,
+    pub expansion_name: Option<String>,
+    /// One entry per available date, oldest first.
+    pub points: Vec<PriceHistoryPoint>,
+}
+
+/// Fetch recent price history for every product that currently trades at or above
+/// `min_trend` (using the product's most recent trend price).
+///
+/// Only rows on or after `since_date` are returned, ordered by product then date,
+/// so the caller receives one [`ProductPriceSeries`] per product with its points
+/// in chronological order. Products with no row on/after `since_date`, or whose
+/// latest trend is below `min_trend`, are excluded.
+///
+/// `since_date` must be an ISO date string (`YYYY-MM-DD`).
+pub fn get_recent_series_for_scan(
+    conn: &Connection,
+    since_date: &str,
+    min_trend: f64,
+) -> DbResult<Vec<ProductPriceSeries>> {
+    // Single scan of the windowed rows, joined to product metadata. Grouping into
+    // per-product series happens in Rust because the rows arrive already sorted by
+    // (id_product, price_date). The min-price filter is applied per-product after
+    // grouping so it keys off the product's latest trend rather than any single row.
+    let mut stmt = conn.prepare(
+        "SELECT ph.id_product, p.name, p.category_name, p.id_expansion, e.name,
+                ph.price_date, ph.avg, ph.low, ph.trend, ph.avg1, ph.avg7, ph.avg30,
+                ph.avg_foil, ph.low_foil, ph.trend_foil, ph.avg1_foil, ph.avg7_foil, ph.avg30_foil
+         FROM price_history ph
+         JOIN products p ON p.id_product = ph.id_product
+         LEFT JOIN expansion_names e ON p.id_expansion = e.id_expansion
+         WHERE ph.price_date >= ?1
+         ORDER BY ph.id_product ASC, ph.price_date ASC",
+    )?;
+
+    let mut rows = stmt.query(params![since_date])?;
+
+    let mut series: Vec<ProductPriceSeries> = Vec::new();
+    while let Some(row) = rows.next()? {
+        let id_product: u64 = row.get(0)?;
+        let point = PriceHistoryPoint {
+            price_date: row.get(5)?,
+            avg: row.get(6)?,
+            low: row.get(7)?,
+            trend: row.get(8)?,
+            avg1: row.get(9)?,
+            avg7: row.get(10)?,
+            avg30: row.get(11)?,
+            avg_foil: row.get(12)?,
+            low_foil: row.get(13)?,
+            trend_foil: row.get(14)?,
+            avg1_foil: row.get(15)?,
+            avg7_foil: row.get(16)?,
+            avg30_foil: row.get(17)?,
+        };
+
+        // Rows are sorted by id_product, so a new id always starts a new series.
+        match series.last_mut() {
+            Some(last) if last.id_product == id_product => last.points.push(point),
+            _ => series.push(ProductPriceSeries {
+                id_product,
+                name: row.get(1)?,
+                category_name: row.get(2)?,
+                id_expansion: row.get(3)?,
+                expansion_name: row.get(4)?,
+                points: vec![point],
+            }),
+        }
+    }
+
+    // Apply the min-price filter on each product's most recent trend price.
+    series.retain(|s| {
+        s.points
+            .last()
+            .and_then(|p| p.trend)
+            .map(|t| t >= min_trend)
+            .unwrap_or(false)
+    });
+
+    Ok(series)
+}
+
+/// One row destined for the `buy_signals` table.
+///
+/// `payload` is the JSON-serialized signal (produced by the scanner) so the
+/// database layer stays decoupled from the scanner's `BuySignal` type.
+pub struct BuySignalRow {
+    pub id_product: u64,
+    pub score: f64,
+    pub payload: String,
+}
+
+/// Replace the entire `buy_signals` table with a fresh ranked scan, transactionally.
+///
+/// Rows are stored in the order given (rank 0 = strongest). `price_date` records
+/// which day's price data the scan was computed from. The whole swap is atomic:
+/// on any failure the previous results are left intact.
+pub fn replace_buy_signals(
+    conn: &mut Connection,
+    rows: &[BuySignalRow],
+    price_date: &str,
+) -> DbResult<()> {
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM buy_signals", [])?;
+    {
+        let mut stmt = tx.prepare_cached(
+            "INSERT INTO buy_signals (rank, id_product, score, payload) VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        for (rank, row) in rows.iter().enumerate() {
+            stmt.execute(params![
+                rank as i64,
+                row.id_product,
+                row.score,
+                &row.payload
+            ])?;
+        }
+    }
+    tx.execute(
+        "INSERT OR REPLACE INTO buy_signals_meta (id, computed_at, price_date)
+         VALUES (1, datetime('now'), ?1)",
+        params![price_date],
+    )?;
+    tx.commit()?;
+    log::info!("Stored {} buy signals for {}", rows.len(), price_date);
+    Ok(())
+}
+
+/// The precomputed buy-signal scan, ready to serve to the web client.
+#[derive(Debug, Serialize)]
+pub struct BuySignalScan {
+    /// When the scan was last computed (UTC, `datetime('now')` format), if ever.
+    pub computed_at: Option<String>,
+    /// Which day's price data the scan was computed from.
+    pub price_date: Option<String>,
+    /// JSON payloads of each ranked signal, strongest first, as raw JSON values.
+    pub signals: Vec<serde_json::Value>,
+}
+
+/// Read up to `limit` precomputed buy signals (rank order), plus scan metadata.
+pub fn get_buy_signals(conn: &Connection, limit: usize) -> DbResult<BuySignalScan> {
+    let (computed_at, price_date): (Option<String>, Option<String>) = match conn.query_row(
+        "SELECT computed_at, price_date FROM buy_signals_meta WHERE id = 1",
+        [],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    ) {
+        Ok((c, d)) => (Some(c), Some(d)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => (None, None),
+        Err(e) => return Err(e),
+    };
+
+    let mut stmt = conn.prepare("SELECT payload FROM buy_signals ORDER BY rank ASC LIMIT ?1")?;
+    let signals: DbResult<Vec<serde_json::Value>> = stmt
+        .query_map(params![limit], |row| {
+            let payload: String = row.get(0)?;
+            // Payloads are written by our own scanner; if one is somehow malformed,
+            // fall back to null rather than failing the whole request.
+            Ok(serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null))
+        })?
+        .collect();
+
+    Ok(BuySignalScan {
+        computed_at,
+        price_date,
+        signals: signals?,
+    })
 }
 
 /// Get product details by ID
@@ -911,6 +1105,189 @@ mod tests {
         assert_eq!(history.len(), 2);
         assert_eq!(history[0].price_date, "2026-02-01");
         assert_eq!(history[1].price_date, "2026-03-01");
+    }
+
+    #[test]
+    fn get_recent_series_groups_by_product_in_date_order() {
+        let mut conn = test_db();
+        let catalog = ProductCatalog::from_entries(vec![
+            make_test_product(1, "Black Lotus"),
+            make_test_product(2, "Mox Pearl"),
+        ]);
+        upsert_products(&mut conn, &catalog).unwrap();
+
+        for (date, p1, p2) in [
+            ("2026-01-01T10:00:00+0100", 100.0, 50.0),
+            ("2026-02-01T10:00:00+0100", 110.0, 55.0),
+            ("2026-03-01T10:00:00+0100", 120.0, 60.0),
+        ] {
+            let guide = PriceGuide::from_entries(
+                vec![
+                    make_test_price_entry(1, Some(p1)),
+                    make_test_price_entry(2, Some(p2)),
+                ],
+                date,
+            );
+            insert_price_history(&mut conn, &guide, &catalog).unwrap();
+        }
+
+        let series = get_recent_series_for_scan(&conn, "2026-01-01", 1.0).unwrap();
+        assert_eq!(series.len(), 2);
+
+        let lotus = series.iter().find(|s| s.id_product == 1).unwrap();
+        assert_eq!(lotus.points.len(), 3);
+        // Points are chronological (oldest first).
+        assert_eq!(lotus.points[0].price_date, "2026-01-01");
+        assert_eq!(lotus.points[2].price_date, "2026-03-01");
+    }
+
+    #[test]
+    fn get_recent_series_filters_by_since_date() {
+        let mut conn = test_db();
+        let catalog = ProductCatalog::from_entries(vec![make_test_product(1, "Black Lotus")]);
+        upsert_products(&mut conn, &catalog).unwrap();
+
+        for (date, price) in [
+            ("2026-01-01T10:00:00+0100", 100.0),
+            ("2026-02-01T10:00:00+0100", 110.0),
+            ("2026-03-01T10:00:00+0100", 120.0),
+        ] {
+            let guide = PriceGuide::from_entries(vec![make_test_price_entry(1, Some(price))], date);
+            insert_price_history(&mut conn, &guide, &catalog).unwrap();
+        }
+
+        let series = get_recent_series_for_scan(&conn, "2026-02-01", 1.0).unwrap();
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].points.len(), 2);
+        assert_eq!(series[0].points[0].price_date, "2026-02-01");
+    }
+
+    #[test]
+    fn get_recent_series_excludes_products_below_min_trend() {
+        let mut conn = test_db();
+        let catalog = ProductCatalog::from_entries(vec![
+            make_test_product(1, "Expensive Card"),
+            make_test_product(2, "Penny Card"),
+        ]);
+        upsert_products(&mut conn, &catalog).unwrap();
+
+        // make_test_price_entry sets trend to the given price.
+        let guide = PriceGuide::from_entries(
+            vec![
+                make_test_price_entry(1, Some(5.0)),
+                make_test_price_entry(2, Some(0.10)),
+            ],
+            "2026-02-01T10:00:00+0100",
+        );
+        insert_price_history(&mut conn, &guide, &catalog).unwrap();
+
+        let series = get_recent_series_for_scan(&conn, "2026-01-01", 1.0).unwrap();
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].id_product, 1);
+    }
+
+    #[test]
+    fn get_recent_series_uses_latest_trend_for_price_filter() {
+        let mut conn = test_db();
+        let catalog = ProductCatalog::from_entries(vec![make_test_product(1, "Riser")]);
+        upsert_products(&mut conn, &catalog).unwrap();
+
+        // Started as a penny card, most recent trend is above the threshold.
+        for (date, price) in [
+            ("2026-01-01T10:00:00+0100", 0.20),
+            ("2026-02-01T10:00:00+0100", 3.00),
+        ] {
+            let guide = PriceGuide::from_entries(vec![make_test_price_entry(1, Some(price))], date);
+            insert_price_history(&mut conn, &guide, &catalog).unwrap();
+        }
+
+        let series = get_recent_series_for_scan(&conn, "2026-01-01", 1.0).unwrap();
+        assert_eq!(series.len(), 1, "latest trend 3.00 >= 1.0 should be kept");
+    }
+
+    #[test]
+    fn buy_signals_round_trip_and_meta() {
+        let mut conn = test_db();
+
+        let rows = vec![
+            BuySignalRow {
+                id_product: 10,
+                score: 92.5,
+                payload: r#"{"id_product":10,"score":92.5}"#.to_string(),
+            },
+            BuySignalRow {
+                id_product: 20,
+                score: 71.0,
+                payload: r#"{"id_product":20,"score":71.0}"#.to_string(),
+            },
+        ];
+        replace_buy_signals(&mut conn, &rows, "2026-03-01").unwrap();
+
+        let scan = get_buy_signals(&conn, 100).unwrap();
+        assert_eq!(scan.price_date.as_deref(), Some("2026-03-01"));
+        assert!(scan.computed_at.is_some());
+        assert_eq!(scan.signals.len(), 2);
+        // Rank order preserved (strongest first).
+        assert_eq!(scan.signals[0]["id_product"], 10);
+        assert_eq!(scan.signals[1]["id_product"], 20);
+    }
+
+    #[test]
+    fn replace_buy_signals_overwrites_previous_scan() {
+        let mut conn = test_db();
+
+        replace_buy_signals(
+            &mut conn,
+            &[BuySignalRow {
+                id_product: 1,
+                score: 50.0,
+                payload: r#"{"id_product":1}"#.to_string(),
+            }],
+            "2026-03-01",
+        )
+        .unwrap();
+
+        // Second scan replaces the first entirely.
+        replace_buy_signals(
+            &mut conn,
+            &[BuySignalRow {
+                id_product: 2,
+                score: 80.0,
+                payload: r#"{"id_product":2}"#.to_string(),
+            }],
+            "2026-03-02",
+        )
+        .unwrap();
+
+        let scan = get_buy_signals(&conn, 100).unwrap();
+        assert_eq!(scan.signals.len(), 1);
+        assert_eq!(scan.signals[0]["id_product"], 2);
+        assert_eq!(scan.price_date.as_deref(), Some("2026-03-02"));
+    }
+
+    #[test]
+    fn get_buy_signals_empty_when_never_scanned() {
+        let conn = test_db();
+        let scan = get_buy_signals(&conn, 100).unwrap();
+        assert!(scan.computed_at.is_none());
+        assert!(scan.price_date.is_none());
+        assert!(scan.signals.is_empty());
+    }
+
+    #[test]
+    fn get_buy_signals_respects_limit() {
+        let mut conn = test_db();
+        let rows: Vec<BuySignalRow> = (0..5)
+            .map(|i| BuySignalRow {
+                id_product: i,
+                score: 100.0 - i as f64,
+                payload: format!(r#"{{"id_product":{}}}"#, i),
+            })
+            .collect();
+        replace_buy_signals(&mut conn, &rows, "2026-03-01").unwrap();
+
+        let scan = get_buy_signals(&conn, 2).unwrap();
+        assert_eq!(scan.signals.len(), 2);
     }
 
     #[test]

@@ -2,13 +2,6 @@
 
 This document contains feature requests for the Check Stock Application.
 
-The features below focus on turning existing data (per-variant `sold_quantity`,
-the `sold_events` log, daily snapshots, the Cardmarket price guide, lot
-locations, `listed_at` dates) into better business decisions: what to buy, what
-to reprice, what to write off, and which sourcing channels actually make money.
-
-Already implemented: the per-variant **sold-events log** (recorded on every
-inventory sync) and the **Restock Report** screen built on it.
 
 ## High Priority
 
