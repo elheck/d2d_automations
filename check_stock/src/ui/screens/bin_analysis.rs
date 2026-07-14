@@ -27,9 +27,16 @@ impl BinAnalysisScreen {
 
                     // ── File picker ─────────────────────────────────────────
                     style::section_frame().show(ui, |ui| {
-                        FilePicker::new("Inventory CSV:", &mut state.inventory_path)
+                        if FilePicker::new("Inventory CSV:", &mut state.inventory_path)
                             .with_filter("CSV", &["csv"])
-                            .show(ui);
+                            .show(ui)
+                        {
+                            if let Ok(inventory) = read_csv(&state.inventory_path) {
+                                if let Err(e) = crate::inventory_db::sync_inventory(&inventory) {
+                                    log::warn!("Inventory DB sync failed: {}", e);
+                                }
+                            }
+                        }
                     });
 
                     ui.add_space(10.0);
