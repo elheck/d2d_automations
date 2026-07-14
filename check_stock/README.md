@@ -5,13 +5,20 @@ egui desktop app for Magic: The Gathering card inventory management.
 ## Screens
 
 - **Stock Checker** — Match inventory CSV against wantslists
-- **Stock Analysis** — Inventory overview, per-lot revenue tracking, and sales metrics
+- **Stock Analysis** — Inventory overview, per-lot revenue tracking, sales metrics,
+  **sales velocity** (copies/revenue per week from daily snapshots), and **dead-stock
+  aging** (in-stock cards bucketed by how long they've been listed)
 - **Bin Analysis** — Bin capacity utilization and free-slot analysis
 - **Magic Singles Listing** — Card lookup via Scryfall by set code + collector number, with images and Cardmarket prices
 - **Search Cards** — Interactive inventory search with filtering
 - **Picking** — Order picking workflow (reached via Stock Checker results)
 - **Pricing** — Node-based visual editor for filtering and pricing stock from CSV inventory
 - **Card Buy Helper** — Value a purchase offer from a card export CSV: split cards into individually-priced singles (by rarity and/or price threshold) versus bulk (flat rate per N cards), see the total offer, and export a breakdown CSV. Strictly read-only — never writes to the inventory database.
+- **Mispricing Report** — Compare every in-stock listing against a Cardmarket
+  price-guide reference (trend/avg/low, foil-aware) to surface under- and over-priced
+  cards, the revenue upside of repricing, and capital stuck above market. Fetches the
+  price guide from the Cardmarket CDN or loads it from a local JSON file. Strictly
+  read-only — it reports, it never writes prices.
 
 ## Data Sources
 

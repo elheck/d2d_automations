@@ -19,6 +19,7 @@ pub enum Screen {
     Picking,
     Pricing,
     BuyHelper,
+    Mispricing,
 }
 
 #[derive(PartialEq)]
@@ -801,6 +802,84 @@ impl BuyHelperState {
             single_buy_percent: self.single_buy_percent,
             bulk_rate: self.bulk_rate,
             bulk_batch: self.bulk_batch,
+        }
+    }
+}
+
+// ── Mispricing screen ─────────────────────────────────────────────────────────
+
+/// Which column the mispricing table is sorted by.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum MispricingSort {
+    /// Absolute money impact of the mispricing: |delta_abs| × quantity.
+    #[default]
+    Impact,
+    DeltaPct,
+    Listed,
+    Market,
+    Name,
+    Quantity,
+}
+
+/// Verdict filter applied to the mispricing table.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum VerdictFilter {
+    #[default]
+    All,
+    Underpriced,
+    Overpriced,
+    NoData,
+}
+
+impl VerdictFilter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VerdictFilter::All => "All",
+            VerdictFilter::Underpriced => "Underpriced",
+            VerdictFilter::Overpriced => "Overpriced",
+            VerdictFilter::NoData => "No data",
+        }
+    }
+}
+
+/// State for the read-only Mispricing / Margin report screen.
+pub struct MispricingState {
+    /// Half-width of the "fair" price band, in percent.
+    pub threshold_pct: f64,
+    /// Which price-guide field to treat as the market reference.
+    pub ref_source: InventoryPriceSource,
+    /// Loaded Cardmarket price guide (from CDN fetch or a local file).
+    pub price_guide: Option<PriceGuide>,
+    /// Human-readable status of the price-guide acquisition.
+    pub guide_status: String,
+    pub guide_loading: bool,
+    /// Path used by the "load from file" picker.
+    pub guide_path: String,
+    /// The computed report, if analysis has been run.
+    pub report: Option<crate::mispricing::MispricingReport>,
+    pub error: Option<String>,
+    pub sort: MispricingSort,
+    pub sort_desc: bool,
+    pub filter: VerdictFilter,
+    /// Receiver for the background price-guide fetch, if one is in flight.
+    pub guide_rx: Option<std::sync::mpsc::Receiver<Result<PriceGuide, String>>>,
+}
+
+impl Default for MispricingState {
+    fn default() -> Self {
+        Self {
+            threshold_pct: 15.0,
+            ref_source: InventoryPriceSource::Trend,
+            price_guide: None,
+            guide_status: String::new(),
+            guide_loading: false,
+            guide_path: String::new(),
+            report: None,
+            error: None,
+            sort: MispricingSort::default(),
+            sort_desc: true,
+            filter: VerdictFilter::default(),
+            guide_rx: None,
         }
     }
 }

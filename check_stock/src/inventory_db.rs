@@ -69,6 +69,75 @@ pub struct OldestInStockEntry {
     pub location: String,
 }
 
+/// A single in-stock card variant (quantity > 0) pulled from the database.
+///
+/// Used by analysis features (mispricing, aging) that need per-card data rather
+/// than the aggregate figures in [`DbStats`].
+#[derive(Debug, Clone)]
+pub struct InStockCard {
+    pub cardmarket_id: String,
+    pub name: String,
+    pub set_code: String,
+    pub cn: String,
+    pub condition: String,
+    pub language: String,
+    pub is_foil: bool,
+    pub rarity: String,
+    pub quantity: i64,
+    /// The seller's currently-listed unit price, in EUR.
+    pub price: f64,
+    pub location: String,
+    /// `listed_at` when present, otherwise `first_synced_at`. The best available
+    /// proxy for "how long has this been sitting in stock".
+    pub effective_date: String,
+}
+
+/// One daily inventory snapshot row. `sold_*_cumulative` are running totals since
+/// the first sync, so a period's activity is the difference between two rows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InventorySnapshot {
+    pub date: String,
+    pub in_stock_copies: i64,
+    pub in_stock_value: f64,
+    pub sold_copies_cumulative: i64,
+    pub sold_revenue_cumulative: f64,
+}
+
+/// Sales throughput derived from the snapshot history.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SalesVelocity {
+    /// Days spanned between the earliest and latest snapshot.
+    pub period_days: i64,
+    /// Copies sold across the whole tracked period.
+    pub sold_copies: i64,
+    /// Revenue earned across the whole tracked period, in EUR.
+    pub sold_revenue: f64,
+    /// Average copies sold per week over the whole tracked period.
+    pub copies_per_week: f64,
+    /// Average revenue per week over the whole tracked period, in EUR.
+    pub revenue_per_week: f64,
+    /// Copies sold in the trailing ~7 days, if a snapshot that old exists.
+    pub last7_copies: Option<i64>,
+    /// Copies sold in the trailing ~30 days, if a snapshot that old exists.
+    pub last30_copies: Option<i64>,
+}
+
+/// One age bucket in the dead-stock aging report.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgingBucket {
+    pub label: &'static str,
+    /// Inclusive lower age bound in days.
+    pub min_days: i64,
+    /// Inclusive upper age bound in days; `None` means open-ended.
+    pub max_days: Option<i64>,
+    /// Number of distinct in-stock variant rows in this bucket.
+    pub listings: i64,
+    /// Total copies in this bucket.
+    pub copies: i64,
+    /// Capital tied up in this bucket (Σ price × quantity), in EUR.
+    pub value: f64,
+}
+
 /// Aggregate statistics about the current inventory database contents.
 #[derive(Debug, Default, Clone)]
 pub struct DbStats {
@@ -104,6 +173,10 @@ pub struct DbStats {
     pub rarity_breakdown: Vec<(String, i64)>,
     /// Revenue and stock breakdown per lot (extracted from location field)
     pub lot_breakdown: Vec<LotBreakdown>,
+    /// Dead-stock aging: in-stock cards bucketed by how long they've been listed.
+    pub aging_buckets: Vec<AgingBucket>,
+    /// Sales velocity derived from snapshot history; `None` until ≥2 days of data.
+    pub velocity: Option<SalesVelocity>,
 }
 
 /// Statistics from a sync operation
@@ -168,6 +241,21 @@ const INVENTORY_CARDS_DDL: &str = "
     );
     CREATE UNIQUE INDEX idx_inventory_article_key
         ON inventory_cards (cardmarket_id, condition, language, is_foil, is_signed);
+";
+
+// Daily point-in-time snapshot of the whole inventory, written once per sync day.
+// Enables period-over-period sales velocity: because `sold_copies` and
+// `sold_revenue` are stored *cumulatively*, the difference between any two
+// snapshot dates is exactly what sold (and was earned) in that window.
+// `date` is the primary key so re-syncing on the same day overwrites its row.
+const INVENTORY_SNAPSHOTS_DDL: &str = "
+    CREATE TABLE IF NOT EXISTS inventory_snapshots (
+        date                    TEXT PRIMARY KEY,
+        in_stock_copies         INTEGER NOT NULL,
+        in_stock_value          REAL NOT NULL,
+        sold_copies_cumulative  INTEGER NOT NULL,
+        sold_revenue_cumulative REAL NOT NULL
+    );
 ";
 
 // Migration v1 → v2: replace single cardmarket_id PRIMARY KEY with composite UNIQUE key.
@@ -292,7 +380,8 @@ fn init_schema(conn: &Connection) -> DbResult<()> {
         .is_some();
 
     if !table_exists {
-        return conn.execute_batch(INVENTORY_CARDS_DDL);
+        conn.execute_batch(INVENTORY_CARDS_DDL)?;
+        return conn.execute_batch(INVENTORY_SNAPSHOTS_DDL);
     }
 
     // v3 is identified by idx_inventory_article_key_v3 (6-field key including location).
@@ -346,6 +435,10 @@ fn init_schema(conn: &Connection) -> DbResult<()> {
         )?;
     }
 
+    // Snapshot table is orthogonal to the card-schema migrations; ensure it exists
+    // on every open regardless of which card-schema version we came from.
+    conn.execute_batch(INVENTORY_SNAPSHOTS_DDL)?;
+
     Ok(())
 }
 
@@ -385,7 +478,114 @@ pub fn sync_inventory(cards: &[Card]) -> DbResult<SyncStats> {
 /// Queries aggregate statistics from the local inventory database.
 pub fn get_db_stats() -> DbResult<DbStats> {
     let conn = open_db()?;
-    get_db_stats_conn(&conn)
+    get_db_stats_conn(&conn, &today_date())
+}
+
+/// Returns every in-stock card variant (quantity > 0) from the database.
+pub fn get_in_stock_cards() -> DbResult<Vec<InStockCard>> {
+    let conn = open_db()?;
+    get_in_stock_cards_conn(&conn)
+}
+
+/// Inner query that accepts an explicit connection — used in tests.
+fn get_in_stock_cards_conn(conn: &Connection) -> DbResult<Vec<InStockCard>> {
+    conn.prepare(
+        "SELECT cardmarket_id, name, set_code, cn, condition, language,
+                (is_foil = '1' OR LOWER(is_foil) = 'true') AS foil,
+                rarity, quantity, CAST(price AS REAL),
+                COALESCE(location, ''),
+                COALESCE(NULLIF(listed_at, ''), first_synced_at) AS effective_date
+         FROM inventory_cards
+         WHERE quantity > 0",
+    )?
+    .query_map([], |r| {
+        Ok(InStockCard {
+            cardmarket_id: r.get(0)?,
+            name: r.get(1)?,
+            set_code: r.get(2)?,
+            cn: r.get(3)?,
+            condition: r.get(4)?,
+            language: r.get(5)?,
+            is_foil: r.get(6)?,
+            rarity: r.get(7)?,
+            quantity: r.get(8)?,
+            price: r.get(9)?,
+            location: r.get(10)?,
+            effective_date: r.get(11)?,
+        })
+    })?
+    .collect()
+}
+
+/// Reads all snapshot rows ordered by date ascending.
+fn read_snapshots_conn(conn: &Connection) -> DbResult<Vec<InventorySnapshot>> {
+    conn.prepare(
+        "SELECT date, in_stock_copies, in_stock_value,
+                sold_copies_cumulative, sold_revenue_cumulative
+         FROM inventory_snapshots ORDER BY date ASC",
+    )?
+    .query_map([], |r| {
+        Ok(InventorySnapshot {
+            date: r.get(0)?,
+            in_stock_copies: r.get(1)?,
+            in_stock_value: r.get(2)?,
+            sold_copies_cumulative: r.get(3)?,
+            sold_revenue_cumulative: r.get(4)?,
+        })
+    })?
+    .collect()
+}
+
+/// Parses a `YYYY-MM-DD` snapshot date.
+fn parse_date(s: &str) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+}
+
+/// Computes sales velocity from an ascending-by-date slice of snapshots.
+///
+/// Pure and deterministic: all figures are derived from the cumulative sold
+/// counters carried by the snapshots, so no wall-clock access is needed.
+/// Returns `None` until there are at least two snapshots spanning ≥1 day.
+fn compute_velocity(snaps: &[InventorySnapshot]) -> Option<SalesVelocity> {
+    let earliest = snaps.first()?;
+    let latest = snaps.last()?;
+    let start = parse_date(&earliest.date)?;
+    let end = parse_date(&latest.date)?;
+    let period_days = (end - start).num_days();
+    if period_days < 1 {
+        return None;
+    }
+
+    let sold_copies = (latest.sold_copies_cumulative - earliest.sold_copies_cumulative).max(0);
+    let sold_revenue = (latest.sold_revenue_cumulative - earliest.sold_revenue_cumulative).max(0.0);
+    let weeks = period_days as f64 / 7.0;
+    let copies_per_week = sold_copies as f64 / weeks;
+    let revenue_per_week = sold_revenue / weeks;
+
+    // Trailing-window sold counts: find the most recent snapshot on or before the
+    // target cutoff and diff its cumulative counter against the latest.
+    let window_sold = |days: i64| -> Option<i64> {
+        let cutoff = end - chrono::Duration::days(days);
+        let base = snaps
+            .iter()
+            .rev()
+            .find(|s| parse_date(&s.date).is_some_and(|d| d <= cutoff))?;
+        // Only meaningful if the base snapshot is strictly before the latest one.
+        if base.date == latest.date {
+            return None;
+        }
+        Some((latest.sold_copies_cumulative - base.sold_copies_cumulative).max(0))
+    };
+
+    Some(SalesVelocity {
+        period_days,
+        sold_copies,
+        sold_revenue,
+        copies_per_week,
+        revenue_per_week,
+        last7_copies: window_sold(7),
+        last30_copies: window_sold(30),
+    })
 }
 
 /// Extracts the lot number (e.g. `L0`, `L12`) from a location string.
@@ -465,8 +665,9 @@ fn lot_breakdown_from(conn: &Connection) -> DbResult<Vec<LotBreakdown>> {
     Ok(result)
 }
 
-/// Inner stats query that accepts an explicit connection — used in tests.
-fn get_db_stats_conn(conn: &Connection) -> DbResult<DbStats> {
+/// Inner stats query that accepts an explicit connection and reference date —
+/// used in tests. `today` (as `YYYY-MM-DD`) anchors the dead-stock aging report.
+fn get_db_stats_conn(conn: &Connection, today: &str) -> DbResult<DbStats> {
     let (total_articles, in_stock_articles, total_copies, total_value): (i64, i64, i64, f64) = conn
         .query_row(
             "SELECT
@@ -586,6 +787,15 @@ fn get_db_stats_conn(conn: &Connection) -> DbResult<DbStats> {
 
     let lot_breakdown = lot_breakdown_from(conn)?;
 
+    // Dead-stock aging: bucket in-stock cards by listing age relative to `today`.
+    let in_stock = get_in_stock_cards_conn(conn)?;
+    let aging_buckets = parse_date(today)
+        .map(|d| crate::aging::bucket_cards(&in_stock, d))
+        .unwrap_or_default();
+
+    // Sales velocity from snapshot history.
+    let velocity = compute_velocity(&read_snapshots_conn(conn)?);
+
     Ok(DbStats {
         total_articles,
         in_stock_articles,
@@ -603,6 +813,8 @@ fn get_db_stats_conn(conn: &Connection) -> DbResult<DbStats> {
         condition_breakdown,
         rarity_breakdown,
         lot_breakdown,
+        aging_buckets,
+        velocity,
     })
 }
 
@@ -774,6 +986,24 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
             stats.zeroed += 1;
         }
     }
+
+    // Phase 3: record today's snapshot from the now-current table state. Cumulative
+    // sold figures let later reads diff any two dates into a period velocity.
+    // INSERT OR REPLACE keyed on `date` keeps at most one row per day (same-day
+    // re-syncs overwrite it with the latest numbers).
+    tx.execute(
+        "INSERT OR REPLACE INTO inventory_snapshots
+            (date, in_stock_copies, in_stock_value,
+             sold_copies_cumulative, sold_revenue_cumulative)
+         SELECT
+            ?1,
+            COALESCE(SUM(CASE WHEN quantity > 0 THEN quantity ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN quantity > 0 THEN CAST(price AS REAL) * quantity ELSE 0 END), 0.0),
+            COALESCE(SUM(sold_quantity), 0),
+            COALESCE(SUM(CAST(price AS REAL) * sold_quantity), 0.0)
+         FROM inventory_cards",
+        params![today],
+    )?;
 
     tx.commit()?;
     if stats.upserted > 0 || stats.zeroed > 0 {
@@ -1026,7 +1256,7 @@ mod tests {
     #[test]
     fn get_db_stats_empty_db() {
         let conn = test_conn();
-        let stats = get_db_stats_conn(&conn).unwrap();
+        let stats = get_db_stats_conn(&conn, "2026-07-14").unwrap();
         assert_eq!(stats.total_articles, 0);
         assert_eq!(stats.in_stock_articles, 0);
         assert_eq!(stats.total_copies, 0);
@@ -1067,7 +1297,7 @@ mod tests {
         lotus.rarity = "Rare".to_string();
 
         sync_inventory_conn(&mut conn, &[bolt, lotus], "2026-01-01").unwrap();
-        let stats = get_db_stats_conn(&conn).unwrap();
+        let stats = get_db_stats_conn(&conn, "2026-07-14").unwrap();
 
         assert_eq!(stats.total_articles, 2);
         assert_eq!(stats.in_stock_articles, 2);
@@ -1481,7 +1711,7 @@ mod tests {
         let day2 = vec![make_card("1", "Counterspell", "3")];
         sync_inventory_conn(&mut conn, &day2, "2026-01-02").unwrap();
 
-        let stats = get_db_stats_conn(&conn).unwrap();
+        let stats = get_db_stats_conn(&conn, "2026-07-14").unwrap();
         // Both rows exist in DB, only 1 is in stock
         assert_eq!(stats.total_articles, 2);
         assert_eq!(stats.in_stock_articles, 1);
@@ -1693,7 +1923,7 @@ mod tests {
 
         sync_inventory_conn(&mut conn, &[c1, c2, c3], "2026-01-01").unwrap();
 
-        let stats = get_db_stats_conn(&conn).unwrap();
+        let stats = get_db_stats_conn(&conn, "2026-07-14").unwrap();
         assert_eq!(stats.lot_breakdown.len(), 2);
 
         let l1 = &stats.lot_breakdown[0];
@@ -1720,7 +1950,7 @@ mod tests {
         // All 4 copies sold
         sync_inventory_conn(&mut conn, &[], "2026-01-02").unwrap();
 
-        let stats = get_db_stats_conn(&conn).unwrap();
+        let stats = get_db_stats_conn(&conn, "2026-07-14").unwrap();
         assert_eq!(stats.lot_breakdown.len(), 1);
         let l3 = &stats.lot_breakdown[0];
         assert_eq!(l3.sold_copies, 4);
@@ -1739,7 +1969,7 @@ mod tests {
 
         sync_inventory_conn(&mut conn, &[c1, c2], "2026-01-01").unwrap();
 
-        let stats = get_db_stats_conn(&conn).unwrap();
+        let stats = get_db_stats_conn(&conn, "2026-07-14").unwrap();
         assert_eq!(stats.lot_breakdown.len(), 1);
         assert_eq!(stats.lot_breakdown[0].lot, "L1");
     }
@@ -1750,7 +1980,7 @@ mod tests {
         let card = make_card("1", "Bolt", "2");
         sync_inventory_conn(&mut conn, &[card], "2026-01-01").unwrap();
 
-        let stats = get_db_stats_conn(&conn).unwrap();
+        let stats = get_db_stats_conn(&conn, "2026-07-14").unwrap();
         assert!(stats.lot_breakdown.is_empty());
     }
 
@@ -1761,7 +1991,152 @@ mod tests {
         card.location = Some("A-0-1-4".to_string());
         sync_inventory_conn(&mut conn, &[card], "2026-01-01").unwrap();
 
-        let stats = get_db_stats_conn(&conn).unwrap();
+        let stats = get_db_stats_conn(&conn, "2026-07-14").unwrap();
         assert!(stats.lot_breakdown.is_empty());
+    }
+
+    // ==================== snapshots / velocity / in-stock ====================
+
+    #[test]
+    fn sync_writes_daily_snapshot() {
+        let mut conn = test_conn();
+        let mut a = make_card("1", "Bolt", "4");
+        a.price = "2.00".to_string();
+        sync_inventory_conn(&mut conn, &[a], "2026-01-01").unwrap();
+
+        let snaps = read_snapshots_conn(&conn).unwrap();
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(snaps[0].date, "2026-01-01");
+        assert_eq!(snaps[0].in_stock_copies, 4);
+        assert!((snaps[0].in_stock_value - 8.0).abs() < 0.001);
+        assert_eq!(snaps[0].sold_copies_cumulative, 0);
+    }
+
+    #[test]
+    fn same_day_resync_overwrites_snapshot() {
+        let mut conn = test_conn();
+        sync_inventory_conn(&mut conn, &[make_card("1", "Bolt", "4")], "2026-01-01").unwrap();
+        sync_inventory_conn(&mut conn, &[make_card("1", "Bolt", "2")], "2026-01-01").unwrap();
+
+        let snaps = read_snapshots_conn(&conn).unwrap();
+        assert_eq!(snaps.len(), 1, "one row per day");
+        assert_eq!(snaps[0].in_stock_copies, 2);
+    }
+
+    #[test]
+    fn snapshot_tracks_cumulative_sales() {
+        let mut conn = test_conn();
+        let mut c = make_card("1", "Bolt", "10");
+        c.price = "1.00".to_string();
+        sync_inventory_conn(&mut conn, &[c.clone()], "2026-01-01").unwrap();
+
+        // 4 copies sold by day 2.
+        let mut c2 = c.clone();
+        c2.quantity = "6".to_string();
+        sync_inventory_conn(&mut conn, &[c2], "2026-01-08").unwrap();
+
+        let snaps = read_snapshots_conn(&conn).unwrap();
+        assert_eq!(snaps.len(), 2);
+        assert_eq!(snaps[1].sold_copies_cumulative, 4);
+        assert!((snaps[1].sold_revenue_cumulative - 4.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn compute_velocity_none_with_single_snapshot() {
+        let snaps = vec![InventorySnapshot {
+            date: "2026-01-01".to_string(),
+            in_stock_copies: 10,
+            in_stock_value: 10.0,
+            sold_copies_cumulative: 0,
+            sold_revenue_cumulative: 0.0,
+        }];
+        assert!(compute_velocity(&snaps).is_none());
+    }
+
+    #[test]
+    fn compute_velocity_rates_over_period() {
+        let snaps = vec![
+            InventorySnapshot {
+                date: "2026-01-01".to_string(),
+                in_stock_copies: 100,
+                in_stock_value: 100.0,
+                sold_copies_cumulative: 0,
+                sold_revenue_cumulative: 0.0,
+            },
+            InventorySnapshot {
+                date: "2026-01-15".to_string(), // 14 days = 2 weeks
+                in_stock_copies: 86,
+                in_stock_value: 86.0,
+                sold_copies_cumulative: 14,
+                sold_revenue_cumulative: 28.0,
+            },
+        ];
+        let v = compute_velocity(&snaps).unwrap();
+        assert_eq!(v.period_days, 14);
+        assert_eq!(v.sold_copies, 14);
+        assert!((v.copies_per_week - 7.0).abs() < 0.001);
+        assert!((v.revenue_per_week - 14.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn compute_velocity_trailing_windows() {
+        let snaps = vec![
+            InventorySnapshot {
+                date: "2026-01-01".to_string(),
+                in_stock_copies: 0,
+                in_stock_value: 0.0,
+                sold_copies_cumulative: 0,
+                sold_revenue_cumulative: 0.0,
+            },
+            InventorySnapshot {
+                date: "2026-02-01".to_string(), // ~31 days before latest
+                in_stock_copies: 0,
+                in_stock_value: 0.0,
+                sold_copies_cumulative: 50,
+                sold_revenue_cumulative: 50.0,
+            },
+            InventorySnapshot {
+                date: "2026-03-04".to_string(), // latest
+                in_stock_copies: 0,
+                in_stock_value: 0.0,
+                sold_copies_cumulative: 90,
+                sold_revenue_cumulative: 90.0,
+            },
+        ];
+        let v = compute_velocity(&snaps).unwrap();
+        // last30: nearest snapshot on/before (2026-03-04 - 30d = 2026-02-02) is
+        // the 2026-02-01 row (cum 50) → 90 - 50 = 40.
+        assert_eq!(v.last30_copies, Some(40));
+    }
+
+    #[test]
+    fn get_in_stock_cards_excludes_zeroed_and_parses_foil() {
+        let mut conn = test_conn();
+        let mut foil = make_card("1", "Bolt", "3");
+        foil.is_foil = "1".to_string();
+        foil.location = Some("A-0-1-1-L2-R".to_string());
+        let sold_out = make_card("2", "Shock", "0"); // zero qty, excluded
+        sync_inventory_conn(&mut conn, &[foil, sold_out], "2026-01-01").unwrap();
+
+        let cards = get_in_stock_cards_conn(&conn).unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].cardmarket_id, "1");
+        assert!(cards[0].is_foil);
+        assert_eq!(cards[0].quantity, 3);
+        assert_eq!(cards[0].location, "A-0-1-1-L2-R");
+        // effective_date falls back to listed_at ("2026-01-01" from make_card).
+        assert_eq!(cards[0].effective_date, "2026-01-01");
+    }
+
+    #[test]
+    fn aging_buckets_present_in_stats() {
+        let mut conn = test_conn();
+        let mut old = make_card("1", "Bolt", "2");
+        old.listed_at = "2024-01-01".to_string(); // very old
+        sync_inventory_conn(&mut conn, &[old], "2026-07-14").unwrap();
+
+        let stats = get_db_stats_conn(&conn, "2026-07-14").unwrap();
+        assert_eq!(stats.aging_buckets.len(), 5);
+        assert_eq!(stats.aging_buckets[4].copies, 2, "old card in 365+ bucket");
     }
 }

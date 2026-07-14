@@ -5,9 +5,9 @@ This document contains feature requests for the Check Stock Application.
 ## Business Analytics & Pricing Roadmap
 
 *Added: 2026-07-14. Derived from a capability review of the price guide + inventory
-DB assets. The **Mispricing / Margin Report** and **Sales Velocity & Dead-Stock
-Aging** items from this batch are being implemented now; everything below is
-queued for later.*
+DB assets. The **Mispricing / Margin Report** (its own screen) and **Sales Velocity &
+Dead-Stock Aging** (added to the Stock Analysis screen) from this batch are ✅ **done**;
+everything below is queued for later.*
 
 ### Tier 1 — Highest business impact
 
@@ -74,15 +74,10 @@ Save/load named node graphs so repricing recipes are reusable across sessions.
 
 
 
-### Overall Assessment: Grade A- (85/100)
 
-**Status**: ✅ **PRODUCTION READY**
-
-The check_stock project demonstrates professional-grade Rust development with excellent architectural decisions, comprehensive testing (189 tests, all passing), and strong security practices. Zero clippy warnings, no unsafe code.
 
 ### High Priority Improvements
 
-#### 0. Use a GUI framework that is multiplatform ✅ Done — eframe/egui targets Linux, macOS, Windows; CI builds all three
 
 #### 1. Implement Rate Limiting for Scryfall API
 **Issue**: Semaphore limits concurrency but not requests/second (Scryfall limit: 10 req/s)
@@ -118,6 +113,5 @@ The check_stock project demonstrates professional-grade Rust development with ex
 
 - Excellent test fixtures (reused across tests)
 - Clean error handling (custom ApiError enum)
-- Perfect architecture adherence to CLAUDE.md
 - Comprehensive performance tests
 - Zero clippy warnings

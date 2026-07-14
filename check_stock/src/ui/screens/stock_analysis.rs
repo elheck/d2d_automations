@@ -1,5 +1,5 @@
 use crate::{
-    inventory_db::{DbStats, LotBreakdown, OldestInStockEntry},
+    inventory_db::{AgingBucket, DbStats, LotBreakdown, OldestInStockEntry, SalesVelocity},
     io::read_csv,
     ui::{
         components::FilePicker,
@@ -111,6 +111,18 @@ impl StockAnalysisScreen {
 
             ui.add_space(8.0);
 
+            // ── Sales velocity ──────────────────────────────────────────────
+            if let Some(velocity) = &stats.velocity {
+                Self::show_velocity(ui, velocity);
+                ui.add_space(8.0);
+            }
+
+            // ── Dead-stock aging ────────────────────────────────────────────
+            if stats.aging_buckets.iter().any(|b| b.copies > 0) {
+                Self::show_aging(ui, &stats.aging_buckets);
+                ui.add_space(8.0);
+            }
+
             // Top cards: two columns side by side
             ui.columns(2, |cols| {
                 cols[0].label(egui::RichText::new("Most Copies").strong());
@@ -206,6 +218,95 @@ impl StockAnalysisScreen {
                 Self::show_lot_breakdown(ui, &stats.lot_breakdown, state);
             }
         });
+    }
+
+    fn show_velocity(ui: &mut egui::Ui, v: &SalesVelocity) {
+        ui.label(
+            egui::RichText::new("Sales Velocity")
+                .strong()
+                .size(14.0)
+                .color(style::TEXT_PRIMARY),
+        );
+        ui.add_space(2.0);
+        ui.label(
+            egui::RichText::new(format!("Tracked over {} days", v.period_days))
+                .size(11.0)
+                .color(style::TEXT_MUTED),
+        );
+        egui::Grid::new("velocity_grid")
+            .num_columns(4)
+            .spacing([16.0, 4.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Sold (total):").strong());
+                ui.label(format!("×{}", v.sold_copies));
+                ui.label(egui::RichText::new("Revenue (total):").strong());
+                ui.label(format!("€{:.2}", v.sold_revenue));
+                ui.end_row();
+
+                ui.label(egui::RichText::new("Copies / week:").strong());
+                ui.label(format!("{:.1}", v.copies_per_week));
+                ui.label(egui::RichText::new("Revenue / week:").strong());
+                ui.label(format!("€{:.2}", v.revenue_per_week));
+                ui.end_row();
+
+                if v.last7_copies.is_some() || v.last30_copies.is_some() {
+                    ui.label(egui::RichText::new("Last 7 days:").strong());
+                    ui.label(
+                        v.last7_copies
+                            .map(|c| format!("×{c}"))
+                            .unwrap_or_else(|| "—".to_string()),
+                    );
+                    ui.label(egui::RichText::new("Last 30 days:").strong());
+                    ui.label(
+                        v.last30_copies
+                            .map(|c| format!("×{c}"))
+                            .unwrap_or_else(|| "—".to_string()),
+                    );
+                    ui.end_row();
+                }
+            });
+    }
+
+    fn show_aging(ui: &mut egui::Ui, buckets: &[AgingBucket]) {
+        ui.label(
+            egui::RichText::new("Dead-Stock Aging")
+                .strong()
+                .size(14.0)
+                .color(style::TEXT_PRIMARY),
+        );
+        ui.add_space(2.0);
+        ui.label(
+            egui::RichText::new("How long in-stock cards have been listed")
+                .size(11.0)
+                .color(style::TEXT_MUTED),
+        );
+
+        let total_value: f64 = buckets.iter().map(|b| b.value).sum();
+
+        egui::Grid::new("aging_grid")
+            .num_columns(4)
+            .spacing([16.0, 2.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Age").strong());
+                ui.label(egui::RichText::new("Listings").strong());
+                ui.label(egui::RichText::new("Copies").strong());
+                ui.label(egui::RichText::new("Capital").strong());
+                ui.end_row();
+
+                for b in buckets {
+                    ui.label(b.label);
+                    ui.label(b.listings.to_string());
+                    ui.label(format!("×{}", b.copies));
+                    ui.label(format!("€{:.2}", b.value));
+                    ui.end_row();
+                }
+
+                ui.label(egui::RichText::new("Total").strong());
+                ui.label("");
+                ui.label("");
+                ui.label(egui::RichText::new(format!("€{total_value:.2}")).strong());
+                ui.end_row();
+            });
     }
 
     fn show_longest_unsold(ui: &mut egui::Ui, entries: &[OldestInStockEntry]) {

@@ -3,7 +3,7 @@ use eframe::egui;
 
 pub struct WelcomeScreen;
 
-const TILES: [(&str, &str); 7] = [
+const TILES: [(&str, &str); 8] = [
     ("Stock Checker", "Verify card stock\nagainst order lists"),
     ("Stock Analysis", "Analyse inventory\ntrends and signals"),
     ("Bin Analysis", "Bin capacity and\nfree-slot analysis"),
@@ -11,6 +11,7 @@ const TILES: [(&str, &str); 7] = [
     ("Search Cards", "Find cards by name\nor location"),
     ("Pricing", "Price stock from\nCSV inventory"),
     ("Card Buy Helper", "Value a buy offer\nfrom a card export"),
+    ("Mispricing Report", "Compare listings\nto market prices"),
 ];
 
 impl WelcomeScreen {
@@ -63,7 +64,8 @@ impl WelcomeScreen {
                     3 => Screen::StockListing,
                     4 => Screen::Search,
                     5 => Screen::Pricing,
-                    _ => Screen::BuyHelper,
+                    6 => Screen::BuyHelper,
+                    _ => Screen::Mispricing,
                 };
             }
         });
