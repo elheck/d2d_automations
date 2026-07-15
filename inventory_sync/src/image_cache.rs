@@ -5,93 +5,69 @@
 
 use crate::error::InventoryError;
 use crate::scryfall::{fetch_card_by_cardmarket_id, fetch_image, CardInfo};
-use std::path::PathBuf;
+use mtg_common::FileCache;
 
 /// Persistent cache for card images and metadata
 pub struct ImageCache {
-    cache_dir: PathBuf,
+    files: FileCache,
 }
 
 impl ImageCache {
     /// Create a new image cache in the same directory as the database
     pub fn new(db_dir: &std::path::Path) -> Self {
-        let cache_dir = db_dir.join("card_images");
-
-        // Create directory if needed
-        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
-            log::warn!("Failed to create image cache directory: {}", e);
-        } else {
-            log::info!("Image cache directory: {:?}", cache_dir);
+        Self {
+            files: FileCache::new(db_dir.join("card_images")),
         }
-
-        Self { cache_dir }
     }
 
-    /// Get the full path for a cached image by product ID
-    fn image_path(&self, id_product: u64) -> PathBuf {
-        self.cache_dir.join(format!("{}.jpg", id_product))
+    /// Filename for a cached image by product ID
+    fn image_name(id_product: u64) -> String {
+        format!("{}.jpg", id_product)
     }
 
-    /// Get the full path for cached card metadata by product ID
-    fn meta_path(&self, id_product: u64) -> PathBuf {
-        self.cache_dir.join(format!("{}.json", id_product))
+    /// Filename for cached card metadata by product ID
+    fn meta_name(id_product: u64) -> String {
+        format!("{}.json", id_product)
     }
 
     /// Check if an image is cached
     pub fn contains_image(&self, id_product: u64) -> bool {
-        self.image_path(id_product).exists()
+        self.files.contains(&Self::image_name(id_product))
     }
 
     /// Get a cached image
     pub fn get_image(&self, id_product: u64) -> Option<Vec<u8>> {
-        let path = self.image_path(id_product);
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                log::debug!("Image cache hit for product ID: {}", id_product);
-                Some(bytes)
-            }
-            Err(_) => None,
-        }
+        let bytes = self.files.read(&Self::image_name(id_product))?;
+        log::debug!("Image cache hit for product ID: {}", id_product);
+        Some(bytes)
     }
 
     /// Store an image in the cache
     pub fn insert_image(&self, id_product: u64, bytes: &[u8]) {
-        let path = self.image_path(id_product);
-        if let Err(e) = std::fs::write(&path, bytes) {
-            log::warn!("Failed to cache image for product {}: {}", id_product, e);
-        } else {
-            log::debug!("Cached image for product ID: {}", id_product);
-        }
+        self.files.write(&Self::image_name(id_product), bytes);
+        log::debug!("Cached image for product ID: {}", id_product);
     }
 
     /// Get cached card metadata
     pub fn get_meta(&self, id_product: u64) -> Option<CardInfo> {
-        let path = self.meta_path(id_product);
-        match std::fs::read_to_string(&path) {
-            Ok(json) => match serde_json::from_str(&json) {
-                Ok(info) => Some(info),
-                Err(e) => {
-                    log::warn!(
-                        "Failed to parse cached metadata for product {}: {}",
-                        id_product,
-                        e
-                    );
-                    None
-                }
-            },
-            Err(_) => None,
+        let json = self.files.read(&Self::meta_name(id_product))?;
+        match serde_json::from_slice(&json) {
+            Ok(info) => Some(info),
+            Err(e) => {
+                log::warn!(
+                    "Failed to parse cached metadata for product {}: {}",
+                    id_product,
+                    e
+                );
+                None
+            }
         }
     }
 
     /// Store card metadata in the cache
     pub fn insert_meta(&self, id_product: u64, info: &CardInfo) {
-        let path = self.meta_path(id_product);
-        match serde_json::to_string(info) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
-                    log::warn!("Failed to cache metadata for product {}: {}", id_product, e);
-                }
-            }
+        match serde_json::to_vec(info) {
+            Ok(json) => self.files.write(&Self::meta_name(id_product), &json),
             Err(e) => {
                 log::warn!(
                     "Failed to serialize metadata for product {}: {}",
@@ -122,7 +98,7 @@ pub async fn fetch_image_cached(
     let card = fetch_card_by_cardmarket_id(id_product).await?;
 
     // Cache metadata alongside image
-    cache.insert_meta(id_product, &card.card_info());
+    cache.insert_meta(id_product, &CardInfo::from(&card));
 
     // Get image URL
     let image_url = card
@@ -155,7 +131,7 @@ pub async fn fetch_card_info_cached(
         id_product
     );
     let card = fetch_card_by_cardmarket_id(id_product).await?;
-    let info = card.card_info();
+    let info = CardInfo::from(&card);
 
     // Cache metadata
     cache.insert_meta(id_product, &info);

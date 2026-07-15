@@ -1,37 +1,11 @@
-//! Scryfall API client for fetching card images
-//!
-//! Uses async reqwest for non-blocking HTTP requests.
+//! Scryfall API client — thin wrappers over the shared client in `mtg_common`
+//! that convert errors into this crate's `InventoryError`.
 
 use crate::error::InventoryError;
+use mtg_common::MtgError;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
-const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
-
-pub use mtg_common::scryfall::{CardFace, ImageUris, PurchaseUris};
-
-/// Scryfall card response
-#[derive(Debug, Deserialize)]
-pub struct ScryfallCard {
-    pub name: String,
-    #[serde(default)]
-    pub image_uris: Option<ImageUris>,
-    /// For double-faced cards, images are in card_faces
-    #[serde(default)]
-    pub card_faces: Option<Vec<CardFace>>,
-    #[serde(default)]
-    pub set_name: Option<String>,
-    #[serde(default)]
-    pub type_line: Option<String>,
-    #[serde(default)]
-    pub mana_cost: Option<String>,
-    #[serde(default)]
-    pub rarity: Option<String>,
-    #[serde(default)]
-    pub oracle_text: Option<String>,
-    #[serde(default)]
-    pub purchase_uris: Option<PurchaseUris>,
-}
+pub use mtg_common::scryfall::{CardFace, ImageUris, PurchaseUris, ScryfallCard};
 
 /// Metadata about a card from Scryfall (serializable for caching)
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -44,92 +18,53 @@ pub struct CardInfo {
     pub purchase_uris: Option<PurchaseUris>,
 }
 
-impl ScryfallCard {
+impl From<&ScryfallCard> for CardInfo {
     /// Extract cacheable card info from the full Scryfall response
-    pub fn card_info(&self) -> CardInfo {
+    fn from(card: &ScryfallCard) -> Self {
         CardInfo {
-            set_name: self.set_name.clone(),
-            type_line: self.type_line.clone(),
-            mana_cost: self.mana_cost.clone(),
-            rarity: self.rarity.clone(),
-            oracle_text: self.oracle_text.clone(),
-            purchase_uris: self.purchase_uris.clone(),
+            set_name: Some(card.set_name.clone()),
+            type_line: card.type_line.clone(),
+            mana_cost: card.mana_cost.clone(),
+            rarity: Some(card.rarity.clone()),
+            oracle_text: card.oracle_text.clone(),
+            purchase_uris: card.purchase_uris.clone(),
         }
     }
+}
 
-    /// Get the primary image URL (normal size)
-    pub fn image_url(&self) -> Option<&str> {
-        mtg_common::scryfall::image_url(self.image_uris.as_ref(), self.card_faces.as_deref())
+/// Map a fetch error to ScryfallNotFound for API-level failures (the card
+/// doesn't exist), passing through network/parse errors unchanged.
+fn not_found_on_api_error(err: MtgError, what: String) -> InventoryError {
+    match err {
+        MtgError::Api { .. } | MtgError::HttpStatus(_) => InventoryError::ScryfallNotFound(what),
+        other => other.into(),
     }
 }
 
 /// Fetch a card from Scryfall by Cardmarket product ID.
 /// This returns the exact printing matching the Cardmarket listing.
 pub async fn fetch_card_by_cardmarket_id(id: u64) -> Result<ScryfallCard, InventoryError> {
-    let url = format!("https://api.scryfall.com/cards/cardmarket/{}", id);
-
-    log::debug!("Fetching card from Scryfall by cardmarket ID: {}", id);
-
-    let response = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .build()?
-        .get(&url)
-        .header("User-Agent", mtg_common::USER_AGENT)
-        .send()
-        .await?;
-
-    if response.status().is_success() {
-        Ok(response.json::<ScryfallCard>().await?)
-    } else {
-        Err(InventoryError::ScryfallNotFound(format!(
-            "cardmarket_id:{}",
-            id
-        )))
-    }
+    mtg_common::scryfall::fetch_card_by_cardmarket_id(id)
+        .await
+        .map_err(|e| not_found_on_api_error(e, format!("cardmarket_id:{}", id)))
 }
 
 /// Fetch a card from Scryfall by name (fuzzy search).
 /// Note: This returns an arbitrary printing. Prefer `fetch_card_by_cardmarket_id` when possible.
 pub async fn fetch_card_by_name(name: &str) -> Result<ScryfallCard, InventoryError> {
-    let url = format!(
-        "https://api.scryfall.com/cards/named?fuzzy={}",
-        urlencoding::encode(name)
-    );
-
-    log::debug!("Fetching card from Scryfall: {}", name);
-
-    let response = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .build()?
-        .get(&url)
-        .header("User-Agent", mtg_common::USER_AGENT)
-        .send()
-        .await?;
-
-    if response.status().is_success() {
-        Ok(response.json::<ScryfallCard>().await?)
-    } else {
-        Err(InventoryError::ScryfallNotFound(name.to_string()))
-    }
+    mtg_common::scryfall::fetch_card_by_name(name)
+        .await
+        .map_err(|e| not_found_on_api_error(e, name.to_string()))
 }
 
 /// Fetch image bytes from a URL
 pub async fn fetch_image(url: &str) -> Result<Vec<u8>, InventoryError> {
-    log::debug!("Fetching image from URL: {}", url);
-
-    let response = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .build()?
-        .get(url)
-        .header("User-Agent", mtg_common::USER_AGENT)
-        .send()
-        .await?;
-
-    if response.status().is_success() {
-        Ok(response.bytes().await?.to_vec())
-    } else {
-        Err(InventoryError::ImageFetchFailed(url.to_string()))
-    }
+    mtg_common::scryfall::fetch_image(url)
+        .await
+        .map_err(|e| match e {
+            MtgError::HttpStatus(_) => InventoryError::ImageFetchFailed(url.to_string()),
+            other => other.into(),
+        })
 }
 
 #[cfg(test)]

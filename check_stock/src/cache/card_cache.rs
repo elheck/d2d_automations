@@ -138,6 +138,7 @@ mod tests {
             mana_cost: None,
             type_line: None,
             oracle_text: None,
+            purchase_uris: None,
         }
     }
 

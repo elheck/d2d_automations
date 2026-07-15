@@ -403,7 +403,7 @@ impl MispricingScreen {
         state.error = None;
         state.guide_status = String::new();
         std::thread::spawn(move || {
-            let result = PriceGuide::fetch().map_err(|e| e.to_string());
+            let result = PriceGuide::fetch_blocking().map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
     }

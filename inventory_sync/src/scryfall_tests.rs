@@ -2,27 +2,41 @@
 //!
 //! Note: Some tests require network access and are marked with #[ignore]
 
-use crate::scryfall::ScryfallCard;
+use crate::scryfall::{CardInfo, ScryfallCard};
+
+/// Minimal identity fields required by the shared ScryfallCard struct.
+fn base_card_json(extra: &str) -> String {
+    format!(
+        r#"{{
+        "id": "test-uuid",
+        "name": "Test Card",
+        "set": "tst",
+        "set_name": "Test Set",
+        "collector_number": "1",
+        "rarity": "common"{}{}
+    }}"#,
+        if extra.is_empty() { "" } else { "," },
+        extra
+    )
+}
 
 #[test]
 fn test_scryfall_card_image_url_direct() {
-    let card_json = r#"{
-        "name": "Black Lotus",
-        "image_uris": {
+    let card_json = base_card_json(
+        r#""image_uris": {
             "normal": "https://example.com/normal.jpg",
             "large": "https://example.com/large.jpg"
-        }
-    }"#;
+        }"#,
+    );
 
-    let card: ScryfallCard = serde_json::from_str(card_json).unwrap();
+    let card: ScryfallCard = serde_json::from_str(&card_json).unwrap();
     assert_eq!(card.image_url(), Some("https://example.com/normal.jpg"));
 }
 
 #[test]
 fn test_scryfall_card_image_url_double_faced() {
-    let card_json = r#"{
-        "name": "Delver of Secrets",
-        "card_faces": [
+    let card_json = base_card_json(
+        r#""card_faces": [
             {
                 "name": "Delver of Secrets",
                 "image_uris": {
@@ -35,44 +49,44 @@ fn test_scryfall_card_image_url_double_faced() {
                     "normal": "https://example.com/back.jpg"
                 }
             }
-        ]
-    }"#;
+        ]"#,
+    );
 
-    let card: ScryfallCard = serde_json::from_str(card_json).unwrap();
+    let card: ScryfallCard = serde_json::from_str(&card_json).unwrap();
     // Should return front face image
     assert_eq!(card.image_url(), Some("https://example.com/front.jpg"));
 }
 
 #[test]
 fn test_scryfall_card_image_url_none() {
-    let card_json = r#"{
-        "name": "Test Card"
-    }"#;
+    let card_json = base_card_json("");
 
-    let card: ScryfallCard = serde_json::from_str(card_json).unwrap();
+    let card: ScryfallCard = serde_json::from_str(&card_json).unwrap();
     assert_eq!(card.image_url(), None);
 }
 
 #[test]
-fn test_scryfall_card_deserialize_minimal() {
-    let card_json = r#"{
-        "name": "Test Card"
-    }"#;
+fn test_scryfall_card_deserialize_without_optional_fields() {
+    let card_json = base_card_json("");
 
-    let card: ScryfallCard = serde_json::from_str(card_json).unwrap();
+    let card: ScryfallCard = serde_json::from_str(&card_json).unwrap();
     assert_eq!(card.name, "Test Card");
     assert!(card.image_uris.is_none());
     assert!(card.card_faces.is_none());
+    assert!(card.purchase_uris.is_none());
 }
 
 #[test]
 fn test_scryfall_card_with_metadata() {
     let card_json = r#"{
+        "id": "test-uuid",
         "name": "Lightning Bolt",
+        "set": "clu",
         "set_name": "Ravnica: Clue Edition",
+        "collector_number": "141",
+        "rarity": "uncommon",
         "type_line": "Instant",
         "mana_cost": "{R}",
-        "rarity": "uncommon",
         "oracle_text": "Lightning Bolt deals 3 damage to any target.",
         "purchase_uris": {
             "cardmarket": "https://www.cardmarket.com/en/Magic/Products/Singles/Ravnica-Clue-Edition/Lightning-Bolt",
@@ -84,10 +98,10 @@ fn test_scryfall_card_with_metadata() {
     }"#;
 
     let card: ScryfallCard = serde_json::from_str(card_json).unwrap();
-    assert_eq!(card.set_name.as_deref(), Some("Ravnica: Clue Edition"));
+    assert_eq!(card.set_name, "Ravnica: Clue Edition");
     assert_eq!(card.type_line.as_deref(), Some("Instant"));
     assert_eq!(card.mana_cost.as_deref(), Some("{R}"));
-    assert_eq!(card.rarity.as_deref(), Some("uncommon"));
+    assert_eq!(card.rarity, "uncommon");
     assert_eq!(
         card.oracle_text.as_deref(),
         Some("Lightning Bolt deals 3 damage to any target.")
@@ -100,11 +114,14 @@ fn test_scryfall_card_with_metadata() {
 #[test]
 fn test_card_info_extraction() {
     let card_json = r#"{
+        "id": "test-uuid",
         "name": "Lightning Bolt",
+        "set": "clu",
         "set_name": "Ravnica: Clue Edition",
+        "collector_number": "141",
+        "rarity": "uncommon",
         "type_line": "Instant",
         "mana_cost": "{R}",
-        "rarity": "uncommon",
         "oracle_text": "Lightning Bolt deals 3 damage to any target.",
         "purchase_uris": {
             "cardmarket": "https://www.cardmarket.com/en/Magic/Products/Singles/Ravnica-Clue-Edition/Lightning-Bolt"
@@ -112,7 +129,7 @@ fn test_card_info_extraction() {
     }"#;
 
     let card: ScryfallCard = serde_json::from_str(card_json).unwrap();
-    let info = card.card_info();
+    let info = CardInfo::from(&card);
 
     assert_eq!(info.set_name.as_deref(), Some("Ravnica: Clue Edition"));
     assert_eq!(info.type_line.as_deref(), Some("Instant"));
@@ -121,7 +138,7 @@ fn test_card_info_extraction() {
 
     // CardInfo should serialize/deserialize for caching
     let json = serde_json::to_string(&info).unwrap();
-    let deserialized: crate::scryfall::CardInfo = serde_json::from_str(&json).unwrap();
+    let deserialized: CardInfo = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized.set_name, info.set_name);
     assert_eq!(deserialized.rarity, info.rarity);
 }

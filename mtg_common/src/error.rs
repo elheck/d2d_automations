@@ -16,6 +16,10 @@ pub enum MtgError {
     #[error("HTTP error: {0}")]
     HttpStatus(reqwest::StatusCode),
 
+    /// Structured error response from an API (e.g. Scryfall's code/details payload)
+    #[error("{code}: {details}")]
+    Api { code: String, details: String },
+
     /// File I/O error
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

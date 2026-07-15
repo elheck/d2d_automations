@@ -5,7 +5,7 @@ use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::cardmarket::PriceGuide;
-use crate::error::ApiError;
+use mtg_common::MtgError;
 
 /// Creates a valid price guide JSON string with the given entries.
 fn price_guide_json(entries: &[(u64, f64, f64)]) -> String {
@@ -58,8 +58,8 @@ fn load_from_file_not_found() {
     let result = PriceGuide::load("/nonexistent/path/price_guide.json");
     assert!(result.is_err());
     match result.unwrap_err() {
-        ApiError::Io(_) => {} // Expected
-        other => panic!("Expected ApiError::Io, got: {other:?}"),
+        MtgError::Io(_) => {} // Expected
+        other => panic!("Expected MtgError::Io, got: {other:?}"),
     }
 }
 
@@ -71,8 +71,8 @@ fn load_from_file_malformed_json() {
     let result = PriceGuide::load(tmp.path().to_str().unwrap());
     assert!(result.is_err());
     match result.unwrap_err() {
-        ApiError::Parse(_) => {} // Expected
-        other => panic!("Expected ApiError::Parse, got: {other:?}"),
+        MtgError::Parse(_) => {} // Expected
+        other => panic!("Expected MtgError::Parse, got: {other:?}"),
     }
 }
 
@@ -110,7 +110,7 @@ async fn fetch_from_success() {
         .await;
 
     let url = mock_server.uri();
-    let result = tokio::task::spawn_blocking(move || PriceGuide::fetch_from(&url))
+    let result = tokio::task::spawn_blocking(move || PriceGuide::fetch_from_blocking(&url))
         .await
         .unwrap();
 
@@ -129,15 +129,15 @@ async fn fetch_from_404() {
         .await;
 
     let url = mock_server.uri();
-    let result = tokio::task::spawn_blocking(move || PriceGuide::fetch_from(&url))
+    let result = tokio::task::spawn_blocking(move || PriceGuide::fetch_from_blocking(&url))
         .await
         .unwrap();
 
     match result {
-        Err(ApiError::HttpStatus(status)) => {
+        Err(MtgError::HttpStatus(status)) => {
             assert_eq!(status, reqwest::StatusCode::NOT_FOUND);
         }
-        other => panic!("Expected ApiError::HttpStatus(404), got: {other:?}"),
+        other => panic!("Expected MtgError::HttpStatus(404), got: {other:?}"),
     }
 }
 
@@ -151,15 +151,15 @@ async fn fetch_from_500() {
         .await;
 
     let url = mock_server.uri();
-    let result = tokio::task::spawn_blocking(move || PriceGuide::fetch_from(&url))
+    let result = tokio::task::spawn_blocking(move || PriceGuide::fetch_from_blocking(&url))
         .await
         .unwrap();
 
     match result {
-        Err(ApiError::HttpStatus(status)) => {
+        Err(MtgError::HttpStatus(status)) => {
             assert_eq!(status, reqwest::StatusCode::INTERNAL_SERVER_ERROR);
         }
-        other => panic!("Expected ApiError::HttpStatus(500), got: {other:?}"),
+        other => panic!("Expected MtgError::HttpStatus(500), got: {other:?}"),
     }
 }
 
@@ -208,7 +208,7 @@ fn len_and_is_empty() {
     assert!(empty_guide.is_empty());
 }
 
-// ── Async PriceGuide::fetch_from_async ───────────────────────────────
+// ── Async PriceGuide::fetch_from ───────────────────────────────
 
 #[tokio::test]
 async fn fetch_from_async_success() {
@@ -221,9 +221,7 @@ async fn fetch_from_async_success() {
         .mount(&mock_server)
         .await;
 
-    let guide = PriceGuide::fetch_from_async(&mock_server.uri())
-        .await
-        .unwrap();
+    let guide = PriceGuide::fetch_from(&mock_server.uri()).await.unwrap();
 
     assert_eq!(guide.len(), 1);
     assert!(guide.get(100).is_some());
@@ -238,13 +236,13 @@ async fn fetch_from_async_404() {
         .mount(&mock_server)
         .await;
 
-    let result = PriceGuide::fetch_from_async(&mock_server.uri()).await;
+    let result = PriceGuide::fetch_from(&mock_server.uri()).await;
 
     match result {
-        Err(ApiError::HttpStatus(status)) => {
+        Err(MtgError::HttpStatus(status)) => {
             assert_eq!(status, reqwest::StatusCode::NOT_FOUND);
         }
-        other => panic!("Expected ApiError::HttpStatus(404), got: {other:?}"),
+        other => panic!("Expected MtgError::HttpStatus(404), got: {other:?}"),
     }
 }
 
@@ -257,13 +255,13 @@ async fn fetch_from_async_500() {
         .mount(&mock_server)
         .await;
 
-    let result = PriceGuide::fetch_from_async(&mock_server.uri()).await;
+    let result = PriceGuide::fetch_from(&mock_server.uri()).await;
 
     match result {
-        Err(ApiError::HttpStatus(status)) => {
+        Err(MtgError::HttpStatus(status)) => {
             assert_eq!(status, reqwest::StatusCode::INTERNAL_SERVER_ERROR);
         }
-        other => panic!("Expected ApiError::HttpStatus(500), got: {other:?}"),
+        other => panic!("Expected MtgError::HttpStatus(500), got: {other:?}"),
     }
 }
 
@@ -278,9 +276,7 @@ async fn fetch_from_async_creates_correct_hashmap() {
         .mount(&mock_server)
         .await;
 
-    let guide = PriceGuide::fetch_from_async(&mock_server.uri())
-        .await
-        .unwrap();
+    let guide = PriceGuide::fetch_from(&mock_server.uri()).await.unwrap();
 
     assert_eq!(guide.len(), 3);
     assert!(guide.get(111).is_some());
@@ -304,9 +300,7 @@ async fn fetch_from_async_empty_guide() {
         .mount(&mock_server)
         .await;
 
-    let guide = PriceGuide::fetch_from_async(&mock_server.uri())
-        .await
-        .unwrap();
+    let guide = PriceGuide::fetch_from(&mock_server.uri()).await.unwrap();
 
     assert_eq!(guide.len(), 0);
     assert!(guide.is_empty());

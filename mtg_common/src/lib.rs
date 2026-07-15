@@ -1,10 +1,12 @@
 pub mod cardmarket;
 pub mod error;
+pub mod file_cache;
 pub mod scryfall;
 
-pub use cardmarket::{PriceGuideEntry, PriceGuideFile};
+pub use cardmarket::{PriceGuide, PriceGuideEntry, PriceGuideFile};
 pub use error::{MtgError, MtgResult};
-pub use scryfall::{image_url, CardFace, ImageUris, PurchaseUris, ScryfallPrices};
+pub use file_cache::FileCache;
+pub use scryfall::{image_url, CardFace, ImageUris, PurchaseUris, ScryfallCard, ScryfallPrices};
 
 /// Shared User-Agent for all HTTP requests to external APIs.
 pub const USER_AGENT: &str = "D2D-Automations/1.0";

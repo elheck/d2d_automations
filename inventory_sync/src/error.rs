@@ -21,9 +21,6 @@ pub enum InventoryError {
     ImageFetchFailed(String),
 }
 
-/// Legacy alias for backwards compatibility
-pub type Error = InventoryError;
-
 impl fmt::Display for InventoryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -82,6 +79,9 @@ impl From<mtg_common::MtgError> for InventoryError {
             mtg_common::MtgError::Network(e) => InventoryError::Network(e),
             mtg_common::MtgError::Parse(e) => InventoryError::Parse(e),
             mtg_common::MtgError::HttpStatus(s) => InventoryError::HttpStatus(s),
+            mtg_common::MtgError::Api { code, details } => {
+                InventoryError::ScryfallNotFound(format!("{}: {}", code, details))
+            }
             mtg_common::MtgError::Io(_) => {
                 InventoryError::ImageFetchFailed("I/O error".to_string())
             }

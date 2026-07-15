@@ -18,4 +18,4 @@ pub use database::{
     init_schema, insert_price_history, search_products_by_name, upsert_expansion_name,
     upsert_products, InsertResult, PriceHistoryPoint, ProductSearchResult,
 };
-pub use error::{Error, Result};
+pub use error::{InventoryError, Result};

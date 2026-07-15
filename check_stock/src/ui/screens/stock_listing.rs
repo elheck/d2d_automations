@@ -74,7 +74,7 @@ impl StockListingScreen {
                             let tx = state.price_guide_tx.clone();
                             let ctx_clone = ctx.clone();
                             state.runtime.spawn(async move {
-                                match crate::api::cardmarket::PriceGuide::fetch_async().await {
+                                match crate::api::cardmarket::PriceGuide::fetch().await {
                                     Ok(guide) => {
                                         tx.send(PriceGuideMessage::Success(guide)).ok();
                                     }

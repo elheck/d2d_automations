@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECTS=("check_stock" "accounting" "inventory_sync")
+PROJECTS=("mtg_common" "check_stock" "accounting" "inventory_sync")
 
 failed=()
 passed=()

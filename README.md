@@ -12,7 +12,7 @@ Rust monorepo for Magic: The Gathering business operations.
 | [check_stock](check_stock/) | egui desktop app | Stock checker, analysis, picking, pricing |
 | [accounting](accounting/) | egui desktop app | Cardmarket CSV → SevDesk invoicing |
 | [inventory_sync](inventory_sync/) | REST API server | CSV → SQLite with price tracking & web UI |
-| [mtg_common](mtg_common/) | shared library | Common types (Cardmarket, Scryfall, errors) |
+| [mtg_common](mtg_common/) | shared library | Shared types, API clients (Cardmarket, Scryfall), file cache, errors |
 
 ## Quick Start
 

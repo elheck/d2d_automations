@@ -239,6 +239,7 @@ fn image_url_from_image_uris() {
         mana_cost: None,
         type_line: None,
         oracle_text: None,
+        purchase_uris: None,
     };
 
     assert_eq!(card.image_url(), Some("https://example.com/normal.jpg"));
@@ -289,6 +290,7 @@ fn image_url_from_card_faces() {
         mana_cost: None,
         type_line: None,
         oracle_text: None,
+        purchase_uris: None,
     };
 
     // Should return the front face image
@@ -311,6 +313,7 @@ fn image_url_none_when_both_missing() {
         mana_cost: None,
         type_line: None,
         oracle_text: None,
+        purchase_uris: None,
     };
 
     assert_eq!(card.image_url(), None);

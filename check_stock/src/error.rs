@@ -68,6 +68,7 @@ impl From<mtg_common::MtgError> for ApiError {
             mtg_common::MtgError::Network(e) => ApiError::Network(e),
             mtg_common::MtgError::Parse(e) => ApiError::Parse(e),
             mtg_common::MtgError::HttpStatus(s) => ApiError::HttpStatus(s),
+            mtg_common::MtgError::Api { code, details } => ApiError::ApiResponse { code, details },
             mtg_common::MtgError::Io(e) => ApiError::Io(e),
         }
     }

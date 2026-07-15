@@ -1,10 +1,11 @@
 use crate::api::scryfall::fetch_image;
 use crate::error::ApiResult;
+use mtg_common::FileCache;
 
-/// Persistent cache for card images
-/// Stores images as files in the cache directory
+/// Persistent cache for card images, keyed by set code + collector number.
+/// Stores images as files in the cache directory.
 pub struct ImageCache {
-    cache_dir: std::path::PathBuf,
+    files: FileCache,
 }
 
 impl Default for ImageCache {
@@ -14,25 +15,25 @@ impl Default for ImageCache {
 }
 
 impl ImageCache {
-    /// Create a new image cache
+    /// Create a new image cache in the platform cache directory
     pub fn new() -> Self {
         let cache_dir = dirs::cache_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join("d2d_automations")
             .join("images");
+        Self::with_dir(cache_dir)
+    }
 
-        // Create directory if needed
-        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
-            log::warn!("Failed to create image cache directory: {}", e);
+    /// Create an image cache rooted at the given directory (used by tests)
+    pub fn with_dir(cache_dir: std::path::PathBuf) -> Self {
+        Self {
+            files: FileCache::new(cache_dir),
         }
-
-        log::info!("Image cache directory: {:?}", cache_dir);
-        Self { cache_dir }
     }
 
     /// Get the cache directory path
     pub fn cache_dir(&self) -> &std::path::Path {
-        &self.cache_dir
+        self.files.dir()
     }
 
     /// Generate a filename from set code and collector number
@@ -40,37 +41,26 @@ impl ImageCache {
         format!("{}_{}.jpg", set_code.to_lowercase(), collector_number)
     }
 
-    /// Get the full path for a cached image
-    fn path(&self, set_code: &str, collector_number: &str) -> std::path::PathBuf {
-        self.cache_dir
-            .join(Self::filename(set_code, collector_number))
-    }
-
     /// Check if an image is cached
     pub fn contains(&self, set_code: &str, collector_number: &str) -> bool {
-        self.path(set_code, collector_number).exists()
+        self.files
+            .contains(&Self::filename(set_code, collector_number))
     }
 
     /// Get a cached image
     pub fn get(&self, set_code: &str, collector_number: &str) -> Option<Vec<u8>> {
-        let path = self.path(set_code, collector_number);
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                log::info!("Image cache hit for {}/{}", set_code, collector_number);
-                Some(bytes)
-            }
-            Err(_) => None,
-        }
+        let bytes = self
+            .files
+            .read(&Self::filename(set_code, collector_number))?;
+        log::info!("Image cache hit for {}/{}", set_code, collector_number);
+        Some(bytes)
     }
 
     /// Store an image in the cache
     pub fn insert(&self, set_code: &str, collector_number: &str, bytes: &[u8]) {
-        let path = self.path(set_code, collector_number);
-        if let Err(e) = std::fs::write(&path, bytes) {
-            log::warn!("Failed to cache image: {}", e);
-        } else {
-            log::debug!("Cached image for {}/{}", set_code, collector_number);
-        }
+        self.files
+            .write(&Self::filename(set_code, collector_number), bytes);
+        log::debug!("Cached image for {}/{}", set_code, collector_number);
     }
 }
 
@@ -107,9 +97,7 @@ mod tests {
 
     fn create_test_cache() -> (ImageCache, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let cache = ImageCache {
-            cache_dir: temp_dir.path().to_path_buf(),
-        };
+        let cache = ImageCache::with_dir(temp_dir.path().to_path_buf());
         (cache, temp_dir)
     }
 
@@ -124,14 +112,6 @@ mod tests {
     fn test_filename_lowercase() {
         assert_eq!(ImageCache::filename("LEA", "123"), "lea_123.jpg");
         assert_eq!(ImageCache::filename("HOU", "456"), "hou_456.jpg");
-    }
-
-    #[test]
-    fn test_path_construction() {
-        let (cache, _temp_dir) = create_test_cache();
-        let path = cache.path("lea", "123");
-
-        assert!(path.ends_with("lea_123.jpg"));
     }
 
     #[test]
@@ -216,17 +196,13 @@ mod tests {
 
         // Create cache and insert data
         {
-            let cache = ImageCache {
-                cache_dir: cache_dir.clone(),
-            };
+            let cache = ImageCache::with_dir(cache_dir.clone());
             cache.insert("lea", "123", &[10, 20, 30]);
         }
 
         // Create new cache pointing to same directory
         {
-            let cache = ImageCache {
-                cache_dir: cache_dir.clone(),
-            };
+            let cache = ImageCache::with_dir(cache_dir.clone());
             let retrieved = cache.get("lea", "123");
             assert!(retrieved.is_some());
             assert_eq!(retrieved.unwrap(), vec![10, 20, 30]);

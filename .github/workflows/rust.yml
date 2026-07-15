@@ -13,6 +13,7 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
+      mtg_common: ${{ steps.filter.outputs.mtg_common }}
       check_stock: ${{ steps.filter.outputs.check_stock }}
       accounting: ${{ steps.filter.outputs.accounting }}
       inventory_sync: ${{ steps.filter.outputs.inventory_sync }}
@@ -22,6 +23,9 @@ jobs:
         id: filter
         with:
           filters: |
+            mtg_common:
+              - 'mtg_common/**'
+              - '.github/workflows/rust.yml'
             check_stock:
               - 'check_stock/**'
               - 'mtg_common/**'
@@ -33,6 +37,51 @@ jobs:
               - 'inventory_sync/**'
               - 'mtg_common/**'
               - '.github/workflows/rust.yml'
+
+  build_and_test_mtg_common:
+    needs: changes
+    if: needs.changes.outputs.mtg_common == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.cargo/advisory-db
+          mtg_common/target
+        key: ${{ runner.os }}-mtg-common-cargo-${{ hashFiles('mtg_common/Cargo.lock') }}
+
+    - name: Check code formatting
+      run: cargo fmt --all -- --check
+      working-directory: ./mtg_common
+
+    - name: Check
+      run: cargo check --verbose --all-features
+      working-directory: ./mtg_common
+
+    - name: Run tests
+      run: cargo test --verbose --all-features
+      working-directory: ./mtg_common
+
+    - name: Clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
+      working-directory: ./mtg_common
+
+    - name: Security audit
+      run: cargo audit
+      working-directory: ./mtg_common
 
   build_and_test_check_stock:
     needs: changes

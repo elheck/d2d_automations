@@ -1,6 +1,6 @@
 //! Cardmarket product catalog fetching and parsing
 
-use crate::error::{Error, Result};
+use crate::error::{InventoryError, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -85,12 +85,12 @@ impl ProductCatalog {
     ) -> Result<HashMap<u64, ProductEntry>> {
         let response = client
             .get(url)
-            .header("User-Agent", "inventory_sync/1.0")
+            .header("User-Agent", mtg_common::USER_AGENT)
             .send()
             .await?;
 
         if !response.status().is_success() {
-            return Err(Error::HttpStatus(response.status()));
+            return Err(InventoryError::HttpStatus(response.status()));
         }
 
         let file: ProductCatalogFile = response.json().await?;
