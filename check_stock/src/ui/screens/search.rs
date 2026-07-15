@@ -479,7 +479,7 @@ impl SearchScreen {
                             ui.label(&card.set);
                             ui.label(&card.language);
                             ui.label(&card.condition);
-                            ui.label(format!("{}€", &card.price));
+                            ui.label(format!("{}€", card.price));
                             ui.label(card.location.as_deref().unwrap_or(""));
                             ui.label(&card.rarity);
 

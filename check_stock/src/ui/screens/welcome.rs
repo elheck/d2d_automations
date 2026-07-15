@@ -102,7 +102,7 @@ impl WelcomeScreen {
             rect,
             egui::CornerRadius::same(10),
             bg,
-            egui::Stroke::new(1.5, border),
+            egui::Stroke::new(1.5_f32, border),
             egui::StrokeKind::Inside,
         );
 

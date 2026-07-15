@@ -74,7 +74,7 @@ pub(super) fn draw_node_chrome(
         rect,
         corner,
         NODE_BG,
-        egui::Stroke::new(1.5, NODE_BORDER),
+        egui::Stroke::new(1.5_f32, NODE_BORDER),
         egui::StrokeKind::Inside,
     );
 
@@ -84,7 +84,7 @@ pub(super) fn draw_node_chrome(
             rect.expand(2.0),
             egui::CornerRadius::same(cr + 2),
             egui::Color32::TRANSPARENT,
-            egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 170, 255)),
+            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(100, 170, 255)),
             egui::StrokeKind::Outside,
         );
     }
@@ -121,7 +121,7 @@ pub(super) fn draw_node_chrome(
             pos,
             PORT_R * zoom,
             PORT_IN_COLOR,
-            egui::Stroke::new(1.5, egui::Color32::WHITE),
+            egui::Stroke::new(1.5_f32, egui::Color32::WHITE),
         );
         painter.text(
             pos + egui::vec2(PORT_R * zoom + 5.0, 0.0),
@@ -139,7 +139,7 @@ pub(super) fn draw_node_chrome(
             pos,
             PORT_R * zoom,
             PORT_OUT_COLOR,
-            egui::Stroke::new(1.5, egui::Color32::WHITE),
+            egui::Stroke::new(1.5_f32, egui::Color32::WHITE),
         );
         let (count_text, count_color) = match output_count {
             None => ("—".to_string(), egui::Color32::from_rgb(100, 110, 140)),

@@ -248,7 +248,7 @@ fn show_canvas(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut PricingState)
             sel_rect,
             egui::CornerRadius::ZERO,
             egui::Color32::from_rgba_premultiplied(80, 140, 255, 20),
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 160, 255)),
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 160, 255)),
             egui::StrokeKind::Inside,
         );
     }

@@ -102,7 +102,7 @@ pub fn secondary_button_enabled(ui: &mut egui::Ui, label: &str, enabled: bool) -
 pub fn section_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(PANEL_BG)
-        .stroke(egui::Stroke::new(1.0, PANEL_BORDER))
+        .stroke(egui::Stroke::new(1.0_f32, PANEL_BORDER))
         .inner_margin(egui::Margin::same(12))
         .corner_radius(egui::CornerRadius::same(8))
 }

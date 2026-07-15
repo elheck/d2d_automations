@@ -70,7 +70,7 @@ pub fn find_matching_cards<'a>(
     // Sort matched cards to prioritize preferred language
     let mut cards_by_set: HashMap<String, Vec<&Card>> = HashMap::new();
     for card in matching_cards {
-        let set_key = format!("{} ({})", &card.set, &card.set_code);
+        let set_key = format!("{} ({})", card.set, card.set_code);
         let cards = cards_by_set.entry(set_key).or_default();
         cards.push(card);
     }

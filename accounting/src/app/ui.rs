@@ -510,19 +510,19 @@ impl InvoiceApp {
                                     row.col(|ui| {
                                         ui.label(format!(
                                             "{} {}",
-                                            &order.merchandise_value, &order.currency
+                                            order.merchandise_value, order.currency
                                         ));
                                     });
                                     row.col(|ui| {
                                         ui.label(format!(
                                             "{} {}",
-                                            &order.shipment_costs, &order.currency
+                                            order.shipment_costs, order.currency
                                         ));
                                     });
                                     row.col(|ui| {
                                         ui.label(format!(
                                             "{} {}",
-                                            &order.total_value, &order.currency
+                                            order.total_value, order.currency
                                         ));
                                     });
                                     row.col(|ui| {
