@@ -211,12 +211,8 @@ fn scan_since_date_falls_back_on_bad_date() {
 
 #[test]
 fn run_scan_persists_ranked_results() {
-    use crate::cardmarket::{
-        make_test_price_entry, make_test_product, PriceGuide, ProductCatalog,
-    };
-    use crate::database::{
-        get_buy_signals, init_schema, insert_price_history, upsert_products,
-    };
+    use crate::cardmarket::{make_test_price_entry, make_test_product, PriceGuide, ProductCatalog};
+    use crate::database::{get_buy_signals, init_schema, insert_price_history, upsert_products};
 
     let mut conn = Connection::open_in_memory().unwrap();
     init_schema(&conn).unwrap();
@@ -230,8 +226,7 @@ fn run_scan_persists_ranked_results() {
     for i in 0..40u32 {
         let trend = (20.0 - i as f64 * 0.3).max(8.0);
         let date = format!("2026-01-{:02}T10:00:00+0100", i + 1);
-        let guide =
-            PriceGuide::from_entries(vec![make_test_price_entry(1, Some(trend))], &date);
+        let guide = PriceGuide::from_entries(vec![make_test_price_entry(1, Some(trend))], &date);
         insert_price_history(&mut conn, &guide, &catalog).unwrap();
         last_date = format!("2026-01-{:02}", i + 1);
     }

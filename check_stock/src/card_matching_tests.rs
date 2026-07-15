@@ -35,25 +35,15 @@ fn create_card_with_translations(
 
 #[test]
 fn test_get_card_name_no_language_returns_english() {
-    let card = create_card_with_translations(
-        "Lightning Bolt",
-        "Blitzschlag",
-        "Rayo",
-        "Éclair",
-        "Fulmine",
-    );
+    let card =
+        create_card_with_translations("Lightning Bolt", "Blitzschlag", "Rayo", "Éclair", "Fulmine");
     assert_eq!(get_card_name(&card, None), "Lightning Bolt");
 }
 
 #[test]
 fn test_get_card_name_english_returns_english() {
-    let card = create_card_with_translations(
-        "Lightning Bolt",
-        "Blitzschlag",
-        "Rayo",
-        "Éclair",
-        "Fulmine",
-    );
+    let card =
+        create_card_with_translations("Lightning Bolt", "Blitzschlag", "Rayo", "Éclair", "Fulmine");
     assert_eq!(
         get_card_name(&card, Some(Language::English)),
         "Lightning Bolt"
@@ -62,49 +52,29 @@ fn test_get_card_name_english_returns_english() {
 
 #[test]
 fn test_get_card_name_german_returns_german() {
-    let card = create_card_with_translations(
-        "Lightning Bolt",
-        "Blitzschlag",
-        "Rayo",
-        "Éclair",
-        "Fulmine",
-    );
+    let card =
+        create_card_with_translations("Lightning Bolt", "Blitzschlag", "Rayo", "Éclair", "Fulmine");
     assert_eq!(get_card_name(&card, Some(Language::German)), "Blitzschlag");
 }
 
 #[test]
 fn test_get_card_name_spanish_returns_spanish() {
-    let card = create_card_with_translations(
-        "Lightning Bolt",
-        "Blitzschlag",
-        "Rayo",
-        "Éclair",
-        "Fulmine",
-    );
+    let card =
+        create_card_with_translations("Lightning Bolt", "Blitzschlag", "Rayo", "Éclair", "Fulmine");
     assert_eq!(get_card_name(&card, Some(Language::Spanish)), "Rayo");
 }
 
 #[test]
 fn test_get_card_name_french_returns_french() {
-    let card = create_card_with_translations(
-        "Lightning Bolt",
-        "Blitzschlag",
-        "Rayo",
-        "Éclair",
-        "Fulmine",
-    );
+    let card =
+        create_card_with_translations("Lightning Bolt", "Blitzschlag", "Rayo", "Éclair", "Fulmine");
     assert_eq!(get_card_name(&card, Some(Language::French)), "Éclair");
 }
 
 #[test]
 fn test_get_card_name_italian_returns_italian() {
-    let card = create_card_with_translations(
-        "Lightning Bolt",
-        "Blitzschlag",
-        "Rayo",
-        "Éclair",
-        "Fulmine",
-    );
+    let card =
+        create_card_with_translations("Lightning Bolt", "Blitzschlag", "Rayo", "Éclair", "Fulmine");
     assert_eq!(get_card_name(&card, Some(Language::Italian)), "Fulmine");
 }
 
