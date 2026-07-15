@@ -569,3 +569,7 @@ impl SevDeskApi {
         status
     }
 }
+
+#[cfg(test)]
+#[path = "invoice_workflow_tests.rs"]
+mod tests;

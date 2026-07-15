@@ -306,3 +306,7 @@ impl SevDeskApi {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "invoices_tests.rs"]
+mod tests;

@@ -371,3 +371,7 @@ impl CheckAccountResponse {
         self.status.as_deref() != Some("0")
     }
 }
+
+#[cfg(test)]
+#[path = "models_tests.rs"]
+mod tests;

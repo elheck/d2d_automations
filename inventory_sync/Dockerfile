@@ -1,5 +1,5 @@
 # Build stage
-FROM rust:1.85-slim-bookworm AS builder
+FROM rust:1.97-slim-bookworm AS builder
 
 WORKDIR /app
 
@@ -21,7 +21,7 @@ COPY inventory_sync/static ./static
 RUN cargo build --release
 
 # Test stage - used by CI to run tests in the same environment as production
-FROM rust:1.85-slim-bookworm AS tester
+FROM rust:1.97-slim-bookworm AS tester
 
 WORKDIR /app
 

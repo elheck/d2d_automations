@@ -135,3 +135,7 @@ impl SevDeskApi {
         Ok(contact_id)
     }
 }
+
+#[cfg(test)]
+#[path = "contacts_tests.rs"]
+mod tests;

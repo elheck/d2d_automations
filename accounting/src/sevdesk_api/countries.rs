@@ -155,3 +155,7 @@ impl SevDeskApi {
         Ok(1)
     }
 }
+
+#[cfg(test)]
+#[path = "countries_tests.rs"]
+mod tests;

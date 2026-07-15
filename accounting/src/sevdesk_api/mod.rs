@@ -49,5 +49,5 @@ impl SevDeskApi {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
