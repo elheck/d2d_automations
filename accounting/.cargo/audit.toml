@@ -1,0 +1,24 @@
+# cargo-audit configuration
+#
+# The advisories ignored below are all in transitive dependencies pulled in by
+# eframe/egui's Linux windowing, accessibility, and font stack. None can be
+# upgraded without a breaking change to a parent crate we do not control; they
+# will clear when eframe/egui bumps its own dependency tree. None are reachable
+# from application code paths (we never feed attacker-controlled XML to the
+# affected parsers). Re-review whenever eframe is updated.
+[advisories]
+ignore = [
+    # quick-xml < 0.41.0: memory-exhaustion DoS in NsReader.
+    # Via zbus_xml (accesskit/atspi) and wayland-scanner. Fix requires a
+    # breaking bump those parents don't yet allow.
+    "RUSTSEC-2026-0195",
+    # quick-xml < 0.41.0: quadratic run time on duplicate attribute names.
+    # Same dependency chain as RUSTSEC-2026-0195.
+    "RUSTSEC-2026-0194",
+    # paste 1.0.15: unmaintained (warning only, no vulnerability).
+    # Latest version; pulled in by egui deps.
+    "RUSTSEC-2024-0436",
+    # ttf-parser 0.25.1: unmaintained (warning only, no vulnerability).
+    # Pulled in by egui's font stack.
+    "RUSTSEC-2026-0192",
+]
