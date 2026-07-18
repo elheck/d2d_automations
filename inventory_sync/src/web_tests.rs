@@ -39,14 +39,6 @@ fn test_app_state_clone() {
 }
 
 #[test]
-fn test_buy_signals_default_limit() {
-    let params = BuySignalsParams {
-        limit: default_buy_signals_limit(),
-    };
-    assert_eq!(params.limit, 100);
-}
-
-#[test]
 fn test_search_params_default_limit() {
     let params = SearchParams {
         q: "test".to_string(),

@@ -28,7 +28,10 @@ egui desktop app for Magic: The Gathering card inventory management.
   the inventory DB; moves apply when you re-load an updated CSV, and each card keeps
   its lot/side so per-lot revenue is unaffected.
 - **Magic Singles Listing** — Card lookup via Scryfall by set code + collector number, with images and Cardmarket prices
-- **Search Cards** — Interactive inventory search with filtering. Selected cards
+- **Search Cards** — Interactive inventory search with filtering. Each result row
+  has a **price-history button (📈)** that opens a floating window with the card's
+  trend-price sparkline and 7/30-day movement, fetched from the inventory_sync
+  server (foil-aware). Selected cards
   can either be sent to the Stock Checker lists, or **discarded**: choose the
   "Discard (remove without affecting revenue)" action to write cards off as junk.
   This reduces the inventory DB *without* counting them as sold (tracked revenue is
@@ -38,10 +41,13 @@ egui desktop app for Magic: The Gathering card inventory management.
 - **Picking** — Order picking workflow (reached via Stock Checker results)
 - **Pricing** — Node-based visual editor for filtering and pricing stock from CSV inventory
 - **Card Buy Helper** — Value a purchase offer from a card export CSV: split cards into individually-priced singles (by rarity and/or price threshold) versus bulk (flat rate per N cards), see the total offer, and export a breakdown CSV. Strictly read-only — never writes to the inventory database.
-- **Mispricing Report** — Compare every in-stock listing against a Cardmarket
-  price-guide reference (trend/avg/low, foil-aware) to surface under- and over-priced
-  cards, the revenue upside of repricing, and capital stuck above market. Fetches the
-  price guide from the Cardmarket CDN or loads it from a local JSON file. Strictly
+- **Mispricing Report** — Compare every in-stock listing against a market
+  reference (trend/avg/low, foil-aware) to surface under- and over-priced
+  cards, the revenue upside of repricing, and capital stuck above market. The
+  market source is either the **inventory_sync server** (default — latest
+  collected prices, no big download, plus **Δ7d/Δ30d market-movement columns**
+  so "overpriced and falling" is distinguishable from "overpriced but rising")
+  or a full Cardmarket price-guide download / local JSON file. Strictly
   read-only — it reports, it never writes prices.
 - **Restock Report** — Sold-out variants (quantity 0, copies sold > 0) ranked by
   sell-through speed (copies/week over the listing → last-sale window), with a
@@ -49,6 +55,12 @@ egui desktop app for Magic: The Gathering card inventory management.
   "what should I buy again?". Backed by the per-variant **sold-events log**: every
   inventory sync records which variant sold how many copies on what date and at
   what listed price (discards/write-offs never count as sales). Strictly read-only.
+- **Price Movers** — Joins the in-stock inventory with 7/30-day market movement
+  from inventory_sync price snapshots: spikes worth selling into and falling
+  knives worth liquidating, filterable by direction, minimum price, and minimum
+  listing age (old stock that is also losing value is the first liquidation
+  candidate). All deltas are computed locally from raw snapshot rows — the
+  server only runs indexed lookups. Strictly read-only.
 
 ## Data Sources
 
@@ -65,6 +77,10 @@ egui desktop app for Magic: The Gathering card inventory management.
   (e.g. `https://moxfield.com/decks/<id>`), which is fetched over the network.
 - **Scryfall API**: Card data, images
 - **Cardmarket CDN**: Price guide (~50MB, all MTG products)
+- **inventory_sync server**: Latest collected prices, raw price snapshots for
+  7/30-day movement, and per-card price history (see `inventory_sync/`; the
+  server URL is configured once in the shared connection bar and used by the
+  Pricing, Mispricing, Price Movers and Search screens)
 
 ## Caching
 

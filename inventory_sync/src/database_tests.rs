@@ -406,189 +406,6 @@ fn get_price_history_filters_by_since_date() {
 }
 
 #[test]
-fn get_recent_series_groups_by_product_in_date_order() {
-    let mut conn = test_db();
-    let catalog = ProductCatalog::from_entries(vec![
-        make_test_product(1, "Black Lotus"),
-        make_test_product(2, "Mox Pearl"),
-    ]);
-    upsert_products(&mut conn, &catalog).unwrap();
-
-    for (date, p1, p2) in [
-        ("2026-01-01T10:00:00+0100", 100.0, 50.0),
-        ("2026-02-01T10:00:00+0100", 110.0, 55.0),
-        ("2026-03-01T10:00:00+0100", 120.0, 60.0),
-    ] {
-        let guide = PriceGuide::from_entries(
-            vec![
-                make_test_price_entry(1, Some(p1)),
-                make_test_price_entry(2, Some(p2)),
-            ],
-            date,
-        );
-        insert_price_history(&mut conn, &guide, &catalog).unwrap();
-    }
-
-    let series = get_recent_series_for_scan(&conn, "2026-01-01", 1.0).unwrap();
-    assert_eq!(series.len(), 2);
-
-    let lotus = series.iter().find(|s| s.id_product == 1).unwrap();
-    assert_eq!(lotus.points.len(), 3);
-    // Points are chronological (oldest first).
-    assert_eq!(lotus.points[0].price_date, "2026-01-01");
-    assert_eq!(lotus.points[2].price_date, "2026-03-01");
-}
-
-#[test]
-fn get_recent_series_filters_by_since_date() {
-    let mut conn = test_db();
-    let catalog = ProductCatalog::from_entries(vec![make_test_product(1, "Black Lotus")]);
-    upsert_products(&mut conn, &catalog).unwrap();
-
-    for (date, price) in [
-        ("2026-01-01T10:00:00+0100", 100.0),
-        ("2026-02-01T10:00:00+0100", 110.0),
-        ("2026-03-01T10:00:00+0100", 120.0),
-    ] {
-        let guide = PriceGuide::from_entries(vec![make_test_price_entry(1, Some(price))], date);
-        insert_price_history(&mut conn, &guide, &catalog).unwrap();
-    }
-
-    let series = get_recent_series_for_scan(&conn, "2026-02-01", 1.0).unwrap();
-    assert_eq!(series.len(), 1);
-    assert_eq!(series[0].points.len(), 2);
-    assert_eq!(series[0].points[0].price_date, "2026-02-01");
-}
-
-#[test]
-fn get_recent_series_excludes_products_below_min_trend() {
-    let mut conn = test_db();
-    let catalog = ProductCatalog::from_entries(vec![
-        make_test_product(1, "Expensive Card"),
-        make_test_product(2, "Penny Card"),
-    ]);
-    upsert_products(&mut conn, &catalog).unwrap();
-
-    // make_test_price_entry sets trend to the given price.
-    let guide = PriceGuide::from_entries(
-        vec![
-            make_test_price_entry(1, Some(5.0)),
-            make_test_price_entry(2, Some(0.10)),
-        ],
-        "2026-02-01T10:00:00+0100",
-    );
-    insert_price_history(&mut conn, &guide, &catalog).unwrap();
-
-    let series = get_recent_series_for_scan(&conn, "2026-01-01", 1.0).unwrap();
-    assert_eq!(series.len(), 1);
-    assert_eq!(series[0].id_product, 1);
-}
-
-#[test]
-fn get_recent_series_uses_latest_trend_for_price_filter() {
-    let mut conn = test_db();
-    let catalog = ProductCatalog::from_entries(vec![make_test_product(1, "Riser")]);
-    upsert_products(&mut conn, &catalog).unwrap();
-
-    // Started as a penny card, most recent trend is above the threshold.
-    for (date, price) in [
-        ("2026-01-01T10:00:00+0100", 0.20),
-        ("2026-02-01T10:00:00+0100", 3.00),
-    ] {
-        let guide = PriceGuide::from_entries(vec![make_test_price_entry(1, Some(price))], date);
-        insert_price_history(&mut conn, &guide, &catalog).unwrap();
-    }
-
-    let series = get_recent_series_for_scan(&conn, "2026-01-01", 1.0).unwrap();
-    assert_eq!(series.len(), 1, "latest trend 3.00 >= 1.0 should be kept");
-}
-
-#[test]
-fn buy_signals_round_trip_and_meta() {
-    let mut conn = test_db();
-
-    let rows = vec![
-        BuySignalRow {
-            id_product: 10,
-            score: 92.5,
-            payload: r#"{"id_product":10,"score":92.5}"#.to_string(),
-        },
-        BuySignalRow {
-            id_product: 20,
-            score: 71.0,
-            payload: r#"{"id_product":20,"score":71.0}"#.to_string(),
-        },
-    ];
-    replace_buy_signals(&mut conn, &rows, "2026-03-01").unwrap();
-
-    let scan = get_buy_signals(&conn, 100).unwrap();
-    assert_eq!(scan.price_date.as_deref(), Some("2026-03-01"));
-    assert!(scan.computed_at.is_some());
-    assert_eq!(scan.signals.len(), 2);
-    // Rank order preserved (strongest first).
-    assert_eq!(scan.signals[0]["id_product"], 10);
-    assert_eq!(scan.signals[1]["id_product"], 20);
-}
-
-#[test]
-fn replace_buy_signals_overwrites_previous_scan() {
-    let mut conn = test_db();
-
-    replace_buy_signals(
-        &mut conn,
-        &[BuySignalRow {
-            id_product: 1,
-            score: 50.0,
-            payload: r#"{"id_product":1}"#.to_string(),
-        }],
-        "2026-03-01",
-    )
-    .unwrap();
-
-    // Second scan replaces the first entirely.
-    replace_buy_signals(
-        &mut conn,
-        &[BuySignalRow {
-            id_product: 2,
-            score: 80.0,
-            payload: r#"{"id_product":2}"#.to_string(),
-        }],
-        "2026-03-02",
-    )
-    .unwrap();
-
-    let scan = get_buy_signals(&conn, 100).unwrap();
-    assert_eq!(scan.signals.len(), 1);
-    assert_eq!(scan.signals[0]["id_product"], 2);
-    assert_eq!(scan.price_date.as_deref(), Some("2026-03-02"));
-}
-
-#[test]
-fn get_buy_signals_empty_when_never_scanned() {
-    let conn = test_db();
-    let scan = get_buy_signals(&conn, 100).unwrap();
-    assert!(scan.computed_at.is_none());
-    assert!(scan.price_date.is_none());
-    assert!(scan.signals.is_empty());
-}
-
-#[test]
-fn get_buy_signals_respects_limit() {
-    let mut conn = test_db();
-    let rows: Vec<BuySignalRow> = (0..5)
-        .map(|i| BuySignalRow {
-            id_product: i,
-            score: 100.0 - i as f64,
-            payload: format!(r#"{{"id_product":{}}}"#, i),
-        })
-        .collect();
-    replace_buy_signals(&mut conn, &rows, "2026-03-01").unwrap();
-
-    let scan = get_buy_signals(&conn, 2).unwrap();
-    assert_eq!(scan.signals.len(), 2);
-}
-
-#[test]
 fn get_price_history_returns_empty_when_since_date_is_future() {
     let mut conn = test_db();
     let catalog = ProductCatalog::from_entries(vec![make_test_product(1, "Black Lotus")]);
@@ -602,4 +419,57 @@ fn get_price_history_returns_empty_when_since_date_is_future() {
 
     let history = get_price_history(&conn, 1, Some("2030-01-01")).unwrap();
     assert!(history.is_empty());
+}
+
+#[test]
+fn get_price_snapshots_bulk_picks_row_on_or_before_date() {
+    let mut conn = test_db();
+    let catalog = ProductCatalog::from_entries(vec![make_test_product(1, "Black Lotus")]);
+    upsert_products(&mut conn, &catalog).unwrap();
+
+    let guide1 = PriceGuide::from_entries(
+        vec![make_test_price_entry(1, Some(2000.0))],
+        "2026-01-15T10:00:00+0100",
+    );
+    insert_price_history(&mut conn, &guide1, &catalog).unwrap();
+    let guide2 = PriceGuide::from_entries(
+        vec![make_test_price_entry(1, Some(2100.0))],
+        "2026-02-01T10:00:00+0100",
+    );
+    insert_price_history(&mut conn, &guide2, &catalog).unwrap();
+
+    let dates = vec![
+        "2026-01-20".to_string(), // between the two rows → falls back to 01-15
+        "2026-02-05".to_string(), // after both → latest row
+    ];
+    let snapshots = get_price_snapshots_bulk(&conn, &[1], &dates).unwrap();
+    assert_eq!(snapshots.len(), 2);
+
+    assert_eq!(snapshots[0].requested_date, "2026-01-20");
+    assert_eq!(snapshots[0].price_date, "2026-01-15");
+    assert_eq!(snapshots[0].trend, Some(2000.0));
+
+    assert_eq!(snapshots[1].requested_date, "2026-02-05");
+    assert_eq!(snapshots[1].price_date, "2026-02-01");
+    assert_eq!(snapshots[1].trend, Some(2100.0));
+}
+
+#[test]
+fn get_price_snapshots_bulk_omits_missing_pairs() {
+    let mut conn = test_db();
+    let catalog = ProductCatalog::from_entries(vec![make_test_product(1, "Black Lotus")]);
+    upsert_products(&mut conn, &catalog).unwrap();
+    let guide = PriceGuide::from_entries(
+        vec![make_test_price_entry(1, Some(2000.0))],
+        "2026-01-15T10:00:00+0100",
+    );
+    insert_price_history(&mut conn, &guide, &catalog).unwrap();
+
+    // Date before any data + a product with no history at all.
+    let dates = vec!["2026-01-01".to_string()];
+    let snapshots = get_price_snapshots_bulk(&conn, &[1, 999], &dates).unwrap();
+    assert!(snapshots.is_empty());
+
+    let snapshots = get_price_snapshots_bulk(&conn, &[999], &["2026-02-01".to_string()]).unwrap();
+    assert!(snapshots.is_empty());
 }

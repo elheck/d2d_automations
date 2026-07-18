@@ -20,6 +20,7 @@ pub enum Screen {
     Pricing,
     BuyHelper,
     Mispricing,
+    Movers,
     Consolidation,
     Restock,
 }
@@ -56,6 +57,11 @@ pub struct AppState {
     pub show_output_window: bool,
     pub output_window_content: String,
     pub output_window_title: String,
+    // ── Inventory Sync connection (shared by all screens) ─────────────────
+    pub inventory_sync_url: String,
+    pub inventory_sync_status: ConnectionStatus,
+    /// Receives the health-check result from a background thread.
+    pub inventory_health_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
 }
 
 impl Default for AppState {
@@ -75,6 +81,9 @@ impl Default for AppState {
             output_window_content: String::new(),
             output_window_title: String::new(),
             discount_percent: 10.0,
+            inventory_sync_url: "http://cardscanner.local:3000".to_string(),
+            inventory_sync_status: ConnectionStatus::Unchecked,
+            inventory_health_rx: None,
         }
     }
 }
@@ -241,6 +250,23 @@ pub enum SearchAction {
     Discard,
 }
 
+/// Floating per-card price-history window on the Search screen
+/// (data fetched from inventory_sync).
+#[derive(Default)]
+pub struct CardHistoryState {
+    pub open: bool,
+    /// Card name shown in the window title.
+    pub title: String,
+    /// Whether the foil price columns should be charted.
+    pub is_foil: bool,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub data: Option<crate::api::inventory_sync::PriceData>,
+    /// Receiver for the background history fetch, if one is in flight.
+    pub rx:
+        Option<std::sync::mpsc::Receiver<Result<crate::api::inventory_sync::PriceData, String>>>,
+}
+
 pub struct SearchState {
     pub csv_path: String,
     pub search_term: String,
@@ -258,6 +284,8 @@ pub struct SearchState {
     pub quantity_inputs: std::collections::HashMap<usize, i32>,
     /// Whether the selection is sent to lists or written off as discarded.
     pub action_mode: SearchAction,
+    /// Floating per-card price-history window.
+    pub history: CardHistoryState,
 }
 
 #[derive(Default)]
@@ -401,81 +429,12 @@ pub enum ConnectionStatus {
     Failed(String),
 }
 
-/// Which price field to pull from the inventory_sync latest-price response.
-#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum InventoryPriceSource {
-    Trend,
-    Avg,
-    Low,
-    Avg1,
-    Avg7,
-    Avg30,
-}
-
-impl InventoryPriceSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Trend => "Trend",
-            Self::Avg => "Average",
-            Self::Low => "Low",
-            Self::Avg1 => "Avg 1-day",
-            Self::Avg7 => "Avg 7-day",
-            Self::Avg30 => "Avg 30-day",
-        }
-    }
-    pub fn all() -> &'static [Self] {
-        &[
-            Self::Trend,
-            Self::Avg,
-            Self::Low,
-            Self::Avg1,
-            Self::Avg7,
-            Self::Avg30,
-        ]
-    }
-}
-
-/// Cached latest-price data for a single product from inventory_sync.
-#[derive(Clone, Debug)]
-pub struct CachedLatestPrice {
-    pub avg: Option<f64>,
-    pub low: Option<f64>,
-    pub trend: Option<f64>,
-    pub avg1: Option<f64>,
-    pub avg7: Option<f64>,
-    pub avg30: Option<f64>,
-    pub avg_foil: Option<f64>,
-    pub low_foil: Option<f64>,
-    pub trend_foil: Option<f64>,
-    pub avg1_foil: Option<f64>,
-    pub avg7_foil: Option<f64>,
-    pub avg30_foil: Option<f64>,
-}
-
-impl CachedLatestPrice {
-    /// Pick the price for the given source, choosing the foil variant when `is_foil` is true.
-    pub fn price_for(&self, source: InventoryPriceSource, is_foil: bool) -> Option<f64> {
-        if is_foil {
-            match source {
-                InventoryPriceSource::Trend => self.trend_foil,
-                InventoryPriceSource::Avg => self.avg_foil,
-                InventoryPriceSource::Low => self.low_foil,
-                InventoryPriceSource::Avg1 => self.avg1_foil,
-                InventoryPriceSource::Avg7 => self.avg7_foil,
-                InventoryPriceSource::Avg30 => self.avg30_foil,
-            }
-        } else {
-            match source {
-                InventoryPriceSource::Trend => self.trend,
-                InventoryPriceSource::Avg => self.avg,
-                InventoryPriceSource::Low => self.low,
-                InventoryPriceSource::Avg1 => self.avg1,
-                InventoryPriceSource::Avg7 => self.avg7,
-                InventoryPriceSource::Avg30 => self.avg30,
-            }
-        }
-    }
-}
+// The price-field selector and latest-price row are shared wire types from
+// mtg_common; re-exported under the names the UI code already uses. The
+// `PriceFields` trait provides `price_for(source, is_foil)` on price rows.
+pub use crate::api::inventory_sync::{
+    LatestPrice, PriceField as InventoryPriceSource, PriceFields,
+};
 
 // ── Node kinds ────────────────────────────────────────────────────────────────
 
@@ -723,8 +682,9 @@ pub struct SavedGraph {
     pub inventory_sync_url: Option<String>,
 }
 
-pub type PriceFetchResult = Result<Vec<(u64, CachedLatestPrice)>, String>;
+pub type PriceFetchResult = Result<Vec<LatestPrice>, String>;
 
+#[derive(Default)]
 pub struct PricingState {
     pub csv_path: String,
     pub cards: Vec<crate::models::Card>,
@@ -740,12 +700,8 @@ pub struct PricingState {
     pub preview_sort_asc: bool,
 
     // ── Inventory Sync ────────────────────────────────────────────────────
-    pub inventory_sync_url: String,
-    pub connection_status: ConnectionStatus,
-    /// Receives health-check result from background thread.
-    pub health_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     /// Cached latest prices keyed by cardmarket product ID.
-    pub inventory_prices: std::collections::HashMap<u64, CachedLatestPrice>,
+    pub inventory_prices: std::collections::HashMap<u64, LatestPrice>,
     /// Receives bulk price results from background fetch.
     pub prices_rx: Option<std::sync::mpsc::Receiver<PriceFetchResult>>,
     /// True while a bulk price fetch is in flight.
@@ -754,30 +710,6 @@ pub struct PricingState {
     // ── Diff CSV output ───────────────────────────────────────────────────
     pub show_diff_output: bool,
     pub diff_output_content: String,
-}
-
-impl Default for PricingState {
-    fn default() -> Self {
-        Self {
-            csv_path: String::new(),
-            cards: Vec::new(),
-            load_error: None,
-            graph: NodeGraph::default(),
-            show_preview: false,
-            cached_output: Vec::new(),
-            cached_price_overrides: std::collections::HashMap::new(),
-            preview_sort_col: None,
-            preview_sort_asc: false,
-            inventory_sync_url: "http://127.0.0.1:8080".to_string(),
-            connection_status: ConnectionStatus::Unchecked,
-            health_rx: None,
-            inventory_prices: std::collections::HashMap::new(),
-            prices_rx: None,
-            prices_fetching: false,
-            show_diff_output: false,
-            diff_output_content: String::new(),
-        }
-    }
 }
 
 /// State for the Card Buy Helper screen.
@@ -856,9 +788,44 @@ pub enum MispricingSort {
     DeltaPct,
     Listed,
     Market,
+    /// Market movement over the last 7 days (from inventory_sync snapshots).
+    Change7,
+    /// Market movement over the last 30 days (from inventory_sync snapshots).
+    Change30,
     Name,
     Quantity,
 }
+
+/// Where the mispricing market reference prices come from.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum MarketSource {
+    /// Latest prices collected daily by the inventory_sync server.
+    #[default]
+    InventorySync,
+    /// Full Cardmarket price-guide download (~50 MB, point-in-time).
+    PriceGuide,
+}
+
+impl MarketSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MarketSource::InventorySync => "Inventory Sync",
+            MarketSource::PriceGuide => "Price guide download",
+        }
+    }
+    pub fn all() -> &'static [Self] {
+        &[Self::InventorySync, Self::PriceGuide]
+    }
+}
+
+/// Payload of a successful background fetch from inventory_sync for the
+/// mispricing screen: latest prices, raw snapshot rows, and the three
+/// snapshot dates they were requested for.
+pub type MispricingSyncData = (
+    Vec<LatestPrice>,
+    Vec<crate::api::inventory_sync::PriceSnapshot>,
+    [String; 3],
+);
 
 /// Verdict filter applied to the mispricing table.
 #[derive(Clone, Copy, PartialEq, Default)]
@@ -887,6 +854,8 @@ pub struct MispricingState {
     pub threshold_pct: f64,
     /// Which price-guide field to treat as the market reference.
     pub ref_source: InventoryPriceSource,
+    /// Which source supplies the market reference prices.
+    pub source: MarketSource,
     /// Loaded Cardmarket price guide (from CDN fetch or a local file).
     pub price_guide: Option<PriceGuide>,
     /// Human-readable status of the price-guide acquisition.
@@ -902,6 +871,16 @@ pub struct MispricingState {
     pub filter: VerdictFilter,
     /// Receiver for the background price-guide fetch, if one is in flight.
     pub guide_rx: Option<std::sync::mpsc::Receiver<Result<PriceGuide, String>>>,
+    // ── Inventory Sync data ─────────────────────────────────────────────────
+    /// Latest prices from inventory_sync, keyed by cardmarket product ID.
+    pub inventory_prices: std::collections::HashMap<u64, LatestPrice>,
+    /// Snapshot rows backing the Δ7d / Δ30d columns.
+    pub snapshots: crate::price_trends::SnapshotSet,
+    /// Human-readable status of the last inventory_sync fetch.
+    pub sync_status: String,
+    pub sync_loading: bool,
+    /// Receiver for the background inventory_sync fetch, if one is in flight.
+    pub sync_rx: Option<std::sync::mpsc::Receiver<Result<MispricingSyncData, String>>>,
 }
 
 impl Default for MispricingState {
@@ -909,6 +888,7 @@ impl Default for MispricingState {
         Self {
             threshold_pct: 15.0,
             ref_source: InventoryPriceSource::Trend,
+            source: MarketSource::default(),
             price_guide: None,
             guide_status: String::new(),
             guide_loading: false,
@@ -919,6 +899,99 @@ impl Default for MispricingState {
             sort_desc: true,
             filter: VerdictFilter::default(),
             guide_rx: None,
+            inventory_prices: std::collections::HashMap::new(),
+            snapshots: crate::price_trends::SnapshotSet::default(),
+            sync_status: String::new(),
+            sync_loading: false,
+            sync_rx: None,
+        }
+    }
+}
+
+// ── Price Movers screen ───────────────────────────────────────────────────────
+
+/// Direction filter for the movers table.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum MoverDirection {
+    #[default]
+    All,
+    Risers,
+    Fallers,
+}
+
+impl MoverDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MoverDirection::All => "All",
+            MoverDirection::Risers => "Risers",
+            MoverDirection::Fallers => "Fallers",
+        }
+    }
+}
+
+/// Which column the movers table is sorted by.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum MoverSort {
+    /// Market movement over the last 7 days.
+    #[default]
+    Change7,
+    /// Market movement over the last 30 days.
+    Change30,
+    /// Days since the card was listed.
+    Age,
+    /// Current market value of the reference field.
+    Current,
+    Listed,
+    Name,
+    Quantity,
+}
+
+/// Payload of a successful background snapshot fetch for the movers screen:
+/// raw snapshot rows plus the three dates they were requested for.
+pub type MoversSyncData = (Vec<crate::api::inventory_sync::PriceSnapshot>, [String; 3]);
+
+/// State for the read-only Price Movers screen (stock × market movement).
+pub struct MoversState {
+    /// In-stock cards loaded from the inventory DB at fetch time.
+    pub cards: Vec<crate::inventory_db::InStockCard>,
+    /// Raw snapshot rows from inventory_sync, indexed for delta lookup.
+    pub snapshots: crate::price_trends::SnapshotSet,
+    /// Joined + filtered rows, rebuilt after every fetch or parameter change.
+    pub movers: Vec<crate::price_trends::StockMover>,
+    /// Which price field drives the movement columns.
+    pub field: InventoryPriceSource,
+    /// Cards whose current field value is below this are hidden (bulk noise).
+    pub min_price: f64,
+    /// Only show cards at least this old (0 = everyone); pairs movement with
+    /// the aging report to find dead stock that is also losing value.
+    pub min_age_days: i64,
+    pub direction: MoverDirection,
+    pub sort: MoverSort,
+    pub sort_desc: bool,
+    /// Human-readable status of the last fetch.
+    pub status: String,
+    pub error: Option<String>,
+    pub loading: bool,
+    /// Receiver for the background snapshot fetch, if one is in flight.
+    pub rx: Option<std::sync::mpsc::Receiver<Result<MoversSyncData, String>>>,
+}
+
+impl Default for MoversState {
+    fn default() -> Self {
+        Self {
+            cards: Vec::new(),
+            snapshots: crate::price_trends::SnapshotSet::default(),
+            movers: Vec::new(),
+            field: InventoryPriceSource::Trend,
+            min_price: 0.30,
+            min_age_days: 0,
+            direction: MoverDirection::default(),
+            sort: MoverSort::default(),
+            sort_desc: true,
+            status: String::new(),
+            error: None,
+            loading: false,
+            rx: None,
         }
     }
 }
@@ -991,6 +1064,7 @@ impl Default for SearchState {
             selected_cards: Vec::new(),
             quantity_inputs: std::collections::HashMap::new(),
             action_mode: SearchAction::AddToLists,
+            history: CardHistoryState::default(),
         }
     }
 }

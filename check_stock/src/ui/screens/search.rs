@@ -1,9 +1,11 @@
 use crate::{
+    api::inventory_sync::{InventorySyncClient, PriceField, PriceFields},
     card_matching::MatchedCard,
     formatters::format_update_stock_csv,
     io::read_csv,
+    price_trends::roc_from_history,
     ui::{
-        components::FilePicker,
+        components::{FilePicker, InventorySyncBar},
         screens::PickingState,
         state::{AppState, Screen, SearchAction, SearchState, SelectedSearchCard},
         style,
@@ -63,6 +65,10 @@ impl SearchScreen {
                 }
             });
 
+            ui.add_space(6.0);
+
+            // ── Inventory Sync (enables the per-card price-history windows) ──
+            InventorySyncBar::show(ui, ctx, app_state, |_, _| {});
             ui.add_space(10.0);
 
             if !state.cards.is_empty() {
@@ -78,9 +84,11 @@ impl SearchScreen {
                 ui.add_space(10.0);
 
                 // Results
-                Self::show_search_results(ui, state);
+                Self::show_search_results(ui, app_state, state);
             }
         });
+
+        Self::show_history_window(ctx, state);
     }
 
     fn show_search_controls(ui: &mut egui::Ui, state: &mut SearchState) {
@@ -345,7 +353,7 @@ impl SearchScreen {
         state.quantity_inputs.clear();
     }
 
-    fn show_search_results(ui: &mut egui::Ui, state: &mut SearchState) {
+    fn show_search_results(ui: &mut egui::Ui, app_state: &AppState, state: &mut SearchState) {
         let total_results = state.filtered_cards.len();
         let total_pages = total_results.div_ceil(state.results_per_page);
 
@@ -414,14 +422,15 @@ impl SearchScreen {
 
         ui.add_space(5.0);
 
-        // Collect add actions to apply after the grid (avoids borrow conflicts)
+        // Collect actions to apply after the grid (avoids borrow conflicts)
         let mut add_actions: Vec<(usize, i32)> = Vec::new();
+        let mut history_action: Option<usize> = None;
 
         egui::ScrollArea::vertical()
             .max_height(ui.available_height() - 20.0)
             .show(ui, |ui| {
                 egui::Grid::new("search_results")
-                    .num_columns(10)
+                    .num_columns(11)
                     .spacing([10.0, 4.0])
                     .striped(true)
                     .show(ui, |ui| {
@@ -436,6 +445,7 @@ impl SearchScreen {
                         ui.strong("Price");
                         ui.strong("Location");
                         ui.strong("Rarity");
+                        ui.strong("");
                         ui.end_row();
 
                         // Results - only show the current page
@@ -483,10 +493,26 @@ impl SearchScreen {
                             ui.label(card.location.as_deref().unwrap_or(""));
                             ui.label(&card.rarity);
 
+                            // Price-history window (needs the inventory_sync server)
+                            if ui
+                                .add(egui::Button::new("📈").small())
+                                .on_hover_text("Price history from inventory_sync")
+                                .clicked()
+                            {
+                                history_action = Some(abs_idx);
+                            }
+
                             ui.end_row();
                         }
                     });
             });
+
+        if let Some(abs_idx) = history_action {
+            if let Some(card) = state.filtered_cards.get(abs_idx) {
+                let card = card.clone();
+                Self::spawn_history_fetch(state, &app_state.inventory_sync_url, &card);
+            }
+        }
 
         // Apply add actions (capped to available stock)
         for (abs_idx, qty) in add_actions {
@@ -561,6 +587,209 @@ impl SearchScreen {
             "Proceeding to lists with {} card groups ({} total entries)",
             groups.len(),
             total_cards
+        );
+    }
+
+    // ── Per-card price history ──────────────────────────────────────────────
+
+    /// Days of history to chart in the per-card window.
+    const HISTORY_DAYS: u32 = 120;
+
+    /// Kicks off a background `GET /api/prices/{id}` fetch for one card.
+    fn spawn_history_fetch(state: &mut SearchState, url: &str, card: &crate::models::Card) {
+        let Ok(id) = card.cardmarket_id.parse::<u64>() else {
+            state.history.open = true;
+            state.history.title = card.name.clone();
+            state.history.error = Some("Card has no usable cardmarket ID.".to_string());
+            state.history.data = None;
+            state.history.loading = false;
+            return;
+        };
+        info!("Search: fetching price history for product {id} from {url}");
+        state.history.open = true;
+        state.history.title = card.name.clone();
+        state.history.is_foil = card.is_foil_card();
+        state.history.error = None;
+        state.history.data = None;
+        state.history.loading = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.history.rx = Some(rx);
+        let client = InventorySyncClient::new(url);
+        std::thread::spawn(move || {
+            let result = client
+                .price_history_blocking(id, Some(Self::HISTORY_DAYS))
+                .map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Polls the fetch channel and renders the floating history window.
+    fn show_history_window(ctx: &egui::Context, state: &mut SearchState) {
+        if let Some(rx) = &state.history.rx {
+            if let Ok(result) = rx.try_recv() {
+                state.history.loading = false;
+                state.history.rx = None;
+                match result {
+                    Ok(data) => state.history.data = Some(data),
+                    Err(e) => state.history.error = Some(format!("History fetch failed: {e}")),
+                }
+            }
+        }
+        if state.history.loading {
+            ctx.request_repaint();
+        }
+        if !state.history.open {
+            return;
+        }
+
+        let mut open = state.history.open;
+        let title = if state.history.is_foil {
+            format!("Price history — {} ✦", state.history.title)
+        } else {
+            format!("Price history — {}", state.history.title)
+        };
+        egui::Window::new(title)
+            .id(egui::Id::new("card_history_window"))
+            .open(&mut open)
+            .default_width(470.0)
+            .show(ctx, |ui| {
+                if state.history.loading {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Fetching history…");
+                    });
+                    return;
+                }
+                if let Some(err) = &state.history.error {
+                    style::status_error(ui, err);
+                    return;
+                }
+                let Some(data) = &state.history.data else {
+                    return;
+                };
+
+                if let Some(expansion) = &data.product.expansion_name {
+                    ui.label(
+                        egui::RichText::new(format!("{} · {}", data.product.name, expansion))
+                            .color(style::TEXT_MUTED)
+                            .size(11.0),
+                    );
+                    ui.add_space(4.0);
+                }
+
+                let is_foil = state.history.is_foil;
+                let points: Vec<(&str, f64)> = data
+                    .history
+                    .iter()
+                    .filter_map(|p| {
+                        p.price_for(PriceField::Trend, is_foil)
+                            .map(|v| (p.price_date.as_str(), v))
+                    })
+                    .collect();
+
+                if points.len() < 2 {
+                    ui.label(
+                        egui::RichText::new("Not enough price history for this card yet.")
+                            .color(style::TEXT_MUTED),
+                    );
+                    return;
+                }
+
+                Self::draw_sparkline(ui, &points);
+                ui.add_space(6.0);
+
+                // Stats row: current trend + 7/30-day movement, computed
+                // locally from the raw history rows (foil-aware).
+                let current = points.last().map(|(_, v)| *v);
+                ui.horizontal(|ui| {
+                    ui.label("Trend:");
+                    ui.label(
+                        egui::RichText::new(
+                            current
+                                .map(|v| format!("€{v:.2}"))
+                                .unwrap_or_else(|| "—".to_string()),
+                        )
+                        .strong(),
+                    );
+                    ui.add_space(10.0);
+                    ui.label("Δ7d:");
+                    style::change_pct_label(ui, roc_from_history(&data.history, 7, is_foil));
+                    ui.add_space(10.0);
+                    ui.label("Δ30d:");
+                    style::change_pct_label(ui, roc_from_history(&data.history, 30, is_foil));
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(format!("{} days shown", points.len()))
+                            .color(style::TEXT_MUTED)
+                            .size(11.0),
+                    );
+                });
+            });
+        state.history.open = open;
+    }
+
+    /// Draws the trend-price line chart into an allocated rect.
+    fn draw_sparkline(ui: &mut egui::Ui, points: &[(&str, f64)]) {
+        let desired = egui::vec2(ui.available_width().min(440.0), 120.0);
+        let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 4.0, style::PANEL_BG);
+
+        let values: Vec<f64> = points.iter().map(|(_, v)| *v).collect();
+        let min = values.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        // Flat series still needs a visible band to map into.
+        let (min, max) = if (max - min).abs() < 1e-9 {
+            (min - 0.5, max + 0.5)
+        } else {
+            (min, max)
+        };
+
+        let pad = 8.0;
+        let inner = rect.shrink(pad);
+        let n = points.len();
+        let line: Vec<egui::Pos2> = values
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let x = inner.left() + inner.width() * i as f32 / (n - 1) as f32;
+                let t = ((v - min) / (max - min)) as f32;
+                let y = inner.bottom() - inner.height() * t;
+                egui::pos2(x, y)
+            })
+            .collect();
+        painter.add(egui::Shape::line(
+            line,
+            egui::Stroke::new(1.5_f32, style::ACCENT),
+        ));
+
+        let label = |pos: egui::Pos2, align: egui::Align2, text: String| {
+            painter.text(
+                pos,
+                align,
+                text,
+                egui::FontId::proportional(10.0),
+                style::TEXT_MUTED,
+            );
+        };
+        label(
+            rect.left_top() + egui::vec2(4.0, 2.0),
+            egui::Align2::LEFT_TOP,
+            format!("€{max:.2}"),
+        );
+        label(
+            rect.left_bottom() + egui::vec2(4.0, -2.0),
+            egui::Align2::LEFT_BOTTOM,
+            format!("€{min:.2}"),
+        );
+        label(
+            rect.right_bottom() + egui::vec2(-4.0, -2.0),
+            egui::Align2::RIGHT_BOTTOM,
+            format!(
+                "{} → {}",
+                points.first().map(|(d, _)| *d).unwrap_or_default(),
+                points.last().map(|(d, _)| *d).unwrap_or_default()
+            ),
         );
     }
 

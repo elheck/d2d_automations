@@ -1,6 +1,7 @@
-//! API clients for external services (Scryfall, Cardmarket)
+//! API clients for external services (Scryfall, Cardmarket, inventory_sync)
 
 pub mod cardmarket;
+pub mod inventory_sync;
 pub mod scryfall;
 
 #[cfg(test)]

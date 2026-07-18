@@ -10,6 +10,7 @@ projects: API types, HTTP clients, and caching primitives.
 |--------|----------|
 | `scryfall` | `ScryfallCard` (superset of fields used across projects), `ImageUris`, `CardFace`, `ScryfallPrices`, `PurchaseUris`, and fetch functions (`fetch_card`, `fetch_card_by_cardmarket_id`, `fetch_card_by_name`, `fetch_image`) |
 | `cardmarket` | `PriceGuide` (lookup by product ID with `load`/`fetch`), `PriceGuideEntry`, `PriceGuideFile` |
+| `inventory_sync` | Wire types (`ApiResponse`, `LatestPrice`, `PriceSnapshot`, `PriceData`, …) shared between the `inventory_sync` server (serializes) and client apps (deserialize), the `InventorySyncClient` HTTP client (`health`, `latest_prices`, `price_history`, `price_snapshots`), and `PriceField`/`PriceFields` — the foil-aware selector for the 12 standard Cardmarket price columns, also implemented for `PriceGuideEntry` |
 | `file_cache` | `FileCache` — best-effort persistent byte cache backed by files in a directory; foundation for the projects' image caches |
 | `error` | `MtgError` / `MtgResult` — common error type; projects convert it into their own error types via `From` |
 
@@ -19,9 +20,10 @@ requests) and `PRICE_GUIDE_URL`.
 ## Features
 
 - `blocking` — enables blocking (non-async) variants of the HTTP clients
-  (`scryfall::blocking::*`, `PriceGuide::fetch_blocking`) for GUI apps that
-  call APIs from worker threads without an async runtime. `check_stock`
-  enables this; `inventory_sync` uses the async variants.
+  (`scryfall::blocking::*`, `PriceGuide::fetch_blocking`,
+  `InventorySyncClient::*_blocking`) for GUI apps that call APIs from worker
+  threads without an async runtime. `check_stock` enables this;
+  `inventory_sync` uses the async variants.
 
 ## Async vs blocking
 

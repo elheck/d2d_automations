@@ -11,19 +11,21 @@ use axum::{
     Router,
 };
 use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 
 use crate::database::{
-    get_buy_signals, get_id_expansion_for_product, get_latest_price_date, get_latest_prices_bulk,
-    get_price_history, get_product_by_id, search_products_by_name, upsert_expansion_name,
+    get_id_expansion_for_product, get_latest_prices_bulk, get_price_history,
+    get_price_snapshots_bulk, get_product_by_id, search_products_by_name, upsert_expansion_name,
 };
-use crate::database::{BuySignalScan, LatestPrice, PriceHistoryPoint, ProductSearchResult};
+use crate::database::{LatestPrice, PriceSnapshot, ProductSearchResult};
 use crate::image_cache::{fetch_card_info_cached, fetch_image_cached, ImageCache};
-use crate::indicators::{
-    calculate_all_indicators, calculate_cardmarket_signals, CardmarketSignals, TechnicalIndicators,
-};
+use crate::indicators::{calculate_all_indicators, calculate_cardmarket_signals};
 use crate::scryfall::CardInfo;
+use mtg_common::inventory_sync::{
+    ApiResponse, BulkPriceRequest, PriceData, PriceSnapshotRequest, MAX_BULK_IDS,
+    MAX_SNAPSHOT_DATES,
+};
 
 /// Shared application state (thread-safe database connection + image cache)
 #[derive(Clone)]
@@ -69,25 +71,6 @@ impl PriceParams {
         }
         None
     }
-}
-
-/// API response wrapper
-#[derive(Serialize)]
-struct ApiResponse<T> {
-    success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<T>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-/// Combined price data response
-#[derive(Serialize)]
-struct PriceData {
-    product: ProductSearchResult,
-    history: Vec<PriceHistoryPoint>,
-    indicators: TechnicalIndicators,
-    cardmarket_signals: CardmarketSignals,
 }
 
 /// GET /api/health - Simple connectivity check
@@ -233,24 +216,16 @@ async fn card_info_handler(
     }
 }
 
-/// Request body for bulk latest-prices lookup
-#[derive(Deserialize)]
-struct BulkPriceRequest {
-    ids: Vec<u64>,
-}
-
 /// POST /api/latest-prices
 /// Returns the most recent price row for each requested product ID.
 async fn latest_prices_handler(
     State(state): State<AppState>,
     Json(body): Json<BulkPriceRequest>,
 ) -> Result<Json<ApiResponse<Vec<LatestPrice>>>, StatusCode> {
-    if body.ids.len() > 10_000 {
-        return Ok(Json(ApiResponse {
-            success: false,
-            data: None,
-            error: Some("Too many IDs (max 10 000)".to_string()),
-        }));
+    if body.ids.len() > MAX_BULK_IDS {
+        return Ok(Json(ApiResponse::err(format!(
+            "Too many IDs (max {MAX_BULK_IDS})"
+        ))));
     }
     let conn = state.db.lock().unwrap();
     match get_latest_prices_bulk(&conn, &body.ids) {
@@ -266,73 +241,42 @@ async fn latest_prices_handler(
     }
 }
 
-/// Buy-signals query parameters.
-#[derive(Deserialize)]
-struct BuySignalsParams {
-    #[serde(default = "default_buy_signals_limit")]
-    limit: usize,
-}
-
-fn default_buy_signals_limit() -> usize {
-    100
-}
-
-/// Maximum number of buy signals a single request may ask for.
-const MAX_BUY_SIGNALS_LIMIT: usize = 500;
-
-/// GET /api/buy-signals?limit=100
+/// POST /api/price-snapshots
 ///
-/// Returns the precomputed ranked list of undervalued dip-buy candidates.
-///
-/// The ranking is refreshed once per day after new price data is ingested. If it
-/// has never been computed yet (e.g. right after first startup) but price history
-/// exists, it is computed lazily on this request so the view is never empty.
-async fn buy_signals_handler(
+/// Returns, for each (product ID, date) pair, the price row in effect on that
+/// date (most recent row on or before it). This is a pure indexed lookup —
+/// no aggregation happens server-side; clients compute deltas themselves.
+async fn price_snapshots_handler(
     State(state): State<AppState>,
-    Query(params): Query<BuySignalsParams>,
-) -> Result<Json<ApiResponse<BuySignalScan>>, StatusCode> {
-    let limit = params.limit.min(MAX_BUY_SIGNALS_LIMIT);
-    let mut conn = state.db.lock().unwrap();
-
-    // Lazily compute on first view if the daily scan hasn't run yet.
-    let scan = match get_buy_signals(&conn, limit) {
-        Ok(s) => s,
-        Err(e) => {
-            log::error!("Buy signals lookup error: {}", e);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    };
-
-    if scan.computed_at.is_none() {
-        if let Ok(Some(price_date)) = get_latest_price_date(&conn) {
-            log::info!(
-                "No buy-signal scan yet; computing on demand for {}",
-                price_date
-            );
-            if let Err(e) =
-                crate::scanner::run_scan(&mut conn, crate::scanner::DEFAULT_MIN_PRICE, &price_date)
-            {
-                log::error!("On-demand buy-signal scan failed: {}", e);
-            }
-            return match get_buy_signals(&conn, limit) {
-                Ok(s) => Ok(Json(ApiResponse {
-                    success: true,
-                    data: Some(s),
-                    error: None,
-                })),
-                Err(e) => {
-                    log::error!("Buy signals lookup error: {}", e);
-                    Err(StatusCode::INTERNAL_SERVER_ERROR)
-                }
-            };
+    Json(body): Json<PriceSnapshotRequest>,
+) -> Result<Json<ApiResponse<Vec<PriceSnapshot>>>, StatusCode> {
+    if body.ids.len() > MAX_BULK_IDS {
+        return Ok(Json(ApiResponse::err(format!(
+            "Too many IDs (max {MAX_BULK_IDS})"
+        ))));
+    }
+    if body.dates.len() > MAX_SNAPSHOT_DATES {
+        return Ok(Json(ApiResponse::err(format!(
+            "Too many dates (max {MAX_SNAPSHOT_DATES})"
+        ))));
+    }
+    // Dates reach parameterized SQL as-is; validate the shape anyway so
+    // malformed input fails loudly instead of silently matching nothing.
+    for date in &body.dates {
+        if chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {
+            return Ok(Json(ApiResponse::err(format!(
+                "Invalid date '{date}' (expected YYYY-MM-DD)"
+            ))));
         }
     }
-
-    Ok(Json(ApiResponse {
-        success: true,
-        data: Some(scan),
-        error: None,
-    }))
+    let conn = state.db.lock().unwrap();
+    match get_price_snapshots_bulk(&conn, &body.ids, &body.dates) {
+        Ok(snapshots) => Ok(Json(ApiResponse::ok(snapshots))),
+        Err(e) => {
+            log::error!("Price snapshot lookup error: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 /// Build the web server router
@@ -344,8 +288,8 @@ pub fn create_router(db: Arc<Mutex<Connection>>, image_cache: Arc<ImageCache>) -
         .route("/api/health", get(health_handler))
         .route("/api/search", get(search_handler))
         .route("/api/prices/{id}", get(prices_handler))
-        .route("/api/buy-signals", get(buy_signals_handler))
         .route("/api/latest-prices", post(latest_prices_handler))
+        .route("/api/price-snapshots", post(price_snapshots_handler))
         .route("/api/card-image/{id}", get(card_image_handler))
         .route("/api/card-info/{id}", get(card_info_handler))
         .with_state(state)

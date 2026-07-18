@@ -5,7 +5,6 @@
 
 use crate::cardmarket::{PriceGuide, ProductCatalog};
 use rusqlite::{params, Connection, Transaction};
-use serde::Serialize;
 
 /// Result type for database operations
 pub type DbResult<T> = rusqlite::Result<T>;
@@ -67,23 +66,10 @@ pub fn init_schema(conn: &Connection) -> DbResult<()> {
             name TEXT NOT NULL
         );
 
-        -- Precomputed buy-signal scan results.
-        -- Refreshed once per day after new price data is ingested, so the web
-        -- client can read a ready-made ranking instead of scanning on request.
-        -- `payload` holds the JSON-serialized BuySignal; `rank` preserves order.
-        CREATE TABLE IF NOT EXISTS buy_signals (
-            rank INTEGER PRIMARY KEY,
-            id_product INTEGER NOT NULL,
-            score REAL NOT NULL,
-            payload TEXT NOT NULL
-        );
-
-        -- Single-row metadata for the buy-signal scan (when it last ran).
-        CREATE TABLE IF NOT EXISTS buy_signals_meta (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            computed_at TEXT NOT NULL,
-            price_date TEXT NOT NULL
-        );
+        -- The buy-signal scanner was removed (its daily scan cost too much CPU
+        -- on the server); drop its leftover tables from older deployments.
+        DROP TABLE IF EXISTS buy_signals;
+        DROP TABLE IF EXISTS buy_signals_meta;
         ",
     )?;
 
@@ -320,33 +306,11 @@ pub fn get_price_history_count(conn: &Connection) -> DbResult<i64> {
 
 // ── Web API Query Functions ────────────────────────────────────────────────
 
-/// Product search result (for API responses)
-#[derive(Debug, Clone, Serialize)]
-pub struct ProductSearchResult {
-    pub id_product: u64,
-    pub name: String,
-    pub category_name: String,
-    pub id_expansion: u64,
-    pub expansion_name: Option<String>,
-}
-
-/// Price history data point (for charting)
-#[derive(Debug, Clone, Serialize)]
-pub struct PriceHistoryPoint {
-    pub price_date: String,
-    pub avg: Option<f64>,
-    pub low: Option<f64>,
-    pub trend: Option<f64>,
-    pub avg1: Option<f64>,
-    pub avg7: Option<f64>,
-    pub avg30: Option<f64>,
-    pub avg_foil: Option<f64>,
-    pub low_foil: Option<f64>,
-    pub trend_foil: Option<f64>,
-    pub avg1_foil: Option<f64>,
-    pub avg7_foil: Option<f64>,
-    pub avg30_foil: Option<f64>,
-}
+// Wire types shared with client apps live in mtg_common; re-exported here so
+// the rest of the crate keeps using `crate::database::…` paths.
+pub use mtg_common::inventory_sync::{
+    LatestPrice, PriceHistoryPoint, PriceSnapshot, ProductSearchResult,
+};
 
 /// Search products by name (case-insensitive substring match)
 ///
@@ -438,25 +402,6 @@ pub fn get_price_history(
     }
 }
 
-/// Latest price snapshot for a single product (most recent price_date row).
-#[derive(Debug, Serialize)]
-pub struct LatestPrice {
-    pub id_product: u64,
-    pub price_date: String,
-    pub avg: Option<f64>,
-    pub low: Option<f64>,
-    pub trend: Option<f64>,
-    pub avg1: Option<f64>,
-    pub avg7: Option<f64>,
-    pub avg30: Option<f64>,
-    pub avg_foil: Option<f64>,
-    pub low_foil: Option<f64>,
-    pub trend_foil: Option<f64>,
-    pub avg1_foil: Option<f64>,
-    pub avg7_foil: Option<f64>,
-    pub avg30_foil: Option<f64>,
-}
-
 /// Get the latest price row for each of the given product IDs.
 ///
 /// Uses a parameterized query per product (SQLite has no native array binding).
@@ -499,180 +444,55 @@ pub fn get_latest_prices_bulk(conn: &Connection, ids: &[u64]) -> DbResult<Vec<La
     Ok(results)
 }
 
-/// A single product's recent price series, used by the buy-signal scanner.
+/// Get the price row in effect on each requested date for each product.
 ///
-/// Rows are ordered oldest → newest. Metadata (name, expansion) is joined in so
-/// the scanner can build a self-contained result without a second query per card.
-#[derive(Debug, Clone)]
-pub struct ProductPriceSeries {
-    pub id_product: u64,
-    pub name: String,
-    pub category_name: String,
-    pub id_expansion: u64,
-    pub expansion_name: Option<String>,
-    /// One entry per available date, oldest first.
-    pub points: Vec<PriceHistoryPoint>,
-}
-
-/// Fetch recent price history for every product that currently trades at or above
-/// `min_trend` (using the product's most recent trend price).
-///
-/// Only rows on or after `since_date` are returned, ordered by product then date,
-/// so the caller receives one [`ProductPriceSeries`] per product with its points
-/// in chronological order. Products with no row on/after `since_date`, or whose
-/// latest trend is below `min_trend`, are excluded.
-///
-/// `since_date` must be an ISO date string (`YYYY-MM-DD`).
-pub fn get_recent_series_for_scan(
+/// For every (id, date) pair this runs one indexed lookup: the most recent
+/// `price_history` row with `price_date <= date`. Deliberately no aggregation
+/// here — clients compute deltas themselves to keep server load minimal.
+/// Pairs with no data on or before the date are omitted from the result.
+pub fn get_price_snapshots_bulk(
     conn: &Connection,
-    since_date: &str,
-    min_trend: f64,
-) -> DbResult<Vec<ProductPriceSeries>> {
-    // Single scan of the windowed rows, joined to product metadata. Grouping into
-    // per-product series happens in Rust because the rows arrive already sorted by
-    // (id_product, price_date). The min-price filter is applied per-product after
-    // grouping so it keys off the product's latest trend rather than any single row.
+    ids: &[u64],
+    dates: &[String],
+) -> DbResult<Vec<PriceSnapshot>> {
+    let mut results = Vec::new();
     let mut stmt = conn.prepare(
-        "SELECT ph.id_product, p.name, p.category_name, p.id_expansion, e.name,
-                ph.price_date, ph.avg, ph.low, ph.trend, ph.avg1, ph.avg7, ph.avg30,
-                ph.avg_foil, ph.low_foil, ph.trend_foil, ph.avg1_foil, ph.avg7_foil, ph.avg30_foil
-         FROM price_history ph
-         JOIN products p ON p.id_product = ph.id_product
-         LEFT JOIN expansion_names e ON p.id_expansion = e.id_expansion
-         WHERE ph.price_date >= ?1
-         ORDER BY ph.id_product ASC, ph.price_date ASC",
+        "SELECT price_date, avg, low, trend, avg1, avg7, avg30,
+                avg_foil, low_foil, trend_foil, avg1_foil, avg7_foil, avg30_foil
+         FROM price_history
+         WHERE id_product = ?1 AND price_date <= ?2
+         ORDER BY price_date DESC
+         LIMIT 1",
     )?;
-
-    let mut rows = stmt.query(params![since_date])?;
-
-    let mut series: Vec<ProductPriceSeries> = Vec::new();
-    while let Some(row) = rows.next()? {
-        let id_product: u64 = row.get(0)?;
-        let point = PriceHistoryPoint {
-            price_date: row.get(5)?,
-            avg: row.get(6)?,
-            low: row.get(7)?,
-            trend: row.get(8)?,
-            avg1: row.get(9)?,
-            avg7: row.get(10)?,
-            avg30: row.get(11)?,
-            avg_foil: row.get(12)?,
-            low_foil: row.get(13)?,
-            trend_foil: row.get(14)?,
-            avg1_foil: row.get(15)?,
-            avg7_foil: row.get(16)?,
-            avg30_foil: row.get(17)?,
-        };
-
-        // Rows are sorted by id_product, so a new id always starts a new series.
-        match series.last_mut() {
-            Some(last) if last.id_product == id_product => last.points.push(point),
-            _ => series.push(ProductPriceSeries {
-                id_product,
-                name: row.get(1)?,
-                category_name: row.get(2)?,
-                id_expansion: row.get(3)?,
-                expansion_name: row.get(4)?,
-                points: vec![point],
-            }),
+    for &id in ids {
+        for date in dates {
+            if let Some(row) = stmt
+                .query_map(params![id, date], |row| {
+                    Ok(PriceSnapshot {
+                        id_product: id,
+                        requested_date: date.clone(),
+                        price_date: row.get(0)?,
+                        avg: row.get(1)?,
+                        low: row.get(2)?,
+                        trend: row.get(3)?,
+                        avg1: row.get(4)?,
+                        avg7: row.get(5)?,
+                        avg30: row.get(6)?,
+                        avg_foil: row.get(7)?,
+                        low_foil: row.get(8)?,
+                        trend_foil: row.get(9)?,
+                        avg1_foil: row.get(10)?,
+                        avg7_foil: row.get(11)?,
+                        avg30_foil: row.get(12)?,
+                    })
+                })?
+                .next()
+            {
+                results.push(row?);
+            }
         }
     }
-
-    // Apply the min-price filter on each product's most recent trend price.
-    series.retain(|s| {
-        s.points
-            .last()
-            .and_then(|p| p.trend)
-            .map(|t| t >= min_trend)
-            .unwrap_or(false)
-    });
-
-    Ok(series)
-}
-
-/// One row destined for the `buy_signals` table.
-///
-/// `payload` is the JSON-serialized signal (produced by the scanner) so the
-/// database layer stays decoupled from the scanner's `BuySignal` type.
-pub struct BuySignalRow {
-    pub id_product: u64,
-    pub score: f64,
-    pub payload: String,
-}
-
-/// Replace the entire `buy_signals` table with a fresh ranked scan, transactionally.
-///
-/// Rows are stored in the order given (rank 0 = strongest). `price_date` records
-/// which day's price data the scan was computed from. The whole swap is atomic:
-/// on any failure the previous results are left intact.
-pub fn replace_buy_signals(
-    conn: &mut Connection,
-    rows: &[BuySignalRow],
-    price_date: &str,
-) -> DbResult<()> {
-    let tx = conn.transaction()?;
-    tx.execute("DELETE FROM buy_signals", [])?;
-    {
-        let mut stmt = tx.prepare_cached(
-            "INSERT INTO buy_signals (rank, id_product, score, payload) VALUES (?1, ?2, ?3, ?4)",
-        )?;
-        for (rank, row) in rows.iter().enumerate() {
-            stmt.execute(params![
-                rank as i64,
-                row.id_product,
-                row.score,
-                &row.payload
-            ])?;
-        }
-    }
-    tx.execute(
-        "INSERT OR REPLACE INTO buy_signals_meta (id, computed_at, price_date)
-         VALUES (1, datetime('now'), ?1)",
-        params![price_date],
-    )?;
-    tx.commit()?;
-    log::info!("Stored {} buy signals for {}", rows.len(), price_date);
-    Ok(())
-}
-
-/// The precomputed buy-signal scan, ready to serve to the web client.
-#[derive(Debug, Serialize)]
-pub struct BuySignalScan {
-    /// When the scan was last computed (UTC, `datetime('now')` format), if ever.
-    pub computed_at: Option<String>,
-    /// Which day's price data the scan was computed from.
-    pub price_date: Option<String>,
-    /// JSON payloads of each ranked signal, strongest first, as raw JSON values.
-    pub signals: Vec<serde_json::Value>,
-}
-
-/// Read up to `limit` precomputed buy signals (rank order), plus scan metadata.
-pub fn get_buy_signals(conn: &Connection, limit: usize) -> DbResult<BuySignalScan> {
-    let (computed_at, price_date): (Option<String>, Option<String>) = match conn.query_row(
-        "SELECT computed_at, price_date FROM buy_signals_meta WHERE id = 1",
-        [],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-    ) {
-        Ok((c, d)) => (Some(c), Some(d)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => (None, None),
-        Err(e) => return Err(e),
-    };
-
-    let mut stmt = conn.prepare("SELECT payload FROM buy_signals ORDER BY rank ASC LIMIT ?1")?;
-    let signals: DbResult<Vec<serde_json::Value>> = stmt
-        .query_map(params![limit], |row| {
-            let payload: String = row.get(0)?;
-            // Payloads are written by our own scanner; if one is somehow malformed,
-            // fall back to null rather than failing the whole request.
-            Ok(serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null))
-        })?
-        .collect();
-
-    Ok(BuySignalScan {
-        computed_at,
-        price_date,
-        signals: signals?,
-    })
+    Ok(results)
 }
 
 /// Get product details by ID

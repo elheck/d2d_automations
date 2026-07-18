@@ -24,7 +24,7 @@ const BUCKETS: [(&str, i64, Option<i64>); 5] = [
 /// Cards whose `effective_date` cannot be parsed are treated as age `0` (newest),
 /// so they never falsely inflate the dead-stock buckets. Future-dated listings
 /// are clamped to `0` as well.
-fn age_days(card: &InStockCard, today: NaiveDate) -> i64 {
+pub fn age_days(card: &InStockCard, today: NaiveDate) -> i64 {
     match NaiveDate::parse_from_str(&card.effective_date, "%Y-%m-%d") {
         Ok(listed) => (today - listed).num_days().max(0),
         Err(_) => 0,

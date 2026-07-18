@@ -8,7 +8,6 @@ pub mod database;
 pub mod error;
 pub mod image_cache;
 pub mod indicators;
-pub mod scanner;
 pub mod scryfall;
 pub mod web;
 

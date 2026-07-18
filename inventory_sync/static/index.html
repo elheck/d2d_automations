@@ -450,98 +450,6 @@
             }
         }
 
-        /* Navigation Tabs */
-        .nav-tabs {
-            display: flex;
-            gap: 0.5rem;
-            justify-content: center;
-            margin-bottom: 2rem;
-            animation: fadeInUp 0.6s ease-out 0.05s both;
-        }
-
-        .nav-tab {
-            padding: 0.75rem 1.5rem;
-            font-size: 1rem;
-            font-weight: 600;
-            font-family: inherit;
-            background: var(--bg-secondary);
-            color: var(--text-secondary);
-            border: 1px solid var(--border);
-            border-radius: 0.75rem;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-
-        .nav-tab:hover {
-            color: var(--text-primary);
-            border-color: var(--primary-light);
-        }
-
-        .nav-tab.active {
-            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
-            color: #fff;
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-        }
-
-        /* Buy Signals view */
-        .buy-intro h2 {
-            font-size: 1.5rem;
-            font-weight: 700;
-            margin-bottom: 0.5rem;
-        }
-
-        .buy-intro p {
-            color: var(--text-secondary);
-            font-size: 0.95rem;
-            max-width: 780px;
-        }
-
-        .buy-meta {
-            margin-top: 0.75rem;
-            font-size: 0.8rem;
-            color: var(--text-muted);
-        }
-
-        .score-badge {
-            flex-shrink: 0;
-            width: 56px;
-            height: 56px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-            font-size: 1.1rem;
-            color: #fff;
-            border: 2px solid rgba(255, 255, 255, 0.15);
-        }
-
-        .price-tag {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-        }
-
-        .price-tag strong {
-            color: var(--text-primary);
-        }
-
-        .reason-chips {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.4rem;
-            margin-top: 0.5rem;
-        }
-
-        .reason-chip {
-            font-size: 0.75rem;
-            padding: 0.2rem 0.6rem;
-            border-radius: 999px;
-            background: var(--bg-primary);
-            border: 1px solid var(--border);
-            color: var(--text-secondary);
-        }
-
         /* Utility Classes */
         .hidden {
             display: none !important;
@@ -557,11 +465,6 @@
         <div class="header">
             <h1>🃏 MTG Price Tracker</h1>
             <p>Track Magic: The Gathering card prices over time</p>
-        </div>
-
-        <div class="nav-tabs">
-            <button class="nav-tab active" id="tabSearch" onclick="switchView('search')">🔍 Search</button>
-            <button class="nav-tab" id="tabBuy" onclick="switchView('buy')">💎 Buy Signals</button>
         </div>
 
         <div id="searchView">
@@ -659,17 +562,6 @@
             </div>
         </div>
         </div><!-- /#searchView -->
-
-        <div id="buyView" class="hidden">
-            <div class="search-container buy-controls">
-                <div class="buy-intro">
-                    <h2>💎 Best Cards to Buy Right Now</h2>
-                    <p>Undervalued dip-buys — cards trading below their own trend and history (oversold, near their price floor, low in their range), ranked by opportunity. The goal: buy cheap now, sell back toward trend later.</p>
-                    <div id="buyMeta" class="buy-meta"></div>
-                </div>
-            </div>
-            <div id="buyList" class="results" style="display:block;"></div>
-        </div>
     </div>
 
     <script>
@@ -1357,113 +1249,6 @@
             cardInfoDiv.innerHTML = html;
         }
 
-        // ── Buy Signals view ─────────────────────────────────────────────────
-        const searchView = document.getElementById('searchView');
-        const buyView = document.getElementById('buyView');
-        const buyList = document.getElementById('buyList');
-        const buyMeta = document.getElementById('buyMeta');
-        const tabSearch = document.getElementById('tabSearch');
-        const tabBuy = document.getElementById('tabBuy');
-        let buySignalsLoaded = false;
-
-        function switchView(view) {
-            const isBuy = view === 'buy';
-            buyView.classList.toggle('hidden', !isBuy);
-            searchView.classList.toggle('hidden', isBuy);
-            tabBuy.classList.toggle('active', isBuy);
-            tabSearch.classList.toggle('active', !isBuy);
-            if (isBuy && !buySignalsLoaded) {
-                loadBuySignals();
-            }
-        }
-
-        // Map a 0–100 score to a colour: red (weak) → amber → green (strong).
-        function scoreColor(score) {
-            if (score >= 70) return '#10b981';
-            if (score >= 50) return '#22c55e';
-            if (score >= 35) return '#f59e0b';
-            return '#94a3b8';
-        }
-
-        function fmtPrice(v) {
-            return (v === null || v === undefined) ? '—' : `€${v.toFixed(2)}`;
-        }
-
-        async function loadBuySignals() {
-            buyList.innerHTML = `
-                <div class="loading">
-                    <div class="spinner"></div>
-                    <div class="loading-text">Scanning for the best buys...</div>
-                </div>
-            `;
-            try {
-                const response = await fetch('/api/buy-signals?limit=100');
-                const data = await response.json();
-                if (data.success && data.data) {
-                    buySignalsLoaded = true;
-                    renderBuySignals(data.data);
-                } else {
-                    buyList.innerHTML = `<div class="no-data"><div class="no-data-icon">⚠️</div><div>Failed to load buy signals.</div></div>`;
-                }
-            } catch (error) {
-                buyList.innerHTML = `<div class="no-data"><div class="no-data-icon">⚠️</div><div>Error loading buy signals. Please try again.</div></div>`;
-                console.error(error);
-            }
-        }
-
-        function renderBuySignals(scan) {
-            const signals = scan.signals || [];
-
-            if (scan.price_date) {
-                buyMeta.textContent = `Based on price data from ${scan.price_date}` +
-                    (scan.computed_at ? ` · last scanned ${scan.computed_at} UTC` : '') +
-                    ` · ${signals.length} candidates`;
-            } else {
-                buyMeta.textContent = '';
-            }
-
-            if (signals.length === 0) {
-                buyList.innerHTML = `
-                    <div class="no-data">
-                        <div class="no-data-icon">💤</div>
-                        <div>No buy signals yet. They appear once enough price history has been collected.</div>
-                    </div>
-                `;
-                return;
-            }
-
-            buyList.innerHTML = signals.map((s, index) => {
-                const color = scoreColor(s.score);
-                const isSingle = s.category_name === 'Magic Single';
-                const thumb = isSingle
-                    ? `<img class="result-thumbnail" src="/api/card-image/${s.id_product}" loading="lazy" alt="" onload="this.classList.add('loaded')" onerror="this.style.display='none'">`
-                    : '';
-                const expansion = s.expansion_name ? escapeHtml(s.expansion_name) : escapeHtml(s.category_name);
-                const reasons = (s.reasons || []).slice(0, 3)
-                    .map(r => `<span class="reason-chip">${escapeHtml(r)}</span>`).join('');
-                return `
-                <div class="result-item fade-in" style="animation-delay: ${Math.min(index, 20) * 0.02}s" onclick="openFromBuy(${s.id_product})">
-                    <div class="score-badge" style="background:${color}" title="Buy score: ${s.score}/100">${Math.round(s.score)}</div>
-                    ${thumb}
-                    <div class="result-content">
-                        <div class="card-name">${escapeHtml(s.name)}</div>
-                        <div class="card-meta">
-                            <span class="meta-tag">${expansion}</span>
-                            <span class="price-tag">Buy near <strong>${fmtPrice(s.low)}</strong> · trend ${fmtPrice(s.trend)}</span>
-                        </div>
-                        <div class="reason-chips">${reasons}</div>
-                    </div>
-                    <div class="result-arrow">→</div>
-                </div>`;
-            }).join('');
-        }
-
-        // Clicking a buy signal jumps to the Search view and opens its chart.
-        function openFromBuy(idProduct) {
-            switchView('search');
-            loadPriceChart(idProduct);
-            chartContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
     </script>
 </body>
 </html>

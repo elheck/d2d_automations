@@ -8,7 +8,11 @@ use crate::ui::{
 use eframe::egui;
 use log::{error, info};
 
-pub(super) fn show_save_load_toolbar(ui: &mut egui::Ui, state: &mut PricingState) {
+pub(super) fn show_save_load_toolbar(
+    ui: &mut egui::Ui,
+    inventory_sync_url: &mut String,
+    state: &mut PricingState,
+) {
     ui.horizontal(|ui| {
         let preview_label = if state.show_preview {
             "▼ Hide Preview"
@@ -28,7 +32,7 @@ pub(super) fn show_save_load_toolbar(ui: &mut egui::Ui, state: &mut PricingState
                 .set_file_name("node_graph.json")
                 .save_file()
             {
-                match serde_json::to_string_pretty(&state.graph.save(&state.inventory_sync_url)) {
+                match serde_json::to_string_pretty(&state.graph.save(inventory_sync_url)) {
                     Ok(json) => {
                         if let Err(e) = std::fs::write(&path, json) {
                             error!("Failed to save graph: {e}");
@@ -55,7 +59,7 @@ pub(super) fn show_save_load_toolbar(ui: &mut egui::Ui, state: &mut PricingState
                     Ok(json) => match serde_json::from_str::<SavedGraph>(&json) {
                         Ok(saved) => {
                             if let Some(url) = &saved.inventory_sync_url {
-                                state.inventory_sync_url = url.clone();
+                                *inventory_sync_url = url.clone();
                             }
                             state.graph = NodeGraph::load(saved);
                             state.load_error = None;

@@ -4,12 +4,12 @@ use egui::ViewportBuilder;
 use super::{
     screens::{
         BinAnalysisScreen, BuyHelperScreen, ConsolidationScreen, ConsolidationState,
-        MispricingScreen, PickingScreen, PickingState, PricingScreen, RestockScreen, SearchScreen,
-        StockAnalysisScreen, StockCheckerScreen, StockListingScreen, WelcomeScreen,
+        MispricingScreen, MoversScreen, PickingScreen, PickingState, PricingScreen, RestockScreen,
+        SearchScreen, StockAnalysisScreen, StockCheckerScreen, StockListingScreen, WelcomeScreen,
     },
     state::{
-        AppState, BinAnalysisState, BuyHelperState, MispricingState, PricingState, RestockState,
-        Screen, SearchState, StockAnalysisState, StockListingState,
+        AppState, BinAnalysisState, BuyHelperState, MispricingState, MoversState, PricingState,
+        RestockState, Screen, SearchState, StockAnalysisState, StockListingState,
     },
 };
 
@@ -24,6 +24,7 @@ pub struct StockCheckerApp {
     pricing_state: PricingState,
     buy_helper_state: BuyHelperState,
     mispricing_state: MispricingState,
+    movers_state: MoversState,
     consolidation_state: ConsolidationState,
     restock_state: RestockState,
 }
@@ -87,11 +88,10 @@ impl eframe::App for StockCheckerApp {
                 );
             }
             Screen::Mispricing => {
-                MispricingScreen::show(
-                    ctx,
-                    &mut self.app_state.current_screen,
-                    &mut self.mispricing_state,
-                );
+                MispricingScreen::show(ctx, &mut self.app_state, &mut self.mispricing_state);
+            }
+            Screen::Movers => {
+                MoversScreen::show(ctx, &mut self.app_state, &mut self.movers_state);
             }
             Screen::Consolidation => {
                 ConsolidationScreen::show(

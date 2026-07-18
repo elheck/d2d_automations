@@ -11,6 +11,7 @@ pub mod inventory_db;
 pub mod io;
 pub mod mispricing;
 pub mod models;
+pub mod price_trends;
 pub mod restock;
 pub mod stock_analysis;
 pub mod ui;

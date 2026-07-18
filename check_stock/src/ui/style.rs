@@ -120,3 +120,23 @@ pub fn status_loading(ui: &mut egui::Ui, text: &str) {
 pub fn status_error(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).color(COLOR_ERROR).size(13.0));
 }
+
+/// Renders a price-movement Δ% cell: green when rising, red when falling,
+/// muted near zero, dash when there is not enough history.
+pub fn change_pct_label(ui: &mut egui::Ui, pct: Option<f64>) {
+    match pct {
+        Some(p) => {
+            let color = if p > 0.5 {
+                COLOR_SUCCESS
+            } else if p < -0.5 {
+                COLOR_ERROR
+            } else {
+                TEXT_MUTED
+            };
+            ui.label(egui::RichText::new(format!("{p:+.0}%")).color(color));
+        }
+        None => {
+            ui.label("—");
+        }
+    }
+}

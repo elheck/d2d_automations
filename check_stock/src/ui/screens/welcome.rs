@@ -3,7 +3,7 @@ use eframe::egui;
 
 pub struct WelcomeScreen;
 
-const TILES: [(&str, &str); 9] = [
+const TILES: [(&str, &str); 10] = [
     ("Stock Checker", "Verify card stock\nagainst order lists"),
     ("Stock Analysis", "Analyse inventory\ntrends and signals"),
     ("Bin Analysis", "Bin capacity and\nfree-slot analysis"),
@@ -16,6 +16,7 @@ const TILES: [(&str, &str); 9] = [
         "Restock Report",
         "Sold-out fast sellers\nworth buying again",
     ),
+    ("Price Movers", "7/30-day market moves\nacross your stock"),
 ];
 
 impl WelcomeScreen {
@@ -43,11 +44,12 @@ impl WelcomeScreen {
             let tile_h = 110.0_f32;
             let gap = 16.0_f32;
             let grid_w = tile_w * 3.0 + gap * 2.0;
+            let rows = (TILES.len() as f32 / 3.0).ceil();
 
             let mut clicked: Option<usize> = None;
 
             ui.allocate_ui_with_layout(
-                egui::vec2(grid_w, tile_h * 3.0 + gap * 2.0),
+                egui::vec2(grid_w, tile_h * rows + gap * (rows - 1.0)),
                 egui::Layout::left_to_right(egui::Align::TOP).with_main_wrap(true),
                 |ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
@@ -70,7 +72,8 @@ impl WelcomeScreen {
                     5 => Screen::Pricing,
                     6 => Screen::BuyHelper,
                     7 => Screen::Mispricing,
-                    _ => Screen::Restock,
+                    8 => Screen::Restock,
+                    _ => Screen::Movers,
                 };
             }
         });

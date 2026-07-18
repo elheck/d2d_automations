@@ -12,10 +12,11 @@ mod preview;
 mod toolbar;
 
 use crate::{
+    api::inventory_sync::InventorySyncClient,
     io::read_csv,
     ui::{
-        components::{FilePicker, OutputWindow},
-        state::{AppState, ConnectionStatus, NodeId, NodeKind, PricingState, Screen},
+        components::{FilePicker, InventorySyncBar, OutputWindow},
+        state::{AppState, NodeId, NodeKind, PricingState, Screen},
         style,
     },
 };
@@ -77,12 +78,12 @@ impl PricingScreen {
             ui.add_space(6.0);
 
             // ── Inventory Sync connection bar ─────────────────────────────────
-            show_inventory_sync_bar(ui, ctx, state);
+            show_inventory_sync_bar(ui, ctx, app_state, state);
 
             ui.add_space(4.0);
 
             // ── Graph save / load ────────────────────────────────────────────
-            show_save_load_toolbar(ui, state);
+            show_save_load_toolbar(ui, &mut app_state.inventory_sync_url, state);
 
             ui.add_space(2.0);
 
@@ -272,46 +273,30 @@ fn show_canvas(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut PricingState)
 
 // ── Inventory Sync connection bar ────────────────────────────────────────────
 
-fn show_inventory_sync_bar(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut PricingState) {
-    // Poll health-check channel
-    if let Some(rx) = &state.health_rx {
-        if let Ok(result) = rx.try_recv() {
-            match &result {
-                Ok(()) => info!(
-                    "Inventory sync health check succeeded ({})",
-                    state.inventory_sync_url
-                ),
-                Err(e) => error!(
-                    "Inventory sync health check failed ({}): {e}",
-                    state.inventory_sync_url
-                ),
-            }
-            match result {
-                Ok(()) => state.connection_status = ConnectionStatus::Connected,
-                Err(e) => state.connection_status = ConnectionStatus::Failed(e),
-            }
-            state.health_rx = None;
-        }
-    }
-
+fn show_inventory_sync_bar(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    app_state: &mut AppState,
+    state: &mut PricingState,
+) {
     // Poll bulk-prices channel
     if let Some(rx) = &state.prices_rx {
         if let Ok(result) = rx.try_recv() {
             match result {
                 Ok(prices) => {
                     let count = prices.len();
-                    for (id, cached) in prices {
-                        state.inventory_prices.insert(id, cached);
+                    for p in prices {
+                        state.inventory_prices.insert(p.id_product, p);
                     }
                     info!(
                         "Inventory sync price fetch succeeded: received {count} prices ({})",
-                        state.inventory_sync_url
+                        app_state.inventory_sync_url
                     );
                 }
                 Err(e) => {
                     error!(
                         "Inventory sync price fetch failed ({}): {e}",
-                        state.inventory_sync_url
+                        app_state.inventory_sync_url
                     );
                     state.load_error = Some(format!("Price fetch failed: {e}"));
                 }
@@ -320,116 +305,35 @@ fn show_inventory_sync_bar(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut P
             state.prices_fetching = false;
         }
     }
-
-    // Request repaints while any background request is in flight
-    if state.health_rx.is_some() || state.prices_rx.is_some() {
+    if state.prices_rx.is_some() {
         ctx.request_repaint();
     }
 
-    style::section_frame().show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("Inventory Sync:")
-                    .color(style::TEXT_MUTED)
-                    .size(12.0),
-            );
-
-            let te = egui::TextEdit::singleline(&mut state.inventory_sync_url)
-                .hint_text("http://127.0.0.1:8080")
-                .desired_width(260.0);
-            ui.add(te);
-
-            let checking = matches!(state.connection_status, ConnectionStatus::Checking);
-            let check_label = if checking { "Checking…" } else { "Check" };
-            if style::secondary_button(ui, check_label).clicked() && !checking {
-                start_health_check(state);
+    let url = app_state.inventory_sync_url.clone();
+    InventorySyncBar::show(ui, ctx, app_state, |ui, connected| {
+        // Fetch prices button (only when CSV is loaded + connected)
+        if connected && !state.cards.is_empty() {
+            let fetch_label = if state.prices_fetching {
+                "Fetching…"
+            } else {
+                "Fetch Prices"
+            };
+            if style::secondary_button(ui, fetch_label).clicked() && !state.prices_fetching {
+                start_price_fetch(state, &url);
             }
 
-            // Status indicator
-            match &state.connection_status {
-                ConnectionStatus::Unchecked => {
-                    ui.label(
-                        egui::RichText::new("not checked")
-                            .color(style::TEXT_MUTED)
-                            .size(11.0),
-                    );
-                }
-                ConnectionStatus::Checking => {
-                    ui.spinner();
-                }
-                ConnectionStatus::Connected => {
-                    ui.label(
-                        egui::RichText::new("connected")
-                            .color(egui::Color32::from_rgb(60, 190, 90))
-                            .size(11.0),
-                    );
-
-                    // Fetch prices button (only when CSV is loaded + connected)
-                    if !state.cards.is_empty() {
-                        let fetch_label = if state.prices_fetching {
-                            "Fetching…"
-                        } else {
-                            "Fetch Prices"
-                        };
-                        if style::secondary_button(ui, fetch_label).clicked()
-                            && !state.prices_fetching
-                        {
-                            start_price_fetch(state);
-                        }
-
-                        if !state.inventory_prices.is_empty() {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "{} prices cached",
-                                    state.inventory_prices.len()
-                                ))
-                                .color(style::TEXT_MUTED)
-                                .size(11.0),
-                            );
-                        }
-                    }
-                }
-                ConnectionStatus::Failed(msg) => {
-                    ui.label(
-                        egui::RichText::new(format!("failed: {msg}"))
-                            .color(egui::Color32::from_rgb(220, 60, 60))
-                            .size(11.0),
-                    );
-                }
+            if !state.inventory_prices.is_empty() {
+                ui.label(
+                    egui::RichText::new(format!("{} prices cached", state.inventory_prices.len()))
+                        .color(style::TEXT_MUTED)
+                        .size(11.0),
+                );
             }
-        });
+        }
     });
 }
 
-fn start_health_check(state: &mut PricingState) {
-    info!(
-        "Inventory sync: checking connection to {}",
-        state.inventory_sync_url
-    );
-    state.connection_status = ConnectionStatus::Checking;
-    let (tx, rx) = std::sync::mpsc::channel();
-    state.health_rx = Some(rx);
-    let url = format!(
-        "{}/api/health",
-        state.inventory_sync_url.trim_end_matches('/')
-    );
-    std::thread::spawn(move || {
-        let result = reqwest::blocking::Client::new()
-            .get(&url)
-            .timeout(std::time::Duration::from_secs(5))
-            .send();
-        let _ = tx.send(match result {
-            Ok(resp) if resp.status().is_success() => Ok(()),
-            Ok(resp) => Err(format!("HTTP {}", resp.status())),
-            Err(e) => Err(e.to_string()),
-        });
-    });
-}
-
-/// Maximum IDs per request to `/api/latest-prices` (server rejects > 10 000).
-const PRICE_FETCH_BATCH_SIZE: usize = 10_000;
-
-fn start_price_fetch(state: &mut PricingState) {
+fn start_price_fetch(state: &mut PricingState, url: &str) {
     // Collect unique cardmarket IDs from the loaded CSV
     let ids: Vec<u64> = state
         .cards
@@ -443,85 +347,18 @@ fn start_price_fetch(state: &mut PricingState) {
     }
 
     info!(
-        "Inventory sync: fetching latest prices for {} products from {}",
+        "Inventory sync: fetching latest prices for {} products from {url}",
         ids.len(),
-        state.inventory_sync_url
     );
     state.prices_fetching = true;
     let (tx, rx) = std::sync::mpsc::channel();
     state.prices_rx = Some(rx);
-    let url = format!(
-        "{}/api/latest-prices",
-        state.inventory_sync_url.trim_end_matches('/')
-    );
+    let client = InventorySyncClient::new(url);
     std::thread::spawn(move || {
-        let client = reqwest::blocking::Client::new();
-        let mut all_prices = Vec::new();
-
-        for chunk in ids.chunks(PRICE_FETCH_BATCH_SIZE) {
-            let body = serde_json::json!({ "ids": chunk });
-            let result = client
-                .post(&url)
-                .json(&body)
-                .timeout(std::time::Duration::from_secs(30))
-                .send();
-            match parse_price_response(result) {
-                Ok(prices) => all_prices.extend(prices),
-                Err(e) => {
-                    let _ = tx.send(Err(e));
-                    return;
-                }
-            }
-        }
-
-        let _ = tx.send(Ok(all_prices));
+        let _ = tx.send(
+            client
+                .latest_prices_blocking(&ids)
+                .map_err(|e| e.to_string()),
+        );
     });
-}
-
-/// Parse the JSON response from `/api/latest-prices` into our internal cache format.
-fn parse_price_response(
-    result: Result<reqwest::blocking::Response, reqwest::Error>,
-) -> Result<Vec<(u64, crate::ui::state::CachedLatestPrice)>, String> {
-    let resp = result.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-    let body: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-    if body.get("success").and_then(|v| v.as_bool()) != Some(true) {
-        let msg = body
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown error");
-        return Err(msg.to_string());
-    }
-    let data = body
-        .get("data")
-        .and_then(|v| v.as_array())
-        .ok_or("missing data array")?;
-    let mut out = Vec::with_capacity(data.len());
-    for entry in data {
-        let id = entry
-            .get("id_product")
-            .and_then(|v| v.as_u64())
-            .ok_or("missing id_product")?;
-        let f = |key: &str| entry.get(key).and_then(|v| v.as_f64());
-        out.push((
-            id,
-            crate::ui::state::CachedLatestPrice {
-                avg: f("avg"),
-                low: f("low"),
-                trend: f("trend"),
-                avg1: f("avg1"),
-                avg7: f("avg7"),
-                avg30: f("avg30"),
-                avg_foil: f("avg_foil"),
-                low_foil: f("low_foil"),
-                trend_foil: f("trend_foil"),
-                avg1_foil: f("avg1_foil"),
-                avg7_foil: f("avg7_foil"),
-                avg30_foil: f("avg30_foil"),
-            },
-        ));
-    }
-    Ok(out)
 }

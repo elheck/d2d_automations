@@ -1,7 +1,7 @@
 use crate::models::{canonical_condition, Card};
 use crate::ui::state::{
-    CachedLatestPrice, ConditionFilter, FoilFilter, GraphNode, LanguageFilter, NodeId, NodeKind,
-    RarityFilter, Wire,
+    ConditionFilter, FoilFilter, GraphNode, LanguageFilter, LatestPrice, NodeId, NodeKind,
+    PriceFields, RarityFilter, Wire,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -21,7 +21,7 @@ pub(super) fn evaluate_all(
     nodes: &[GraphNode],
     wires: &[Wire],
     all_cards: &[Card],
-    inventory_prices: &HashMap<u64, CachedLatestPrice>,
+    inventory_prices: &HashMap<u64, LatestPrice>,
 ) -> HashMap<NodeId, NodeOutput> {
     if all_cards.is_empty() {
         return HashMap::new();

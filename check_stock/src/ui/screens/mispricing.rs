@@ -1,20 +1,32 @@
 //! Mispricing / Margin report screen.
 //!
-//! Read-only: compares every in-stock card's listed price against a Cardmarket
-//! price-guide reference and surfaces under/over-priced listings plus the money
+//! Read-only: compares every in-stock card's listed price against a market
+//! reference and surfaces under/over-priced listings plus the money
 //! implications. It never writes prices anywhere — see the repricing feature
 //! request for the write side.
+//!
+//! The market reference comes from either the inventory_sync server (default —
+//! latest collected prices, plus 7/30-day movement columns from raw snapshot
+//! rows) or a full Cardmarket price-guide download. All movement deltas are
+//! computed locally in [`crate::price_trends`]; the server only serves rows.
 
 use crate::{
-    api::cardmarket::{PriceGuide, PriceGuideEntry},
+    api::cardmarket::PriceGuide,
+    api::inventory_sync::{InventorySyncClient, PriceFields},
     inventory_db::{get_in_stock_cards, InStockCard},
     mispricing::{build_report, MispricingReport, PriceVerdict},
+    price_trends::{SnapshotSet, TrendChange},
     ui::{
-        state::{InventoryPriceSource, MispricingSort, MispricingState, Screen, VerdictFilter},
+        components::InventorySyncBar,
+        state::{
+            AppState, InventoryPriceSource, MarketSource, MispricingSort, MispricingState, Screen,
+            VerdictFilter,
+        },
         style,
     },
 };
 use eframe::egui;
+use log::info;
 
 /// Max rows rendered in the table (sorted so the highest-impact are on top).
 const MAX_ROWS: usize = 300;
@@ -22,9 +34,10 @@ const MAX_ROWS: usize = 300;
 pub struct MispricingScreen;
 
 impl MispricingScreen {
-    pub fn show(ctx: &egui::Context, current_screen: &mut Screen, state: &mut MispricingState) {
-        Self::poll_fetch(state);
-        if state.guide_loading {
+    pub fn show(ctx: &egui::Context, app_state: &mut AppState, state: &mut MispricingState) {
+        Self::poll_guide_fetch(state);
+        Self::poll_sync_fetch(state);
+        if state.guide_loading || state.sync_loading {
             ctx.request_repaint();
         }
 
@@ -33,11 +46,13 @@ impl MispricingScreen {
                 .id_salt("mispricing_scroll")
                 .show(ui, |ui| {
                     if style::back_button(ui, "Back") {
-                        *current_screen = Screen::Welcome;
+                        app_state.current_screen = Screen::Welcome;
                     }
                     ui.add_space(8.0);
                     style::screen_heading(ui, "Mispricing / Margin Report");
 
+                    Self::show_sync_bar(ui, ctx, app_state, state);
+                    ui.add_space(6.0);
                     Self::show_controls(ui, state);
                     ui.add_space(10.0);
 
@@ -55,9 +70,9 @@ impl MispricingScreen {
         });
     }
 
-    /// Drains the background fetch channel and rebuilds the report when the
-    /// price guide arrives.
-    fn poll_fetch(state: &mut MispricingState) {
+    /// Drains the background price-guide fetch channel and rebuilds the report
+    /// when the guide arrives.
+    fn poll_guide_fetch(state: &mut MispricingState) {
         let Some(rx) = &state.guide_rx else { return };
         match rx.try_recv() {
             Ok(result) => {
@@ -84,33 +99,108 @@ impl MispricingScreen {
         }
     }
 
-    fn show_controls(ui: &mut egui::Ui, state: &mut MispricingState) {
-        style::section_frame().show(ui, |ui| {
-            // Price-guide acquisition row.
-            ui.horizontal(|ui| {
-                let fetch = style::secondary_button_enabled(
-                    ui,
-                    "Fetch price guide",
-                    !state.guide_loading,
-                );
-                if fetch.clicked() {
-                    Self::spawn_fetch(state);
-                }
-                if style::secondary_button(ui, "Load from file…").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("JSON", &["json"])
-                        .pick_file()
-                    {
-                        Self::load_from_file(state, &path.to_string_lossy());
+    /// Drains the background inventory_sync fetch channel and rebuilds the
+    /// report when prices + snapshots arrive.
+    fn poll_sync_fetch(state: &mut MispricingState) {
+        let Some(rx) = &state.sync_rx else { return };
+        match rx.try_recv() {
+            Ok(result) => {
+                state.sync_loading = false;
+                state.sync_rx = None;
+                match result {
+                    Ok((latest, snapshots, dates)) => {
+                        state.inventory_prices =
+                            latest.into_iter().map(|p| (p.id_product, p)).collect();
+                        state.snapshots = SnapshotSet::new(&dates, snapshots);
+                        state.sync_status = format!(
+                            "{} prices · movement for {} products",
+                            state.inventory_prices.len(),
+                            state.snapshots.len()
+                        );
+                        state.error = None;
+                        Self::rebuild(state);
+                    }
+                    Err(e) => {
+                        state.sync_status = String::new();
+                        state.error = Some(format!("Inventory sync fetch failed: {e}"));
                     }
                 }
-                if state.guide_loading {
-                    ui.spinner();
-                    ui.label("Fetching ~50 MB price guide…");
-                } else if !state.guide_status.is_empty() {
-                    ui.label(
-                        egui::RichText::new(&state.guide_status).color(style::COLOR_SUCCESS),
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                state.sync_loading = false;
+                state.sync_rx = None;
+            }
+        }
+    }
+
+    fn show_sync_bar(
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        app_state: &mut AppState,
+        state: &mut MispricingState,
+    ) {
+        let url = app_state.inventory_sync_url.clone();
+        InventorySyncBar::show(ui, ctx, app_state, |ui, connected| {
+            if connected {
+                let label = if state.sync_loading {
+                    "Fetching…"
+                } else {
+                    "Fetch prices"
+                };
+                if style::secondary_button(ui, label).clicked() && !state.sync_loading {
+                    Self::spawn_sync_fetch(state, &url);
+                }
+            }
+            if !state.sync_status.is_empty() {
+                ui.label(
+                    egui::RichText::new(&state.sync_status)
+                        .color(style::TEXT_MUTED)
+                        .size(11.0),
+                );
+            }
+        });
+    }
+
+    fn show_controls(ui: &mut egui::Ui, state: &mut MispricingState) {
+        style::section_frame().show(ui, |ui| {
+            // Market-source row.
+            ui.horizontal(|ui| {
+                ui.label("Market source:");
+                egui::ComboBox::from_id_salt("mispricing_market_source")
+                    .selected_text(state.source.as_str())
+                    .show_ui(ui, |ui| {
+                        for src in MarketSource::all() {
+                            ui.selectable_value(&mut state.source, *src, src.as_str());
+                        }
+                    });
+
+                if state.source == MarketSource::PriceGuide {
+                    ui.add_space(12.0);
+                    let fetch = style::secondary_button_enabled(
+                        ui,
+                        "Fetch price guide",
+                        !state.guide_loading,
                     );
+                    if fetch.clicked() {
+                        Self::spawn_guide_fetch(state);
+                    }
+                    if style::secondary_button(ui, "Load from file…").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("JSON", &["json"])
+                            .pick_file()
+                        {
+                            Self::load_from_file(state, &path.to_string_lossy());
+                        }
+                    }
+                    if state.guide_loading {
+                        ui.spinner();
+                        ui.label("Fetching ~50 MB price guide…");
+                    } else if !state.guide_status.is_empty() {
+                        ui.label(
+                            egui::RichText::new(&state.guide_status).color(style::COLOR_SUCCESS),
+                        );
+                    }
                 }
             });
 
@@ -137,20 +227,37 @@ impl MispricingScreen {
                 );
 
                 ui.add_space(12.0);
-                let can_run = state.price_guide.is_some() && !state.guide_loading;
+                let can_run = !state.guide_loading
+                    && !state.sync_loading
+                    && match state.source {
+                        MarketSource::PriceGuide => state.price_guide.is_some(),
+                        MarketSource::InventorySync => !state.inventory_prices.is_empty(),
+                    };
                 if style::primary_button_enabled(ui, "Analyse", can_run).clicked() {
                     Self::rebuild(state);
                 }
             });
 
-            if state.price_guide.is_none() && !state.guide_loading {
+            let needs_data_hint = match state.source {
+                MarketSource::PriceGuide => state.price_guide.is_none() && !state.guide_loading,
+                MarketSource::InventorySync => {
+                    state.inventory_prices.is_empty() && !state.sync_loading
+                }
+            };
+            if needs_data_hint {
                 ui.add_space(4.0);
+                let hint = match state.source {
+                    MarketSource::PriceGuide => {
+                        "Fetch or load the Cardmarket price guide to compare against your listings."
+                    }
+                    MarketSource::InventorySync => {
+                        "Connect to the inventory_sync server and fetch prices to compare against your listings."
+                    }
+                };
                 ui.label(
-                    egui::RichText::new(
-                        "Fetch or load the Cardmarket price guide to compare against your listings.",
-                    )
-                    .size(11.0)
-                    .color(style::TEXT_MUTED),
+                    egui::RichText::new(hint)
+                        .size(11.0)
+                        .color(style::TEXT_MUTED),
                 );
             }
         });
@@ -230,8 +337,15 @@ impl MispricingScreen {
         });
         ui.add_space(4.0);
 
-        // Filter, then sort.
-        let mut rows: Vec<&crate::mispricing::MispricedCard> = report
+        // Filter, join each row with its market movement, then sort.
+        let ref_source = state.ref_source;
+        let change_of = |c: &crate::mispricing::MispricedCard| -> TrendChange {
+            c.cardmarket_id
+                .parse::<u64>()
+                .map(|id| state.snapshots.change(id, ref_source, c.is_foil))
+                .unwrap_or_default()
+        };
+        let mut rows: Vec<(&crate::mispricing::MispricedCard, TrendChange)> = report
             .rows
             .iter()
             .filter(|c| match state.filter {
@@ -240,10 +354,15 @@ impl MispricingScreen {
                 VerdictFilter::Overpriced => c.verdict == PriceVerdict::Overpriced,
                 VerdictFilter::NoData => c.verdict == PriceVerdict::NoMarketData,
             })
+            .map(|c| (c, change_of(c)))
             .collect();
 
         let impact = |c: &crate::mispricing::MispricedCard| c.delta_abs.abs() * c.quantity as f64;
-        rows.sort_by(|a, b| {
+        let cmp_opt = |a: Option<f64>, b: Option<f64>| {
+            // Missing values sort below any present value.
+            a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal)
+        };
+        rows.sort_by(|(a, ca), (b, cb)| {
             let ord = match state.sort {
                 MispricingSort::Impact => impact(a)
                     .partial_cmp(&impact(b))
@@ -261,6 +380,8 @@ impl MispricingScreen {
                     .unwrap_or(0.0)
                     .partial_cmp(&b.market_price.unwrap_or(0.0))
                     .unwrap_or(std::cmp::Ordering::Equal),
+                MispricingSort::Change7 => cmp_opt(ca.pct_7d, cb.pct_7d),
+                MispricingSort::Change30 => cmp_opt(ca.pct_30d, cb.pct_30d),
                 MispricingSort::Name => a.name.cmp(&b.name),
                 MispricingSort::Quantity => a.quantity.cmp(&b.quantity),
             };
@@ -315,7 +436,7 @@ impl MispricingScreen {
         };
 
         egui::Grid::new("mispricing_table")
-            .num_columns(8)
+            .num_columns(10)
             .striped(true)
             .spacing([12.0, 2.0])
             .show(ui, |ui| {
@@ -350,6 +471,20 @@ impl MispricingScreen {
                 );
                 header(
                     ui,
+                    "Δ7d",
+                    MispricingSort::Change7,
+                    &mut state.sort,
+                    &mut state.sort_desc,
+                );
+                header(
+                    ui,
+                    "Δ30d",
+                    MispricingSort::Change30,
+                    &mut state.sort,
+                    &mut state.sort_desc,
+                );
+                header(
+                    ui,
                     "Δ%",
                     MispricingSort::DeltaPct,
                     &mut state.sort,
@@ -365,7 +500,7 @@ impl MispricingScreen {
                 ui.label(egui::RichText::new("Verdict").strong());
                 ui.end_row();
 
-                for c in rows.into_iter().take(MAX_ROWS) {
+                for (c, change) in rows.into_iter().take(MAX_ROWS) {
                     let name = if c.is_foil {
                         format!("{} ✦", c.name)
                     } else {
@@ -380,6 +515,8 @@ impl MispricingScreen {
                             .map(|m| format!("€{m:.2}"))
                             .unwrap_or_else(|| "—".to_string()),
                     );
+                    style::change_pct_label(ui, change.pct_7d);
+                    style::change_pct_label(ui, change.pct_30d);
                     let (color, verdict_color) = verdict_colors(c.verdict);
                     if c.market_price.is_some() {
                         ui.label(egui::RichText::new(format!("{:+.0}%", c.delta_pct)).color(color));
@@ -396,7 +533,7 @@ impl MispricingScreen {
 
     // ── Actions ─────────────────────────────────────────────────────────────
 
-    fn spawn_fetch(state: &mut MispricingState) {
+    fn spawn_guide_fetch(state: &mut MispricingState) {
         let (tx, rx) = std::sync::mpsc::channel();
         state.guide_rx = Some(rx);
         state.guide_loading = true;
@@ -404,6 +541,51 @@ impl MispricingScreen {
         state.guide_status = String::new();
         std::thread::spawn(move || {
             let result = PriceGuide::fetch_blocking().map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Fetches latest prices + 7/30-day snapshots for all in-stock cards from
+    /// the inventory_sync server. Only raw rows cross the wire; deltas are
+    /// derived locally.
+    fn spawn_sync_fetch(state: &mut MispricingState, url: &str) {
+        let ids: Vec<u64> = match get_in_stock_cards() {
+            Ok(cards) => cards
+                .iter()
+                .filter_map(|c| c.cardmarket_id.parse::<u64>().ok())
+                .collect::<std::collections::HashSet<u64>>()
+                .into_iter()
+                .collect(),
+            Err(e) => {
+                state.error = Some(format!("Failed to read inventory: {e}"));
+                return;
+            }
+        };
+        if ids.is_empty() {
+            state.error = Some("No in-stock cards with cardmarket IDs found.".to_string());
+            return;
+        }
+
+        info!(
+            "Mispricing: fetching prices + snapshots for {} products from {url}",
+            ids.len()
+        );
+        let dates = SnapshotSet::request_dates(chrono::Local::now().date_naive());
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.sync_rx = Some(rx);
+        state.sync_loading = true;
+        state.error = None;
+        let client = InventorySyncClient::new(url);
+        std::thread::spawn(move || {
+            let result = (|| {
+                let latest = client
+                    .latest_prices_blocking(&ids)
+                    .map_err(|e| e.to_string())?;
+                let snapshots = client
+                    .price_snapshots_blocking(&ids, &dates)
+                    .map_err(|e| e.to_string())?;
+                Ok((latest, snapshots, dates))
+            })();
             let _ = tx.send(result);
         });
     }
@@ -423,11 +605,8 @@ impl MispricingScreen {
         }
     }
 
-    /// Rebuilds the report from the current DB inventory + loaded price guide.
+    /// Rebuilds the report from the current DB inventory + the active market source.
     fn rebuild(state: &mut MispricingState) {
-        let Some(guide) = &state.price_guide else {
-            return;
-        };
         let cards = match get_in_stock_cards() {
             Ok(c) => c,
             Err(e) => {
@@ -436,36 +615,28 @@ impl MispricingScreen {
             }
         };
         let src = state.ref_source;
-        let report = build_report(&cards, state.threshold_pct, |c: &InStockCard| {
-            let id = c.cardmarket_id.parse::<u64>().ok()?;
-            entry_price(guide.get(id)?, src, c.is_foil)
-        });
+        let report = match state.source {
+            MarketSource::PriceGuide => {
+                let Some(guide) = &state.price_guide else {
+                    return;
+                };
+                build_report(&cards, state.threshold_pct, |c: &InStockCard| {
+                    let id = c.cardmarket_id.parse::<u64>().ok()?;
+                    guide.get(id)?.price_for(src, c.is_foil)
+                })
+            }
+            MarketSource::InventorySync => {
+                if state.inventory_prices.is_empty() {
+                    return;
+                }
+                build_report(&cards, state.threshold_pct, |c: &InStockCard| {
+                    let id = c.cardmarket_id.parse::<u64>().ok()?;
+                    state.inventory_prices.get(&id)?.price_for(src, c.is_foil)
+                })
+            }
+        };
         state.error = None;
         state.report = Some(report);
-    }
-}
-
-/// Picks the requested price field for a card, honouring foil vs non-foil.
-fn entry_price(e: &PriceGuideEntry, src: InventoryPriceSource, is_foil: bool) -> Option<f64> {
-    use InventoryPriceSource::*;
-    if is_foil {
-        match src {
-            Trend => e.trend_foil,
-            Avg => e.avg_foil,
-            Low => e.low_foil,
-            Avg1 => e.avg1_foil,
-            Avg7 => e.avg7_foil,
-            Avg30 => e.avg30_foil,
-        }
-    } else {
-        match src {
-            Trend => e.trend,
-            Avg => e.avg,
-            Low => e.low,
-            Avg1 => e.avg1,
-            Avg7 => e.avg7,
-            Avg30 => e.avg30,
-        }
     }
 }
 

@@ -2,50 +2,16 @@
 //!
 //! Provides common stock trading indicators adapted for MTG card prices.
 
-use serde::Serialize;
-
 /// Type alias for MACD result (macd_line, signal_line, histogram)
 pub type MacdResult = (Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>);
 
 /// Type alias for Bollinger Bands result (upper_band, middle_band, lower_band)
 pub type BollingerBandsResult = (Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>);
 
-/// All technical indicators for a price series
-#[derive(Debug, Serialize)]
-pub struct TechnicalIndicators {
-    pub ema_7: Vec<Option<f64>>,
-    pub ema_30: Vec<Option<f64>>,
-    pub sma_20: Vec<Option<f64>>,
-    pub rsi: Vec<Option<f64>>,
-    pub macd: Vec<Option<f64>>,
-    pub macd_signal: Vec<Option<f64>>,
-    pub macd_histogram: Vec<Option<f64>>,
-    pub bb_upper: Vec<Option<f64>>,
-    pub bb_middle: Vec<Option<f64>>,
-    pub bb_lower: Vec<Option<f64>>,
-    /// Rate of Change over 7 days: (price - price_7ago) / price_7ago * 100
-    pub roc_7: Vec<Option<f64>>,
-    /// Rate of Change over 30 days: (price - price_30ago) / price_30ago * 100
-    pub roc_30: Vec<Option<f64>>,
-    /// Bollinger %B: where price sits within the bands (0.0 = lower band, 1.0 = upper band)
-    pub bb_percent_b: Vec<Option<f64>>,
-    /// Bollinger Band Width: (upper - lower) / middle — low = stable market, high = volatile
-    pub bb_width: Vec<Option<f64>>,
-}
-
-/// Cardmarket-native pricing signals derived from Cardmarket's own rolling averages.
-///
-/// These don't need a long price history — they use avg1/avg7/avg30 already
-/// computed by Cardmarket, making them available from day one.
-#[derive(Debug, Serialize)]
-pub struct CardmarketSignals {
-    /// avg1 - avg7: positive = recent price spike, negative = recent drop
-    pub momentum_1_7: Vec<Option<f64>>,
-    /// avg7 - avg30: positive = week trending up vs month, negative = cooling off
-    pub momentum_7_30: Vec<Option<f64>>,
-    /// low / trend: how far below trend the cheapest listing is (< 0.8 = heavy undercutting)
-    pub floor_ratio: Vec<Option<f64>>,
-}
+// The indicator result types are part of the API wire format and live in
+// mtg_common; re-exported here so the calculations and their result types
+// stay importable from one place.
+pub use mtg_common::inventory_sync::{CardmarketSignals, TechnicalIndicators};
 
 /// Calculate all technical indicators for a price series
 pub fn calculate_all_indicators(prices: &[f64]) -> TechnicalIndicators {
