@@ -137,35 +137,75 @@ fn action_matrix() {
 
 #[test]
 fn priority_urgent_actions_outrank_plain_ones() {
-    let urgent = priority_score(1.0, 2, Action::RaiseNow, 0, false);
-    let plain = priority_score(1.0, 2, Action::Raise, 0, false);
-    let watch = priority_score(1.0, 2, Action::Watch, 0, false);
+    let urgent = priority_score(1.0, 2, Action::RaiseNow, 0, false, false);
+    let plain = priority_score(1.0, 2, Action::Raise, 0, false, false);
+    let watch = priority_score(1.0, 2, Action::Watch, 0, false, false);
     assert!(urgent > plain && plain > watch);
-    assert_eq!(priority_score(1.0, 2, Action::None, 0, false), 0.0);
+    assert_eq!(priority_score(1.0, 2, Action::None, 0, false, false), 0.0);
 }
 
 #[test]
 fn priority_age_boosts_overpriced_only() {
     // A year-old overpriced listing doubles its score …
-    let old = priority_score(1.0, 1, Action::Cut, 365, false);
-    let new = priority_score(1.0, 1, Action::Cut, 0, false);
+    let old = priority_score(1.0, 1, Action::Cut, 365, false, false);
+    let new = priority_score(1.0, 1, Action::Cut, 0, false, false);
     assert!((old - 2.0 * new).abs() < 0.001);
     // … while underpriced rows are unaffected by age.
-    let old_up = priority_score(1.0, 1, Action::Raise, 365, false);
-    let new_up = priority_score(1.0, 1, Action::Raise, 0, false);
+    let old_up = priority_score(1.0, 1, Action::Raise, 365, false, false);
+    let new_up = priority_score(1.0, 1, Action::Raise, 0, false, false);
     assert!((old_up - new_up).abs() < 0.001);
 }
 
 #[test]
 fn priority_stale_data_halves_score() {
-    let fresh = priority_score(2.0, 1, Action::Cut, 0, false);
-    let stale = priority_score(2.0, 1, Action::Cut, 0, true);
+    let fresh = priority_score(2.0, 1, Action::Cut, 0, false, false);
+    let stale = priority_score(2.0, 1, Action::Cut, 0, true, false);
     assert!((stale - fresh / 2.0).abs() < 0.001);
 }
 
 #[test]
+fn priority_language_discount_halves_raise_actions_only() {
+    let plain = priority_score(2.0, 1, Action::Raise, 0, false, false);
+    let flagged = priority_score(2.0, 1, Action::Raise, 0, false, true);
+    assert!((flagged - plain / 2.0).abs() < 0.001);
+    // Cut actions are unaffected — an overpriced foreign copy is even more
+    // overpriced, never less.
+    let cut = priority_score(2.0, 1, Action::Cut, 0, false, false);
+    let cut_flagged = priority_score(2.0, 1, Action::Cut, 0, false, true);
+    assert!((cut - cut_flagged).abs() < 0.001);
+}
+
+#[test]
 fn priority_negative_quantity_clamped() {
-    assert_eq!(priority_score(1.0, -3, Action::Cut, 0, false), 0.0);
+    assert_eq!(priority_score(1.0, -3, Action::Cut, 0, false, false), 0.0);
+}
+
+// ==================== condition_factor / language_discounted ====================
+
+#[test]
+fn condition_factor_follows_cardmarket_scale() {
+    assert_eq!(condition_factor("NM"), 1.0);
+    assert!(condition_factor("EX") < 1.0);
+    assert!(condition_factor("GD") < condition_factor("EX"));
+    assert!(condition_factor("LP") < condition_factor("GD"));
+    assert!(condition_factor("PL") < condition_factor("LP"));
+    assert!(condition_factor("PO") < condition_factor("PL"));
+    // Long-form and unknown conditions.
+    assert_eq!(condition_factor("near_mint"), 1.0);
+    assert_eq!(condition_factor("played"), condition_factor("PL"));
+    assert_eq!(condition_factor("???"), 1.0);
+}
+
+#[test]
+fn language_discounted_spares_english_and_german() {
+    assert!(!language_discounted("English"));
+    assert!(!language_discounted("Englisch"));
+    assert!(!language_discounted("german"));
+    assert!(!language_discounted("Deutsch"));
+    assert!(!language_discounted(" de "));
+    assert!(language_discounted("Japanese"));
+    assert!(language_discounted("French"));
+    assert!(language_discounted(""));
 }
 
 // ==================== build_report ====================
@@ -311,6 +351,36 @@ fn report_stale_market_data_is_flagged_and_counted() {
     assert!(!r.rows[1].stale);
     assert_eq!(r.stale_rows, 1);
     // Same mispricing, but the stale row scores half the priority.
+    assert!((r.rows[0].priority - r.rows[1].priority / 2.0).abs() < 0.001);
+}
+
+#[test]
+fn report_condition_adjusts_reference() {
+    // A played copy at €7 against a €10 (NM-ish) reference: raw comparison
+    // says −30% underpriced, but ×0.7 for PL makes it exactly fair.
+    let mut played = card("1", 7.0, 1, false);
+    played.condition = "PL".to_string();
+    let cards = vec![played, card("2", 7.0, 1, false)];
+    let r = build_report(&cards, 15.0, today(), |_| market(10.0));
+    assert_eq!(r.rows[0].verdict, PriceVerdict::Fair);
+    assert_eq!(r.rows[0].market_price, Some(7.0));
+    assert!((r.rows[0].condition_factor - 0.7).abs() < 1e-9);
+    // The NM copy at the same price stays underpriced.
+    assert_eq!(r.rows[1].verdict, PriceVerdict::Underpriced);
+    // Aggregates use the adjusted reference: only the NM row's upside counts.
+    assert!((r.underpriced_upside - 3.0).abs() < 0.001);
+    assert!((r.total_market_value - (7.0 + 10.0)).abs() < 0.001);
+}
+
+#[test]
+fn report_flags_discounted_languages() {
+    let mut jp = card("1", 1.0, 1, false);
+    jp.language = "Japanese".to_string();
+    let cards = vec![jp, card("2", 1.0, 1, false)];
+    let r = build_report(&cards, 15.0, today(), |_| market(2.0));
+    assert!(r.rows[0].language_flagged);
+    assert!(!r.rows[1].language_flagged);
+    // Both underpriced, same delta — the flagged row ranks at half priority.
     assert!((r.rows[0].priority - r.rows[1].priority / 2.0).abs() < 0.001);
 }
 

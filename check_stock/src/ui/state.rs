@@ -62,6 +62,39 @@ pub struct AppState {
     pub inventory_sync_status: ConnectionStatus,
     /// Receives the health-check result from a background thread.
     pub inventory_health_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    /// A CSV import the safety check blocked, awaiting user confirmation.
+    /// Rendered as a modal by the app shell on every screen.
+    pub sync_guard: Option<SyncGuard>,
+    /// Since-last-visit digest, computed once per app run on the welcome
+    /// screen (`None` = not yet computed; `Err` = DB unavailable).
+    pub digest: Option<Result<crate::inventory_db::VisitDigest, String>>,
+}
+
+/// A blocked inventory import held for the confirmation dialog.
+pub struct SyncGuard {
+    /// The loaded CSV rows the user may still choose to sync.
+    pub cards: Vec<Card>,
+    /// What the sync would have changed.
+    pub preview: crate::inventory_db::SyncPreview,
+}
+
+impl AppState {
+    /// Syncs a freshly loaded inventory CSV into the local DB. When the
+    /// safety check blocks the import (it would record most of the inventory
+    /// as sold), the CSV is parked in [`AppState::sync_guard`] for the
+    /// confirmation modal instead; nothing is written until confirmed.
+    pub fn sync_inventory_guarded(&mut self, cards: &[Card]) {
+        match crate::inventory_db::sync_inventory(cards) {
+            Ok(crate::inventory_db::SyncOutcome::Synced(_)) => {}
+            Ok(crate::inventory_db::SyncOutcome::Blocked(preview)) => {
+                self.sync_guard = Some(SyncGuard {
+                    cards: cards.to_vec(),
+                    preview,
+                });
+            }
+            Err(e) => log::warn!("Inventory DB sync failed: {e}"),
+        }
+    }
 }
 
 impl Default for AppState {
@@ -84,6 +117,8 @@ impl Default for AppState {
             inventory_sync_url: "http://cardscanner.local:3000".to_string(),
             inventory_sync_status: ConnectionStatus::Unchecked,
             inventory_health_rx: None,
+            sync_guard: None,
+            digest: None,
         }
     }
 }
@@ -798,7 +833,10 @@ pub enum MispricingSort {
     /// Days since the card was listed.
     Age,
     Name,
+    Set,
     Quantity,
+    /// Verdict rank (underpriced → overpriced → fair → no data).
+    Verdict,
 }
 
 /// Where the mispricing market reference prices come from.
@@ -878,6 +916,9 @@ pub struct MispricingState {
     pub guide_path: String,
     /// The computed report, if analysis has been run.
     pub report: Option<crate::mispricing::MispricingReport>,
+    /// Internal contradictions between our own listings (no market data
+    /// needed); recomputed together with the report.
+    pub consistency: Vec<crate::consistency::ConsistencyIssue>,
     pub error: Option<String>,
     pub sort: MispricingSort,
     pub sort_desc: bool,
@@ -908,6 +949,7 @@ impl Default for MispricingState {
             guide_loading: false,
             guide_path: String::new(),
             report: None,
+            consistency: Vec::new(),
             error: None,
             sort: MispricingSort::default(),
             sort_desc: true,
@@ -957,7 +999,9 @@ pub enum MoverSort {
     Current,
     Listed,
     Name,
+    Set,
     Quantity,
+    Location,
 }
 
 /// Payload of a successful background snapshot fetch for the movers screen:

@@ -64,6 +64,8 @@ impl MispricingScreen {
                     if let Some(report) = state.report.clone() {
                         Self::show_summary(ui, &report);
                         ui.add_space(8.0);
+                        Self::show_consistency(ui, state);
+                        ui.add_space(8.0);
                         Self::show_table(ui, state, &report);
                     }
                 });
@@ -341,6 +343,65 @@ impl MispricingScreen {
         });
     }
 
+    /// Collapsible list of contradictions between our own listings — priced
+    /// wrong relative to each other, independent of any market reference.
+    fn show_consistency(ui: &mut egui::Ui, state: &MispricingState) {
+        const MAX_ISSUES: usize = 100;
+        let issues = &state.consistency;
+        let header = if issues.is_empty() {
+            "Internal consistency ✓ (no conflicts)".to_string()
+        } else {
+            format!("Internal consistency — {} conflicts", issues.len())
+        };
+        egui::CollapsingHeader::new(egui::RichText::new(header).strong().color(
+            if issues.is_empty() {
+                style::COLOR_SUCCESS
+            } else {
+                style::COLOR_ERROR
+            },
+        ))
+        .id_salt("mispricing_consistency")
+        .default_open(false)
+        .show(ui, |ui| {
+            if issues.is_empty() {
+                ui.label(
+                    egui::RichText::new(
+                        "No listings contradict each other (condition order, foil premium, \
+                         duplicate prices).",
+                    )
+                    .size(11.0)
+                    .color(style::TEXT_MUTED),
+                );
+                return;
+            }
+            if issues.len() > MAX_ISSUES {
+                ui.label(
+                    egui::RichText::new(format!("Showing first {MAX_ISSUES} conflicts"))
+                        .size(11.0)
+                        .color(style::TEXT_MUTED),
+                );
+            }
+            egui::Grid::new("mispricing_consistency_table")
+                .num_columns(3)
+                .striped(true)
+                .spacing([12.0, 2.0])
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("Type").strong());
+                    ui.label(egui::RichText::new("Card").strong());
+                    ui.label(egui::RichText::new("Listings").strong());
+                    ui.end_row();
+                    for issue in issues.iter().take(MAX_ISSUES) {
+                        ui.label(
+                            egui::RichText::new(issue.kind.as_str()).color(style::COLOR_ERROR),
+                        );
+                        ui.label(format!("{} ({})", issue.name, issue.set_code));
+                        ui.label(&issue.details);
+                        ui.end_row();
+                    }
+                });
+        });
+    }
+
     fn show_table(ui: &mut egui::Ui, state: &mut MispricingState, report: &MispricingReport) {
         // Filter buttons.
         ui.horizontal(|ui| {
@@ -409,7 +470,12 @@ impl MispricingScreen {
                 MispricingSort::Change7 => cmp_opt(ca.pct_7d, cb.pct_7d),
                 MispricingSort::Change30 => cmp_opt(ca.pct_30d, cb.pct_30d),
                 MispricingSort::Name => a.name.cmp(&b.name),
+                MispricingSort::Set => a
+                    .set_code
+                    .cmp(&b.set_code)
+                    .then_with(|| a.name.cmp(&b.name)),
                 MispricingSort::Quantity => a.quantity.cmp(&b.quantity),
+                MispricingSort::Verdict => a.verdict.cmp(&b.verdict),
             };
             if state.sort_desc {
                 ord.reverse()
@@ -473,7 +539,13 @@ impl MispricingScreen {
                     &mut state.sort,
                     &mut state.sort_desc,
                 );
-                ui.label(egui::RichText::new("Set").strong());
+                header(
+                    ui,
+                    "Set",
+                    MispricingSort::Set,
+                    &mut state.sort,
+                    &mut state.sort_desc,
+                );
                 header(
                     ui,
                     "Qty",
@@ -530,7 +602,13 @@ impl MispricingScreen {
                     &mut state.sort,
                     &mut state.sort_desc,
                 );
-                ui.label(egui::RichText::new("Verdict").strong());
+                header(
+                    ui,
+                    "Verdict",
+                    MispricingSort::Verdict,
+                    &mut state.sort,
+                    &mut state.sort_desc,
+                );
                 header(
                     ui,
                     "Action",
@@ -552,18 +630,32 @@ impl MispricingScreen {
                     ui.label(format!("×{}", c.quantity));
                     ui.label(format!("{}d", c.age_days));
                     ui.label(format!("€{:.2}", c.listed_price));
-                    let market_text = c
+                    let adjusted = c.condition_factor < 1.0 && c.market_price.is_some();
+                    let mut market_text = c
                         .market_price
                         .map(|m| format!("€{m:.2}"))
                         .unwrap_or_else(|| "—".to_string());
+                    let mut market_hint = String::new();
+                    if adjusted {
+                        market_text.push('*');
+                        market_hint.push_str(&format!(
+                            "Reference ×{:.2} for {} condition (guide price ≈ NM).\n",
+                            c.condition_factor, c.condition
+                        ));
+                    }
                     if c.stale {
-                        ui.label(
-                            egui::RichText::new(format!("{market_text} ⚠"))
-                                .color(style::TEXT_MUTED),
-                        )
-                        .on_hover_text("Market data is more than a week old — treat with caution");
+                        market_text.push_str(" ⚠");
+                        market_hint.push_str(
+                            "Market data is more than a week old — treat with caution.\n",
+                        );
+                    }
+                    let market_label = if c.stale {
+                        ui.label(egui::RichText::new(market_text).color(style::TEXT_MUTED))
                     } else {
-                        ui.label(market_text);
+                        ui.label(market_text)
+                    };
+                    if !market_hint.is_empty() {
+                        market_label.on_hover_text(market_hint.trim_end());
                     }
                     style::change_pct_label(ui, change.pct_7d);
                     style::change_pct_label(ui, change.pct_30d);
@@ -592,6 +684,14 @@ impl MispricingScreen {
                     if c.verdict == PriceVerdict::Underpriced && c.recently_listed() {
                         verdict_text.push_str(" ·new");
                         verdict_hint.push_str("Listed within the last day — check for a typo.\n");
+                    }
+                    if c.language_flagged {
+                        verdict_text.push_str(" ·lang");
+                        verdict_hint.push_str(&format!(
+                            "{} copy — the language-blind reference likely overstates its \
+                             value; underpriced verdicts are doubtful.\n",
+                            c.language
+                        ));
                     }
                     let verdict_label =
                         ui.label(egui::RichText::new(verdict_text).color(verdict_color));
@@ -699,6 +799,7 @@ impl MispricingScreen {
         };
         let src = state.ref_source;
         let today = chrono::Local::now().date_naive();
+        state.consistency = crate::consistency::find_issues(&cards);
         let snapshots = &state.snapshots;
         let report = match state.source {
             MarketSource::PriceGuide => {

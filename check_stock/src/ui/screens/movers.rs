@@ -204,7 +204,13 @@ impl MoversScreen {
                 MoverSort::Current => cmp_opt(a.change.current, b.change.current),
                 MoverSort::Listed => cmp_opt(Some(a.card.price), Some(b.card.price)),
                 MoverSort::Name => a.card.name.cmp(&b.card.name),
+                MoverSort::Set => a
+                    .card
+                    .set_code
+                    .cmp(&b.card.set_code)
+                    .then_with(|| a.card.name.cmp(&b.card.name)),
                 MoverSort::Quantity => a.card.quantity.cmp(&b.card.quantity),
+                MoverSort::Location => a.card.location.cmp(&b.card.location),
             };
             if state.sort_desc {
                 ord.reverse()
@@ -267,7 +273,13 @@ impl MoversScreen {
                     &mut state.sort,
                     &mut state.sort_desc,
                 );
-                ui.label(egui::RichText::new("Set").strong());
+                header(
+                    ui,
+                    "Set",
+                    MoverSort::Set,
+                    &mut state.sort,
+                    &mut state.sort_desc,
+                );
                 header(
                     ui,
                     "Qty",
@@ -310,7 +322,13 @@ impl MoversScreen {
                     &mut state.sort,
                     &mut state.sort_desc,
                 );
-                ui.label(egui::RichText::new("Location").strong());
+                header(
+                    ui,
+                    "Location",
+                    MoverSort::Location,
+                    &mut state.sort,
+                    &mut state.sort_desc,
+                );
                 ui.end_row();
 
                 for m in rows.into_iter().take(MAX_ROWS) {

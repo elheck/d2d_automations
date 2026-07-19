@@ -162,9 +162,7 @@ impl StockCheckerScreen {
                     .show(ui)
                 {
                     if let Ok(inventory) = read_csv(&state.inventory_path) {
-                        if let Err(e) = crate::inventory_db::sync_inventory(&inventory) {
-                            log::warn!("Inventory DB sync failed: {}", e);
-                        }
+                        state.sync_inventory_guarded(&inventory);
                     }
                 }
                 FilePicker::new("Wantslist:", &mut state.wantslist_path).show(ui);

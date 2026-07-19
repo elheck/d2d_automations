@@ -61,7 +61,7 @@ impl SearchScreen {
                 if (style::primary_button(ui, "Load CSV").clicked() || browsed)
                     && !state.csv_path.is_empty()
                 {
-                    Self::load_csv(state);
+                    Self::load_csv(app_state, state);
                 }
             });
 
@@ -793,14 +793,12 @@ impl SearchScreen {
         );
     }
 
-    fn load_csv(state: &mut SearchState) {
+    fn load_csv(app_state: &mut AppState, state: &mut SearchState) {
         info!("Loading CSV for search: {}", state.csv_path);
         match read_csv(&state.csv_path) {
             Ok(cards) => {
                 info!("Loaded {} cards for searching", cards.len());
-                if let Err(e) = crate::inventory_db::sync_inventory(&cards) {
-                    log::warn!("Inventory DB sync failed: {}", e);
-                }
+                app_state.sync_inventory_guarded(&cards);
                 state.cards = cards.clone();
                 state.filtered_cards = cards;
                 state.quantity_inputs.clear();

@@ -23,6 +23,7 @@
 
 use crate::aging::age_days;
 use crate::inventory_db::InStockCard;
+use crate::models::canonical_condition;
 use crate::price_trends::pct_change;
 use chrono::NaiveDate;
 
@@ -36,8 +37,40 @@ pub const STALE_AFTER_DAYS: i64 = 7;
 /// is likely a typo rather than market movement.
 pub const NEW_LISTING_MAX_AGE_DAYS: i64 = 1;
 
+/// Price multiplier applied to the condition-blind market reference for a
+/// listing's condition. The Cardmarket price guide reflects roughly NM
+/// pricing; played copies trade lower, so comparing them against the raw
+/// reference systematically misclassifies them as underpriced. Heuristic
+/// factors, Cardmarket condition scale (NM > EX > GD > LP > PL > PO).
+/// Unknown conditions are left unadjusted.
+pub fn condition_factor(condition: &str) -> f64 {
+    match canonical_condition(condition).as_str() {
+        "NM" => 1.0,
+        "EX" => 0.9,
+        "GD" => 0.85,
+        "LP" => 0.8,
+        "PL" => 0.7,
+        "PO" => 0.5,
+        _ => 1.0,
+    }
+}
+
+/// True when the (language-blind) market reference likely overstates this
+/// listing's value: copies in languages other than English or German trade at
+/// a discount on the (mostly EU/EN) market. Accepts English and German
+/// spellings and the two-letter codes.
+pub fn language_discounted(language: &str) -> bool {
+    !matches!(
+        language.trim().to_lowercase().as_str(),
+        "english" | "englisch" | "en" | "german" | "deutsch" | "de"
+    )
+}
+
 /// Verdict for a single listing relative to the market reference price.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Ord` follows declaration order (most actionable first), so tables can sort
+/// by verdict severity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PriceVerdict {
     /// Listed meaningfully below market — money left on the table.
     Underpriced,
@@ -156,12 +189,19 @@ pub struct MispricedCard {
     pub name: String,
     pub set_code: String,
     pub condition: String,
+    pub language: String,
     pub is_foil: bool,
     pub location: String,
     pub quantity: i64,
     pub listed_price: f64,
+    /// Condition-adjusted market reference the listing was classified against
+    /// (raw reference × [`condition_factor`]).
     pub market_price: Option<f64>,
-    /// Cheapest listing on the market, when known.
+    /// Multiplier applied to the raw reference for this row's condition.
+    pub condition_factor: f64,
+    /// Market reference likely overstates value (non-EN/DE language).
+    pub language_flagged: bool,
+    /// Cheapest listing on the market, when known (not condition-adjusted).
     pub market_low: Option<f64>,
     /// Per-unit `listed - market` (0.0 when no market data).
     pub delta_abs: f64,
@@ -304,14 +344,17 @@ pub fn action_for(verdict: PriceVerdict, momentum: Momentum) -> Action {
 /// `impact × action-urgency`, where impact is `|delta| × qty` in euros and the
 /// urgency weight is 2.0 for now-actions, 1.0 for plain raise/cut, 0.4 for
 /// watch/hold, 0 for fair rows. Overpriced rows additionally scale with
-/// listing age (dead capital: up to 2× at ≥ 1 year), and stale market data
-/// halves the score.
+/// listing age (dead capital: up to 2× at ≥ 1 year). Confidence discounts:
+/// stale market data halves the score, and a raise-type action on a
+/// language-discounted copy is halved too (the reference overstates its value,
+/// so the underpricing is likely phantom).
 pub fn priority_score(
     delta_abs: f64,
     quantity: i64,
     action: Action,
     age_days: i64,
     stale: bool,
+    discounted_language: bool,
 ) -> f64 {
     let impact = delta_abs.abs() * quantity.max(0) as f64;
     let mut score = impact * action.weight();
@@ -319,6 +362,9 @@ pub fn priority_score(
         score *= 1.0 + age_days.clamp(0, 365) as f64 / 365.0;
     }
     if stale {
+        score *= 0.5;
+    }
+    if discounted_language && matches!(action, Action::RaiseNow | Action::Raise | Action::Watch) {
         score *= 0.5;
     }
     score
@@ -342,8 +388,12 @@ where
     for card in cards {
         let market = market_of(card);
         let eff_threshold = effective_threshold_pct(threshold_pct, market.volatility_pct);
-        let (mut verdict, delta_abs, delta_pct) =
-            classify(card.price, market.reference, eff_threshold);
+
+        // The guide is condition-blind (≈ NM pricing); classify played copies
+        // against a condition-discounted reference instead.
+        let cond_factor = condition_factor(&card.condition);
+        let reference = market.reference.map(|m| m * cond_factor);
+        let (mut verdict, delta_abs, delta_pct) = classify(card.price, reference, eff_threshold);
 
         // Listed below the cheapest listing on the whole market: guaranteed
         // cheapest, so an in-band verdict is still underpriced.
@@ -353,6 +403,7 @@ where
             verdict = PriceVerdict::Underpriced;
         }
 
+        let language_flagged = language_discounted(&card.language);
         let (momentum, momentum_short_pct, momentum_long_pct) =
             momentum_of(market.avg1, market.avg7, market.avg30);
         let stale = market
@@ -361,14 +412,14 @@ where
         let age = age_days(card, today);
         let action = action_for(verdict, momentum);
         let qty = card.quantity.max(0);
-        let priority = priority_score(delta_abs, qty, action, age, stale);
+        let priority = priority_score(delta_abs, qty, action, age, stale, language_flagged);
 
         match verdict {
             PriceVerdict::Underpriced => {
                 report.underpriced_rows += 1;
                 report.underpriced_copies += qty;
                 // reference is Some here by construction of classify.
-                if let Some(m) = market.reference {
+                if let Some(m) = reference {
                     report.underpriced_upside += (m - card.price) * qty as f64;
                 }
             }
@@ -389,7 +440,7 @@ where
             report.stale_rows += 1;
         }
 
-        if let Some(m) = market.reference {
+        if let Some(m) = reference {
             report.total_listed_value += card.price * qty as f64;
             report.total_market_value += m * qty as f64;
         }
@@ -399,11 +450,14 @@ where
             name: card.name.clone(),
             set_code: card.set_code.clone(),
             condition: card.condition.clone(),
+            language: card.language.clone(),
             is_foil: card.is_foil,
             location: card.location.clone(),
             quantity: qty,
             listed_price: card.price,
-            market_price: market.reference,
+            market_price: reference,
+            condition_factor: cond_factor,
+            language_flagged,
             market_low: market.low,
             delta_abs,
             delta_pct,

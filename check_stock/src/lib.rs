@@ -4,6 +4,7 @@ pub mod bin_consolidation;
 pub mod buy_helper;
 pub mod cache;
 pub mod card_matching;
+pub mod consistency;
 pub mod deck_fetch;
 pub mod error;
 pub mod formatters;

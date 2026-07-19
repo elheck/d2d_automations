@@ -2,6 +2,16 @@
 
 egui desktop app for Magic: The Gathering card inventory management.
 
+The welcome screen shows a **since-last-visit digest** (copies sold and revenue
+since the previous day the app was opened, new listings, restock candidates,
+and how old the last inventory import is — with a warning when it's stale).
+
+Every inventory CSV import runs through a **safety net**: a dated backup of the
+local database is taken first (`inventory-YYYY-MM-DD.db.bak` next to the DB,
+last 3 kept), and imports that would record most of the inventory as sold —
+usually a truncated or wrong CSV — are blocked behind a confirmation dialog
+showing exactly what would change before anything is written.
+
 ## Screens
 
 - **Stock Checker** — Match inventory CSV against wantslists
@@ -54,8 +64,16 @@ egui desktop app for Magic: The Gathering card inventory management.
   swing is noise), **stale market data** (> 7 days) flagged and de-weighted,
   and **listing age** boosting old overpriced stock (dead capital). The default
   sort is a transparent **priority score** (impact × urgency × confidence) —
-  what to fix first is on top. Strictly read-only — it reports, it never writes
-  prices.
+  what to fix first is on top; every column sorts ascending/descending. Two
+  accuracy corrections are built in: the reference is **condition-adjusted**
+  (the guide is ≈ NM pricing; played copies are classified against a
+  discounted reference — NM 1.0 / EX 0.9 / GD 0.85 / LP 0.8 / PL 0.7 / PO 0.5)
+  and **non-EN/DE-language** rows are flagged ("·lang"), since the
+  language-blind reference overstates their value (raise-priorities halved).
+  An **internal consistency** panel lists listings that contradict each other
+  with no market data needed: worse condition priced above better, foils below
+  their non-foil, and duplicate variants at different prices. Strictly
+  read-only — it reports, it never writes prices.
 - **Restock Report** — Sold-out variants (quantity 0, copies sold > 0) ranked by
   sell-through speed (copies/week over the listing → last-sale window), with a
   minimum-copies filter to hide one-off sales and a buy-list CSV export. Answers

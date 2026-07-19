@@ -3,7 +3,7 @@ use crate::{
     io::read_csv,
     ui::{
         components::FilePicker,
-        state::{LotSortColumn, Screen, StockAnalysisState},
+        state::{AppState, LotSortColumn, Screen, StockAnalysisState},
         style,
     },
 };
@@ -12,7 +12,7 @@ use eframe::egui;
 pub struct StockAnalysisScreen;
 
 impl StockAnalysisScreen {
-    pub fn show(ctx: &egui::Context, current_screen: &mut Screen, state: &mut StockAnalysisState) {
+    pub fn show(ctx: &egui::Context, app_state: &mut AppState, state: &mut StockAnalysisState) {
         // Load stats once on first render (non-blocking, DB is local SQLite)
         if !state.stats_loaded {
             state.stats_loaded = true;
@@ -24,7 +24,7 @@ impl StockAnalysisScreen {
                 .id_salt("stock_analysis_scroll")
                 .show(ui, |ui| {
                     if style::back_button(ui, "Back") {
-                        *current_screen = Screen::Welcome;
+                        app_state.current_screen = Screen::Welcome;
                     }
                     ui.add_space(8.0);
 
@@ -37,9 +37,7 @@ impl StockAnalysisScreen {
                             .show(ui)
                         {
                             if let Ok(inventory) = read_csv(&state.inventory_path) {
-                                if let Err(e) = crate::inventory_db::sync_inventory(&inventory) {
-                                    log::warn!("Inventory DB sync failed: {}", e);
-                                }
+                                app_state.sync_inventory_guarded(&inventory);
                             }
                             Self::refresh_stats(state);
                         }

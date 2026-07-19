@@ -265,6 +265,50 @@ pub struct SyncStats {
     pub zeroed: usize,
 }
 
+/// Read-only preview of what a sync would change — computed before any write
+/// so a bad CSV can be caught first.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SyncPreview {
+    /// Variants in the CSV not yet in the DB.
+    pub new_variants: usize,
+    /// Variants present in both CSV and DB.
+    pub updated_variants: usize,
+    /// In-stock variants that vanished from the CSV (would be zeroed).
+    pub zeroed_variants: usize,
+    /// Copies that would be recorded as sold (quantity drops + vanished rows).
+    pub copies_sold: i64,
+    /// Variants whose listed price would change.
+    pub price_changes: usize,
+    /// Total in-stock copies before / after the sync.
+    pub copies_before: i64,
+    pub copies_after: i64,
+}
+
+/// Guard threshold: the safety check only engages on inventories of at least
+/// this many copies (tiny/fresh DBs churn legitimately).
+pub const MIN_COPIES_FOR_GUARD: i64 = 100;
+
+/// A sync recording more than this share of the inventory as sold in one go is
+/// treated as a suspect CSV rather than real sales.
+pub const SUSPICIOUS_DROP_FRACTION: f64 = 0.5;
+
+impl SyncPreview {
+    /// True when the sync would wipe out a large share of a non-trivial
+    /// inventory at once — more likely a truncated or wrong CSV than sales.
+    pub fn is_suspicious(&self) -> bool {
+        self.copies_before >= MIN_COPIES_FOR_GUARD
+            && self.copies_sold as f64 > self.copies_before as f64 * SUSPICIOUS_DROP_FRACTION
+    }
+}
+
+/// Result of a guarded sync: either it ran, or the safety check blocked it and
+/// nothing was written (rerun via [`sync_inventory_forced`] to override).
+#[derive(Debug)]
+pub enum SyncOutcome {
+    Synced(SyncStats),
+    Blocked(SyncPreview),
+}
+
 /// Statistics from a discard (write-off) operation.
 #[derive(Debug, Default, PartialEq)]
 pub struct DiscardStats {
@@ -351,6 +395,15 @@ const INVENTORY_SNAPSHOTS_DDL: &str = "
 // for per-card velocity, restock recommendations and realized-price analysis.
 // A same-day re-sync may append several rows for one variant; they are deltas,
 // so summing them is always correct.
+// Small key-value store for app bookkeeping (visit dates for the welcome
+// digest). Not card data — never touched by syncs.
+const APP_META_DDL: &str = "
+    CREATE TABLE IF NOT EXISTS app_meta (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+";
+
 const SOLD_EVENTS_DDL: &str = "
     CREATE TABLE IF NOT EXISTS sold_events (
         date          TEXT NOT NULL,
@@ -504,7 +557,8 @@ fn init_schema(conn: &Connection) -> DbResult<()> {
         conn.execute_batch(INVENTORY_CARDS_DDL)?;
         conn.execute_batch(INVENTORY_SNAPSHOTS_DDL)?;
         conn.execute_batch(SOLD_EVENTS_DDL)?;
-        return conn.execute_batch(LOT_COSTS_DDL);
+        conn.execute_batch(LOT_COSTS_DDL)?;
+        return conn.execute_batch(APP_META_DDL);
     }
 
     // v3 is identified by idx_inventory_article_key_v3 (6-field key including location).
@@ -564,6 +618,7 @@ fn init_schema(conn: &Connection) -> DbResult<()> {
     conn.execute_batch(INVENTORY_SNAPSHOTS_DDL)?;
     conn.execute_batch(SOLD_EVENTS_DDL)?;
     conn.execute_batch(LOT_COSTS_DDL)?;
+    conn.execute_batch(APP_META_DDL)?;
 
     Ok(())
 }
@@ -587,8 +642,17 @@ fn today_date() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
-/// Syncs a slice of cards (from a freshly loaded inventory CSV) to the local DB.
+/// Syncs a slice of cards (from a freshly loaded inventory CSV) to the local DB,
+/// with two safety layers in front of the write:
 ///
+/// 1. A dated backup of the DB file is taken (first write of the day) so a bad
+///    import can always be rolled back.
+/// 2. The change is previewed first; a sync that would record most of the
+///    inventory as sold is blocked and returned as [`SyncOutcome::Blocked`]
+///    with nothing written — the caller decides whether to
+///    [`sync_inventory_forced`].
+///
+/// Sync semantics:
 /// - Cards are pre-aggregated by variant (cardmarket_id + condition + language + foil +
 ///   signed): quantities across multiple locations are summed into a single DB row.
 /// - Existing variants are updated; new variants are inserted.
@@ -596,8 +660,31 @@ fn today_date() -> String {
 /// - Timestamps are only advanced once per day.
 ///
 /// Errors are returned to the caller; call sites treat them as non-fatal.
-pub fn sync_inventory(cards: &[Card]) -> DbResult<SyncStats> {
+pub fn sync_inventory(cards: &[Card]) -> DbResult<SyncOutcome> {
     let mut conn = open_db()?;
+    backup_db_file(&conn, &today_date());
+    let preview = preview_sync_conn(&conn, cards)?;
+    if preview.is_suspicious() {
+        log::warn!(
+            "Inventory sync blocked: would record {} of {} copies as sold ({} variants zeroed)",
+            preview.copies_sold,
+            preview.copies_before,
+            preview.zeroed_variants
+        );
+        return Ok(SyncOutcome::Blocked(preview));
+    }
+    Ok(SyncOutcome::Synced(sync_inventory_conn(
+        &mut conn,
+        cards,
+        &today_date(),
+    )?))
+}
+
+/// Runs the sync without the suspicious-change guard (still takes the daily
+/// backup first). Use only after the user has confirmed a blocked sync.
+pub fn sync_inventory_forced(cards: &[Card]) -> DbResult<SyncStats> {
+    let mut conn = open_db()?;
+    backup_db_file(&conn, &today_date());
     sync_inventory_conn(&mut conn, cards, &today_date())
 }
 
@@ -795,6 +882,96 @@ fn get_sold_events_conn(conn: &Connection) -> DbResult<Vec<SoldEvent>> {
 pub fn get_restock_candidates() -> DbResult<Vec<RestockCandidate>> {
     let conn = open_db()?;
     get_restock_candidates_conn(&conn)
+}
+
+/// Reads one value from the app bookkeeping store.
+fn get_meta(conn: &Connection, key: &str) -> DbResult<Option<String>> {
+    conn.query_row("SELECT value FROM app_meta WHERE key = ?1", [key], |r| {
+        r.get(0)
+    })
+    .optional()
+}
+
+/// Writes one value to the app bookkeeping store.
+fn set_meta(conn: &Connection, key: &str, value: &str) -> DbResult<()> {
+    conn.execute(
+        "INSERT INTO app_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [key, value],
+    )?;
+    Ok(())
+}
+
+/// What changed since the previous visit — shown on the welcome screen.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct VisitDigest {
+    /// Baseline date the digest is measured against (the previous day the app
+    /// was started); `None` on the very first visit.
+    pub since: Option<String>,
+    /// Copies recorded as sold since the baseline, and their revenue.
+    pub sold_copies: i64,
+    pub sold_revenue: f64,
+    /// Variants first seen by a sync after the baseline.
+    pub new_listings: i64,
+    /// Most recent day any variant was synced (proxy for "last CSV import").
+    pub last_sync: Option<String>,
+    /// Current number of restock candidates (sold out, worth re-buying).
+    pub restock_candidates: i64,
+}
+
+/// Builds the since-last-visit digest and records today as the latest visit.
+///
+/// Visits are tracked per day: starting the app again on the same day keeps
+/// the same baseline instead of resetting the digest to empty.
+pub fn visit_digest() -> DbResult<VisitDigest> {
+    let conn = open_db()?;
+    visit_digest_conn(&conn, &today_date())
+}
+
+/// Inner digest that accepts an explicit connection and date — used in tests.
+fn visit_digest_conn(conn: &Connection, today: &str) -> DbResult<VisitDigest> {
+    let last = get_meta(conn, "last_visit")?;
+    let baseline = match last {
+        Some(d) if d != today => {
+            set_meta(conn, "prev_visit", &d)?;
+            set_meta(conn, "last_visit", today)?;
+            Some(d)
+        }
+        Some(_) => get_meta(conn, "prev_visit")?,
+        None => {
+            set_meta(conn, "last_visit", today)?;
+            None
+        }
+    };
+
+    let mut digest = VisitDigest {
+        since: baseline.clone(),
+        ..VisitDigest::default()
+    };
+    if let Some(since) = &baseline {
+        let (copies, revenue): (Option<i64>, Option<f64>) = conn.query_row(
+            "SELECT SUM(copies), SUM(copies * price) FROM sold_events WHERE date > ?1",
+            [since.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        digest.sold_copies = copies.unwrap_or(0);
+        digest.sold_revenue = revenue.unwrap_or(0.0);
+        digest.new_listings = conn.query_row(
+            "SELECT COUNT(*) FROM inventory_cards WHERE first_synced_at > ?1",
+            [since.as_str()],
+            |r| r.get(0),
+        )?;
+    }
+    digest.last_sync =
+        conn.query_row("SELECT MAX(last_synced_at) FROM inventory_cards", [], |r| {
+            r.get(0)
+        })?;
+    digest.restock_candidates = conn.query_row(
+        "SELECT COUNT(*) FROM inventory_cards WHERE quantity = 0 AND sold_quantity > 0",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(digest)
 }
 
 /// Inner query that accepts an explicit connection — used in tests.
@@ -1162,22 +1339,21 @@ fn get_db_stats_conn(conn: &Connection, today: &str) -> DbResult<DbStats> {
     })
 }
 
-/// Inner sync that accepts an explicit connection and date — used in tests.
-fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> DbResult<SyncStats> {
-    log::debug!("Syncing {} cards to inventory DB ({})", cards.len(), today);
-    let tx = conn.transaction()?;
-    let mut stats = SyncStats::default();
-
-    // Pre-aggregate cards by (cardmarket_id, condition, language, is_foil, is_signed),
-    // summing quantities. The key components are normalised to the canonical form stored
-    // in the DB so the legacy Cardmarket export and the new inventory-report CSV produce
-    // identical variant keys (see `normalize_flag` / `normalize_language` /
-    // `canonical_condition` for the encodings used).
-    #[allow(clippy::type_complexity)]
-    let mut agg: std::collections::HashMap<
-        (String, String, String, String, String),
-        (&Card, i64),
-    > = std::collections::HashMap::new();
+/// Pre-aggregates CSV rows by (cardmarket_id, condition, language, is_foil,
+/// is_signed), summing quantities. The key components are normalised to the
+/// canonical form stored in the DB so the legacy Cardmarket export and the new
+/// inventory-report CSV produce identical variant keys (see `normalize_flag` /
+/// `normalize_language` / `canonical_condition` for the encodings used).
+///
+/// The inventory-report CSV emits a placeholder "summary" row (quantity 0,
+/// empty location) *before* the real per-location row for a variant; the
+/// representative card therefore prefers any row with a non-empty location.
+#[allow(clippy::type_complexity)]
+fn aggregate_by_variant(
+    cards: &[Card],
+) -> std::collections::HashMap<(String, String, String, String, String), (&Card, i64)> {
+    let mut agg: std::collections::HashMap<(String, String, String, String, String), (&Card, i64)> =
+        std::collections::HashMap::new();
     for card in cards {
         let key = (
             card.cardmarket_id.clone(),
@@ -1190,19 +1366,139 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
         let entry = agg.entry(key).or_insert((card, 0));
         entry.1 += qty;
 
-        // The inventory-report CSV emits a placeholder "summary" row (quantity 0,
-        // empty location) *before* the real per-location row for a variant. If the
-        // summary row is seen first, `or_insert` keeps it as the representative and
-        // the real location is lost. Prefer any row with a non-empty location over
-        // one without — that's the only information the DB's single `location`
-        // column can carry, and an empty one is never useful on the "longest unsold"
-        // screen.
         let rep_has_loc = card_has_location(entry.0);
         let new_has_loc = card_has_location(card);
         if new_has_loc && !rep_has_loc {
             entry.0 = card;
         }
     }
+    agg
+}
+
+/// Parses a CSV price string (both `.` and `,` decimal separators).
+fn parse_csv_price(price: &str) -> Option<f64> {
+    price.trim().replace(',', ".").parse::<f64>().ok()
+}
+
+/// Computes what a sync of `cards` would change, without writing anything.
+fn preview_sync_conn(conn: &Connection, cards: &[Card]) -> DbResult<SyncPreview> {
+    let agg = aggregate_by_variant(cards);
+    let mut preview = SyncPreview::default();
+
+    // Current DB state keyed like the sync keys it.
+    let mut db: std::collections::HashMap<String, (i64, f64)> = std::collections::HashMap::new();
+    let rows = conn
+        .prepare(
+            "SELECT cardmarket_id, condition, language, is_foil, is_signed,
+                    quantity, CAST(price AS REAL) FROM inventory_cards",
+        )?
+        .query_map([], |row| {
+            Ok((
+                article_key(
+                    &row.get::<_, String>(0)?,
+                    &row.get::<_, String>(1)?,
+                    &row.get::<_, String>(2)?,
+                    &row.get::<_, String>(3)?,
+                    &row.get::<_, String>(4)?,
+                ),
+                row.get::<_, i64>(5)?,
+                row.get::<_, f64>(6)?,
+            ))
+        })?
+        .collect::<DbResult<Vec<_>>>()?;
+    for (key, qty, price) in rows {
+        if qty > 0 {
+            preview.copies_before += qty;
+        }
+        db.insert(key, (qty, price));
+    }
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for ((id, cond, lang, foil, signed), (card, qty)) in &agg {
+        let key = article_key(id, cond, lang, foil, signed);
+        preview.copies_after += *qty;
+        match db.get(&key) {
+            None => preview.new_variants += 1,
+            Some((db_qty, db_price)) => {
+                preview.updated_variants += 1;
+                if qty < db_qty {
+                    preview.copies_sold += db_qty - qty;
+                }
+                if let Some(p) = parse_csv_price(&card.price) {
+                    if (p - db_price).abs() > 0.005 {
+                        preview.price_changes += 1;
+                    }
+                }
+            }
+        }
+        seen.insert(key);
+    }
+
+    // In-stock DB variants that vanished from the CSV would be zeroed (and
+    // their remaining copies recorded as sold).
+    for (key, (qty, _)) in &db {
+        if *qty > 0 && !seen.contains(key) {
+            preview.zeroed_variants += 1;
+            preview.copies_sold += qty;
+        }
+    }
+
+    Ok(preview)
+}
+
+/// How many daily backups of the inventory DB file to keep.
+const BACKUP_KEEP: usize = 3;
+
+/// Takes a dated snapshot of the inventory DB next to it
+/// (`inventory-YYYY-MM-DD.db.bak`) before the first write of the day, and
+/// prunes old backups. Uses SQLite's `VACUUM INTO` so the snapshot is
+/// consistent regardless of journal mode. Failures are logged, never fatal —
+/// a backup must not block a sync.
+fn backup_db_file(conn: &Connection, today: &str) {
+    let Some(dir) = db_path().parent().map(std::path::Path::to_path_buf) else {
+        return;
+    };
+    if let Err(e) = backup_db_at(conn, &dir, today, BACKUP_KEEP) {
+        log::warn!("Inventory DB backup failed: {e}");
+    }
+}
+
+/// Inner backup that accepts explicit connection and directory — used in tests.
+/// Dated file names sort lexicographically = chronologically, so pruning keeps
+/// the `keep` newest.
+fn backup_db_at(
+    conn: &Connection,
+    dir: &std::path::Path,
+    today: &str,
+    keep: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dst = dir.join(format!("inventory-{today}.db.bak"));
+    if !dst.exists() {
+        conn.execute("VACUUM INTO ?1", [dst.to_string_lossy().as_ref()])?;
+        log::info!("Inventory DB backed up to {}", dst.display());
+    }
+    let mut backups: Vec<PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("inventory-") && n.ends_with(".db.bak"))
+        })
+        .collect();
+    backups.sort();
+    while backups.len() > keep {
+        let old = backups.remove(0);
+        std::fs::remove_file(&old)?;
+    }
+    Ok(())
+}
+
+/// Inner sync that accepts an explicit connection and date — used in tests.
+fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> DbResult<SyncStats> {
+    log::debug!("Syncing {} cards to inventory DB ({})", cards.len(), today);
+    let tx = conn.transaction()?;
+    let mut stats = SyncStats::default();
+    let agg = aggregate_by_variant(cards);
 
     // Pre-sync DB state, read once: used to detect per-variant sold deltas (this
     // sync's quantity drops) and to find rows that vanished from the CSV (phase 2).

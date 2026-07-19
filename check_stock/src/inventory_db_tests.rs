@@ -1498,3 +1498,160 @@ fn restock_revenue_tops_up_copies_sold_before_event_log() {
         "falls back to last_synced_at without events"
     );
 }
+
+// ==================== preview_sync / import safety ====================
+
+#[test]
+fn preview_on_empty_db_is_all_new() {
+    let conn = test_conn();
+    let cards = vec![make_card("1", "Alpha", "3"), make_card("2", "Beta", "2")];
+    let p = preview_sync_conn(&conn, &cards).unwrap();
+    assert_eq!(p.new_variants, 2);
+    assert_eq!(p.updated_variants, 0);
+    assert_eq!(p.zeroed_variants, 0);
+    assert_eq!(p.copies_sold, 0);
+    assert_eq!(p.copies_before, 0);
+    assert_eq!(p.copies_after, 5);
+    assert!(!p.is_suspicious());
+}
+
+#[test]
+fn preview_detects_drops_zeroes_and_price_changes() {
+    let mut conn = test_conn();
+    let cards = vec![
+        make_card("1", "Alpha", "5"),
+        make_card("2", "Beta", "4"),
+        make_card("3", "Gamma", "1"),
+    ];
+    sync_inventory_conn(&mut conn, &cards, "2026-01-01").unwrap();
+
+    // Next CSV: Alpha dropped to 2 copies with a new price, Beta unchanged,
+    // Gamma vanished, Delta is new.
+    let mut alpha = make_card("1", "Alpha", "2");
+    alpha.price = "2,50".to_string(); // comma decimal must parse too
+    let next = vec![
+        alpha,
+        make_card("2", "Beta", "4"),
+        make_card("4", "Delta", "1"),
+    ];
+    let p = preview_sync_conn(&conn, &next).unwrap();
+
+    assert_eq!(p.new_variants, 1);
+    assert_eq!(p.updated_variants, 2);
+    assert_eq!(p.zeroed_variants, 1);
+    // 3 copies of Alpha dropped + 1 vanished Gamma copy.
+    assert_eq!(p.copies_sold, 4);
+    assert_eq!(p.price_changes, 1);
+    assert_eq!(p.copies_before, 10);
+    assert_eq!(p.copies_after, 7);
+    // Nothing was written by the preview itself.
+    assert_eq!(count_rows(&conn), 3);
+}
+
+#[test]
+fn preview_suspicious_only_on_large_relative_drop() {
+    // Small inventory: even a total wipe is not guarded (fresh DBs churn).
+    let small = SyncPreview {
+        copies_before: 50,
+        copies_sold: 50,
+        ..SyncPreview::default()
+    };
+    assert!(!small.is_suspicious());
+
+    // Large inventory, >50% recorded as sold → suspicious.
+    let bad = SyncPreview {
+        copies_before: 200,
+        copies_sold: 101,
+        ..SyncPreview::default()
+    };
+    assert!(bad.is_suspicious());
+
+    // Exactly half is still allowed.
+    let half = SyncPreview {
+        copies_before: 200,
+        copies_sold: 100,
+        ..SyncPreview::default()
+    };
+    assert!(!half.is_suspicious());
+}
+
+#[test]
+fn backup_creates_dated_snapshot_and_prunes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut conn = test_conn();
+    sync_inventory_conn(&mut conn, &[make_card("1", "Alpha", "3")], "2026-01-01").unwrap();
+
+    backup_db_at(&conn, dir.path(), "2026-01-01", 2).unwrap();
+    let first = dir.path().join("inventory-2026-01-01.db.bak");
+    assert!(first.exists());
+    // The snapshot is a valid database containing the synced row.
+    let snap = Connection::open(&first).unwrap();
+    let n: i64 = snap
+        .query_row("SELECT COUNT(*) FROM inventory_cards", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
+
+    // Same day again: idempotent, no error, still one file.
+    backup_db_at(&conn, dir.path(), "2026-01-01", 2).unwrap();
+
+    // Two more days: oldest backup is pruned (keep = 2).
+    backup_db_at(&conn, dir.path(), "2026-01-02", 2).unwrap();
+    backup_db_at(&conn, dir.path(), "2026-01-03", 2).unwrap();
+    assert!(!first.exists());
+    assert!(dir.path().join("inventory-2026-01-02.db.bak").exists());
+    assert!(dir.path().join("inventory-2026-01-03.db.bak").exists());
+}
+
+// ==================== visit digest ====================
+
+#[test]
+fn digest_first_visit_has_no_baseline() {
+    let conn = test_conn();
+    let d = visit_digest_conn(&conn, "2026-01-01").unwrap();
+    assert_eq!(d.since, None);
+    assert_eq!(d.sold_copies, 0);
+    assert_eq!(d.last_sync, None);
+    // The visit was recorded.
+    assert_eq!(
+        get_meta(&conn, "last_visit").unwrap().as_deref(),
+        Some("2026-01-01")
+    );
+}
+
+#[test]
+fn digest_counts_changes_since_previous_visit_day() {
+    let mut conn = test_conn();
+    // Day 1: visit + initial stock.
+    visit_digest_conn(&conn, "2026-01-01").unwrap();
+    sync_inventory_conn(&mut conn, &[make_card("1", "Alpha", "5")], "2026-01-01").unwrap();
+
+    // Day 3: 2 Alpha copies sold, Beta newly listed.
+    sync_inventory_conn(
+        &mut conn,
+        &[make_card("1", "Alpha", "3"), make_card("2", "Beta", "1")],
+        "2026-01-03",
+    )
+    .unwrap();
+
+    let d = visit_digest_conn(&conn, "2026-01-03").unwrap();
+    assert_eq!(d.since.as_deref(), Some("2026-01-01"));
+    assert_eq!(d.sold_copies, 2);
+    assert!((d.sold_revenue - 2.0).abs() < 0.001); // 2 copies × €1.00
+    assert_eq!(d.new_listings, 1); // Beta
+    assert_eq!(d.last_sync.as_deref(), Some("2026-01-03"));
+
+    // Restarting the app on the same day keeps the same baseline.
+    let again = visit_digest_conn(&conn, "2026-01-03").unwrap();
+    assert_eq!(again.since.as_deref(), Some("2026-01-01"));
+    assert_eq!(again.sold_copies, 2);
+}
+
+#[test]
+fn digest_counts_restock_candidates() {
+    let mut conn = test_conn();
+    sync_inventory_conn(&mut conn, &[make_card("1", "Alpha", "2")], "2026-01-01").unwrap();
+    // Alpha sells out entirely.
+    sync_inventory_conn(&mut conn, &[], "2026-01-02").unwrap();
+    let d = visit_digest_conn(&conn, "2026-01-02").unwrap();
+    assert_eq!(d.restock_candidates, 1);
+}

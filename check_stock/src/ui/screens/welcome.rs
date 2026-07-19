@@ -1,4 +1,5 @@
-use crate::ui::state::Screen;
+use crate::inventory_db::VisitDigest;
+use crate::ui::state::{AppState, Screen};
 use eframe::egui;
 
 pub struct WelcomeScreen;
@@ -20,10 +21,15 @@ const TILES: [(&str, &str); 10] = [
 ];
 
 impl WelcomeScreen {
-    pub fn show(ui: &mut egui::Ui, current_screen: &mut Screen) {
+    pub fn show(ui: &mut egui::Ui, app_state: &mut AppState) {
+        // Computed once per app run; local SQLite, so a blocking read is fine.
+        if app_state.digest.is_none() {
+            app_state.digest = Some(crate::inventory_db::visit_digest().map_err(|e| e.to_string()));
+        }
+        let current_screen = &mut app_state.current_screen;
         let available = ui.available_size();
         ui.vertical_centered(|ui| {
-            ui.add_space(available.y * 0.12);
+            ui.add_space(available.y * 0.10);
 
             ui.label(
                 egui::RichText::new("D2D Automations")
@@ -38,7 +44,11 @@ impl WelcomeScreen {
                     .color(egui::Color32::from_rgb(150, 150, 165)),
             );
 
-            ui.add_space(36.0);
+            ui.add_space(12.0);
+            if let Some(Ok(digest)) = &app_state.digest {
+                Self::show_digest(ui, digest);
+            }
+            ui.add_space(20.0);
 
             let tile_w = 200.0_f32;
             let tile_h = 110.0_f32;
@@ -77,6 +87,61 @@ impl WelcomeScreen {
                 };
             }
         });
+    }
+
+    /// Compact "since your last visit" line under the title: sales, new
+    /// listings, restock candidates, and how fresh the local inventory is.
+    fn show_digest(ui: &mut egui::Ui, d: &VisitDigest) {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(since) = &d.since {
+            if d.sold_copies > 0 {
+                parts.push(format!(
+                    "{} copies sold (€{:.2}) since {}",
+                    d.sold_copies, d.sold_revenue, since
+                ));
+            } else {
+                parts.push(format!("no sales recorded since {since}"));
+            }
+            if d.new_listings > 0 {
+                parts.push(format!("{} new listings", d.new_listings));
+            }
+        }
+        if d.restock_candidates > 0 {
+            parts.push(format!("{} restock candidates", d.restock_candidates));
+        }
+        if !parts.is_empty() {
+            ui.label(
+                egui::RichText::new(parts.join(" · "))
+                    .size(12.0)
+                    .color(egui::Color32::from_rgb(150, 158, 178)),
+            );
+        }
+
+        // Freshness of the local inventory mirror — the one thing worth a
+        // warning color, since every report depends on it.
+        let today = chrono::Local::now().date_naive();
+        let sync_age = d.last_sync.as_deref().and_then(|s| {
+            chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                .ok()
+                .map(|date| (today - date).num_days())
+        });
+        let (text, warn) = match sync_age {
+            None => (
+                "No inventory synced yet — load a Cardmarket CSV".to_string(),
+                false,
+            ),
+            Some(age) if age > 7 => (
+                format!("Last inventory sync {age} days ago — import a fresh CSV"),
+                true,
+            ),
+            Some(0) => ("Inventory synced today".to_string(), false),
+            Some(age) => (format!("Last inventory sync {age} days ago"), false),
+        };
+        ui.label(egui::RichText::new(text).size(12.0).color(if warn {
+            egui::Color32::from_rgb(230, 170, 80)
+        } else {
+            egui::Color32::from_rgb(120, 128, 148)
+        }));
     }
 
     fn tile_button(ui: &mut egui::Ui, label: &str, description: &str, size: egui::Vec2) -> bool {
