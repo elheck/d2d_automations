@@ -120,6 +120,9 @@ impl MoversScreen {
                     Self::spawn_fetch(state, &url);
                 }
             }
+            if state.loading {
+                ui.spinner();
+            }
             if !state.status.is_empty() {
                 ui.label(
                     egui::RichText::new(&state.status)
@@ -367,6 +370,8 @@ impl MoversScreen {
         state.rx = Some(rx);
         state.loading = true;
         state.error = None;
+        // Instant feedback — the snapshot fetch can take a while on large stocks.
+        state.status = format!("Fetching 90-day snapshots for {} products…", ids.len());
         let client = InventorySyncClient::new(url);
         std::thread::spawn(move || {
             let result = client

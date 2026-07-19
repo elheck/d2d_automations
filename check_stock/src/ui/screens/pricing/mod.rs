@@ -322,7 +322,14 @@ fn show_inventory_sync_bar(
                 start_price_fetch(state, &url);
             }
 
-            if !state.inventory_prices.is_empty() {
+            if state.prices_fetching {
+                ui.spinner();
+                ui.label(
+                    egui::RichText::new("Fetching latest prices from inventory_sync…")
+                        .color(style::TEXT_MUTED)
+                        .size(11.0),
+                );
+            } else if !state.inventory_prices.is_empty() {
                 ui.label(
                     egui::RichText::new(format!("{} prices cached", state.inventory_prices.len()))
                         .color(style::TEXT_MUTED)

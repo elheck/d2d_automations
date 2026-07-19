@@ -45,10 +45,17 @@ egui desktop app for Magic: The Gathering card inventory management.
   reference (trend/avg/low, foil-aware) to surface under- and over-priced
   cards, the revenue upside of repricing, and capital stuck above market. The
   market source is either the **inventory_sync server** (default — latest
-  collected prices, no big download, plus **Δ7d/Δ30d market-movement columns**
-  so "overpriced and falling" is distinguishable from "overpriced but rising")
-  or a full Cardmarket price-guide download / local JSON file. Strictly
-  read-only — it reports, it never writes prices.
+  collected prices, no big download, plus **Δ7d/Δ30d market-movement columns**)
+  or a full Cardmarket price-guide download / local JSON file. Each row is
+  enriched with market signals combined into an **Action column** ("Raise now",
+  "Cut now", "Hold", …): avg1/avg7/avg30 **momentum** crossed with the verdict,
+  listings **below the market low** escalated to underpriced, the fair band
+  **widened by the card's own ~90-day volatility** (a delta inside its natural
+  swing is noise), **stale market data** (> 7 days) flagged and de-weighted,
+  and **listing age** boosting old overpriced stock (dead capital). The default
+  sort is a transparent **priority score** (impact × urgency × confidence) —
+  what to fix first is on top. Strictly read-only — it reports, it never writes
+  prices.
 - **Restock Report** — Sold-out variants (quantity 0, copies sold > 0) ranked by
   sell-through speed (copies/week over the listing → last-sale window), with a
   minimum-copies filter to hide one-off sales and a buy-list CSV export. Answers

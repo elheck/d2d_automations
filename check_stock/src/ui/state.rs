@@ -782,8 +782,11 @@ impl BuyHelperState {
 /// Which column the mispricing table is sorted by.
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum MispricingSort {
-    /// Absolute money impact of the mispricing: |delta_abs| × quantity.
+    /// Combined "what to fix first" score (impact × urgency × confidence) —
+    /// see [`crate::mispricing::priority_score`].
     #[default]
+    Priority,
+    /// Absolute money impact of the mispricing: |delta_abs| × quantity.
     Impact,
     DeltaPct,
     Listed,
@@ -792,6 +795,8 @@ pub enum MispricingSort {
     Change7,
     /// Market movement over the last 30 days (from inventory_sync snapshots).
     Change30,
+    /// Days since the card was listed.
+    Age,
     Name,
     Quantity,
 }
@@ -818,13 +823,21 @@ impl MarketSource {
     }
 }
 
+/// Message from a background inventory_sync fetch: streamed progress updates
+/// while the fetch runs, then exactly one final result.
+pub enum FetchMsg<T> {
+    /// Human-readable description of the stage the fetch is currently in.
+    Progress(String),
+    Done(Result<T, String>),
+}
+
 /// Payload of a successful background fetch from inventory_sync for the
-/// mispricing screen: latest prices, raw snapshot rows, and the three
-/// snapshot dates they were requested for.
+/// mispricing screen: latest prices, raw snapshot rows, and the snapshot
+/// dates they were requested for.
 pub type MispricingSyncData = (
     Vec<LatestPrice>,
     Vec<crate::api::inventory_sync::PriceSnapshot>,
-    [String; 3],
+    crate::price_trends::SnapshotDates,
 );
 
 /// Verdict filter applied to the mispricing table.
@@ -880,7 +893,8 @@ pub struct MispricingState {
     pub sync_status: String,
     pub sync_loading: bool,
     /// Receiver for the background inventory_sync fetch, if one is in flight.
-    pub sync_rx: Option<std::sync::mpsc::Receiver<Result<MispricingSyncData, String>>>,
+    /// Streams progress messages, then the final result.
+    pub sync_rx: Option<std::sync::mpsc::Receiver<FetchMsg<MispricingSyncData>>>,
 }
 
 impl Default for MispricingState {
@@ -948,7 +962,10 @@ pub enum MoverSort {
 
 /// Payload of a successful background snapshot fetch for the movers screen:
 /// raw snapshot rows plus the three dates they were requested for.
-pub type MoversSyncData = (Vec<crate::api::inventory_sync::PriceSnapshot>, [String; 3]);
+pub type MoversSyncData = (
+    Vec<crate::api::inventory_sync::PriceSnapshot>,
+    crate::price_trends::SnapshotDates,
+);
 
 /// State for the read-only Price Movers screen (stock × market movement).
 pub struct MoversState {

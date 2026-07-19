@@ -14,13 +14,13 @@ use crate::{
     api::cardmarket::PriceGuide,
     api::inventory_sync::{InventorySyncClient, PriceFields},
     inventory_db::{get_in_stock_cards, InStockCard},
-    mispricing::{build_report, MispricingReport, PriceVerdict},
+    mispricing::{build_report, Action, MarketData, MispricingReport, PriceVerdict},
     price_trends::{SnapshotSet, TrendChange},
     ui::{
         components::InventorySyncBar,
         state::{
-            AppState, InventoryPriceSource, MarketSource, MispricingSort, MispricingState, Screen,
-            VerdictFilter,
+            AppState, FetchMsg, InventoryPriceSource, MarketSource, MispricingSort,
+            MispricingState, Screen, VerdictFilter,
         },
         style,
     },
@@ -99,37 +99,46 @@ impl MispricingScreen {
         }
     }
 
-    /// Drains the background inventory_sync fetch channel and rebuilds the
-    /// report when prices + snapshots arrive.
+    /// Drains the background inventory_sync fetch channel — progress messages
+    /// update the status line live; the final result rebuilds the report.
     fn poll_sync_fetch(state: &mut MispricingState) {
-        let Some(rx) = &state.sync_rx else { return };
-        match rx.try_recv() {
-            Ok(result) => {
-                state.sync_loading = false;
-                state.sync_rx = None;
-                match result {
-                    Ok((latest, snapshots, dates)) => {
-                        state.inventory_prices =
-                            latest.into_iter().map(|p| (p.id_product, p)).collect();
-                        state.snapshots = SnapshotSet::new(&dates, snapshots);
-                        state.sync_status = format!(
-                            "{} prices · movement for {} products",
-                            state.inventory_prices.len(),
-                            state.snapshots.len()
-                        );
-                        state.error = None;
-                        Self::rebuild(state);
+        let Some(rx) = state.sync_rx.take() else {
+            return;
+        };
+        loop {
+            match rx.try_recv() {
+                Ok(FetchMsg::Progress(msg)) => state.sync_status = msg,
+                Ok(FetchMsg::Done(result)) => {
+                    state.sync_loading = false;
+                    match result {
+                        Ok((latest, snapshots, dates)) => {
+                            state.inventory_prices =
+                                latest.into_iter().map(|p| (p.id_product, p)).collect();
+                            state.snapshots = SnapshotSet::new(&dates, snapshots);
+                            state.sync_status = format!(
+                                "{} prices · movement for {} products",
+                                state.inventory_prices.len(),
+                                state.snapshots.len()
+                            );
+                            state.error = None;
+                            Self::rebuild(state);
+                        }
+                        Err(e) => {
+                            state.sync_status = String::new();
+                            state.error = Some(format!("Inventory sync fetch failed: {e}"));
+                        }
                     }
-                    Err(e) => {
-                        state.sync_status = String::new();
-                        state.error = Some(format!("Inventory sync fetch failed: {e}"));
-                    }
+                    return;
                 }
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                state.sync_loading = false;
-                state.sync_rx = None;
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // Still in flight — keep the receiver for the next frame.
+                    state.sync_rx = Some(rx);
+                    return;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    state.sync_loading = false;
+                    return;
+                }
             }
         }
     }
@@ -151,6 +160,9 @@ impl MispricingScreen {
                 if style::secondary_button(ui, label).clicked() && !state.sync_loading {
                     Self::spawn_sync_fetch(state, &url);
                 }
+            }
+            if state.sync_loading {
+                ui.spinner();
             }
             if !state.sync_status.is_empty() {
                 ui.label(
@@ -306,6 +318,15 @@ impl MispricingScreen {
                     ui.label(format!("{} listings", r.no_data_rows));
                     ui.end_row();
 
+                    ui.label(egui::RichText::new("Act now:").strong());
+                    ui.label(format!(
+                        "{} raise · {} cut",
+                        r.raise_now_rows, r.cut_now_rows
+                    ));
+                    ui.label(egui::RichText::new("Stale market data:").strong());
+                    ui.label(format!("{} listings", r.stale_rows));
+                    ui.end_row();
+
                     ui.label(egui::RichText::new("Listed value*:").strong());
                     ui.label(format!("€{:.2}", r.total_listed_value));
                     ui.label(egui::RichText::new("Market value*:").strong());
@@ -364,6 +385,11 @@ impl MispricingScreen {
         };
         rows.sort_by(|(a, ca), (b, cb)| {
             let ord = match state.sort {
+                MispricingSort::Priority => a
+                    .priority
+                    .partial_cmp(&b.priority)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                MispricingSort::Age => a.age_days.cmp(&b.age_days),
                 MispricingSort::Impact => impact(a)
                     .partial_cmp(&impact(b))
                     .unwrap_or(std::cmp::Ordering::Equal),
@@ -436,7 +462,7 @@ impl MispricingScreen {
         };
 
         egui::Grid::new("mispricing_table")
-            .num_columns(10)
+            .num_columns(12)
             .striped(true)
             .spacing([12.0, 2.0])
             .show(ui, |ui| {
@@ -452,6 +478,13 @@ impl MispricingScreen {
                     ui,
                     "Qty",
                     MispricingSort::Quantity,
+                    &mut state.sort,
+                    &mut state.sort_desc,
+                );
+                header(
+                    ui,
+                    "Age",
+                    MispricingSort::Age,
                     &mut state.sort,
                     &mut state.sort_desc,
                 );
@@ -498,8 +531,16 @@ impl MispricingScreen {
                     &mut state.sort_desc,
                 );
                 ui.label(egui::RichText::new("Verdict").strong());
+                header(
+                    ui,
+                    "Action",
+                    MispricingSort::Priority,
+                    &mut state.sort,
+                    &mut state.sort_desc,
+                );
                 ui.end_row();
 
+                let threshold = state.threshold_pct;
                 for (c, change) in rows.into_iter().take(MAX_ROWS) {
                     let name = if c.is_foil {
                         format!("{} ✦", c.name)
@@ -509,23 +550,55 @@ impl MispricingScreen {
                     ui.label(name);
                     ui.label(format!("{} {}", c.set_code, c.condition));
                     ui.label(format!("×{}", c.quantity));
+                    ui.label(format!("{}d", c.age_days));
                     ui.label(format!("€{:.2}", c.listed_price));
-                    ui.label(
-                        c.market_price
-                            .map(|m| format!("€{m:.2}"))
-                            .unwrap_or_else(|| "—".to_string()),
-                    );
+                    let market_text = c
+                        .market_price
+                        .map(|m| format!("€{m:.2}"))
+                        .unwrap_or_else(|| "—".to_string());
+                    if c.stale {
+                        ui.label(
+                            egui::RichText::new(format!("{market_text} ⚠"))
+                                .color(style::TEXT_MUTED),
+                        )
+                        .on_hover_text("Market data is more than a week old — treat with caution");
+                    } else {
+                        ui.label(market_text);
+                    }
                     style::change_pct_label(ui, change.pct_7d);
                     style::change_pct_label(ui, change.pct_30d);
                     let (color, verdict_color) = verdict_colors(c.verdict);
                     if c.market_price.is_some() {
-                        ui.label(egui::RichText::new(format!("{:+.0}%", c.delta_pct)).color(color));
+                        let delta = ui.label(
+                            egui::RichText::new(format!("{:+.0}%", c.delta_pct)).color(color),
+                        );
+                        if c.effective_threshold_pct > threshold {
+                            delta.on_hover_text(format!(
+                                "Fair band widened to ±{:.0}% by this card's volatility",
+                                c.effective_threshold_pct
+                            ));
+                        }
                         ui.label(format!("€{:.2}", c.delta_abs.abs() * c.quantity as f64));
                     } else {
                         ui.label("—");
                         ui.label("—");
                     }
-                    ui.label(egui::RichText::new(c.verdict.as_str()).color(verdict_color));
+                    let mut verdict_text = c.verdict.as_str().to_string();
+                    let mut verdict_hint = String::new();
+                    if c.below_low {
+                        verdict_text.push_str(" ▼low");
+                        verdict_hint.push_str("Listed below the market's cheapest listing.\n");
+                    }
+                    if c.verdict == PriceVerdict::Underpriced && c.recently_listed() {
+                        verdict_text.push_str(" ·new");
+                        verdict_hint.push_str("Listed within the last day — check for a typo.\n");
+                    }
+                    let verdict_label =
+                        ui.label(egui::RichText::new(verdict_text).color(verdict_color));
+                    if !verdict_hint.is_empty() {
+                        verdict_label.on_hover_text(verdict_hint.trim_end());
+                    }
+                    action_label(ui, c.action);
                     ui.end_row();
                 }
             });
@@ -575,18 +648,28 @@ impl MispricingScreen {
         state.sync_rx = Some(rx);
         state.sync_loading = true;
         state.error = None;
+        // Instant feedback before the worker thread even starts.
+        state.sync_status = format!("Contacting server ({} products)…", ids.len());
         let client = InventorySyncClient::new(url);
         std::thread::spawn(move || {
             let result = (|| {
+                let _ = tx.send(FetchMsg::Progress(format!(
+                    "Fetching latest prices for {} products…",
+                    ids.len()
+                )));
                 let latest = client
                     .latest_prices_blocking(&ids)
                     .map_err(|e| e.to_string())?;
+                let _ = tx.send(FetchMsg::Progress(format!(
+                    "{} prices received · fetching 90-day snapshots…",
+                    latest.len()
+                )));
                 let snapshots = client
                     .price_snapshots_blocking(&ids, &dates)
                     .map_err(|e| e.to_string())?;
                 Ok((latest, snapshots, dates))
             })();
-            let _ = tx.send(result);
+            let _ = tx.send(FetchMsg::Done(result));
         });
     }
 
@@ -615,29 +698,91 @@ impl MispricingScreen {
             }
         };
         let src = state.ref_source;
+        let today = chrono::Local::now().date_naive();
+        let snapshots = &state.snapshots;
         let report = match state.source {
             MarketSource::PriceGuide => {
                 let Some(guide) = &state.price_guide else {
                     return;
                 };
-                build_report(&cards, state.threshold_pct, |c: &InStockCard| {
-                    let id = c.cardmarket_id.parse::<u64>().ok()?;
-                    guide.get(id)?.price_for(src, c.is_foil)
+                build_report(&cards, state.threshold_pct, today, |c: &InStockCard| {
+                    let Ok(id) = c.cardmarket_id.parse::<u64>() else {
+                        return MarketData::default();
+                    };
+                    let Some(entry) = guide.get(id) else {
+                        return MarketData::default();
+                    };
+                    // The guide download has no row date; volatility still
+                    // works when snapshots were fetched from inventory_sync.
+                    market_data_of(
+                        entry,
+                        src,
+                        c.is_foil,
+                        None,
+                        snapshots.volatility_pct(id, src, c.is_foil),
+                    )
                 })
             }
             MarketSource::InventorySync => {
                 if state.inventory_prices.is_empty() {
                     return;
                 }
-                build_report(&cards, state.threshold_pct, |c: &InStockCard| {
-                    let id = c.cardmarket_id.parse::<u64>().ok()?;
-                    state.inventory_prices.get(&id)?.price_for(src, c.is_foil)
+                build_report(&cards, state.threshold_pct, today, |c: &InStockCard| {
+                    let Ok(id) = c.cardmarket_id.parse::<u64>() else {
+                        return MarketData::default();
+                    };
+                    let Some(row) = state.inventory_prices.get(&id) else {
+                        return MarketData::default();
+                    };
+                    let price_date =
+                        chrono::NaiveDate::parse_from_str(&row.price_date, "%Y-%m-%d").ok();
+                    market_data_of(
+                        row,
+                        src,
+                        c.is_foil,
+                        price_date,
+                        snapshots.volatility_pct(id, src, c.is_foil),
+                    )
                 })
             }
         };
         state.error = None;
         state.report = Some(report);
     }
+}
+
+/// Resolves the full [`MarketData`] for one card from any row carrying the
+/// standard 12 Cardmarket price columns.
+fn market_data_of<P: PriceFields>(
+    row: &P,
+    src: InventoryPriceSource,
+    is_foil: bool,
+    price_date: Option<chrono::NaiveDate>,
+    volatility_pct: Option<f64>,
+) -> MarketData {
+    MarketData {
+        reference: row.price_for(src, is_foil),
+        low: row.price_for(InventoryPriceSource::Low, is_foil),
+        avg1: row.price_for(InventoryPriceSource::Avg1, is_foil),
+        avg7: row.price_for(InventoryPriceSource::Avg7, is_foil),
+        avg30: row.price_for(InventoryPriceSource::Avg30, is_foil),
+        price_date,
+        volatility_pct,
+    }
+}
+
+/// Renders the Action cell: urgent actions bold, direction color-coded.
+fn action_label(ui: &mut egui::Ui, action: Action) {
+    let color = match action {
+        Action::RaiseNow | Action::Raise => style::COLOR_SUCCESS,
+        Action::CutNow | Action::Cut => style::COLOR_ERROR,
+        Action::Watch | Action::Hold | Action::None => style::TEXT_MUTED,
+    };
+    let mut text = egui::RichText::new(action.as_str()).color(color);
+    if matches!(action, Action::RaiseNow | Action::CutNow) {
+        text = text.strong();
+    }
+    ui.label(text);
 }
 
 /// Returns `(delta_color, verdict_color)` for a verdict.

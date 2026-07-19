@@ -39,19 +39,23 @@ fn stock_card(id: &str, is_foil: bool, effective_date: &str) -> InStockCard {
     }
 }
 
-fn dates() -> [String; 3] {
+fn dates() -> SnapshotDates {
     [
-        "2026-07-18".to_string(),
-        "2026-07-11".to_string(),
-        "2026-06-18".to_string(),
+        "2026-07-18".to_string(), // today
+        "2026-07-11".to_string(), // −7d
+        "2026-07-04".to_string(), // −14d
+        "2026-06-18".to_string(), // −30d
+        "2026-05-19".to_string(), // −60d
+        "2026-04-19".to_string(), // −90d
     ]
 }
 
 #[test]
-fn request_dates_are_today_week_month() {
+fn request_dates_follow_snapshot_days() {
     let today = NaiveDate::from_ymd_opt(2026, 7, 18).unwrap();
     let d = SnapshotSet::request_dates(today);
     assert_eq!(d, dates());
+    assert_eq!(SNAPSHOT_SLOT_COUNT, SNAPSHOT_DAYS.len());
 }
 
 #[test]
@@ -123,6 +127,75 @@ fn change_for_unknown_product_is_default() {
         TrendChange::default()
     );
     assert!(set.is_empty());
+}
+
+// ==================== volatility_pct ====================
+
+#[test]
+fn volatility_is_coefficient_of_variation() {
+    let d = dates();
+    // Four distinct rows with trend 2, 4, 6, 8 → mean 5, population σ ≈ 2.236.
+    let set = SnapshotSet::new(
+        &d,
+        vec![
+            snap(1, "2026-07-18", "2026-07-18", Some(2.0)),
+            snap(1, "2026-07-11", "2026-07-11", Some(4.0)),
+            snap(1, "2026-07-04", "2026-07-04", Some(6.0)),
+            snap(1, "2026-06-18", "2026-06-18", Some(8.0)),
+        ],
+    );
+    let v = set.volatility_pct(1, PriceField::Trend, false).unwrap();
+    assert!((v - 44.721).abs() < 0.01);
+    // Foil columns are 2× in the fixture → identical relative volatility.
+    let vf = set.volatility_pct(1, PriceField::Trend, true).unwrap();
+    assert!((vf - v).abs() < 0.001);
+}
+
+#[test]
+fn volatility_dedupes_slots_resolving_to_same_row() {
+    let d = dates();
+    // Sparse history: every slot resolves to the same two underlying rows →
+    // only 2 distinct values, not enough to judge volatility.
+    let set = SnapshotSet::new(
+        &d,
+        vec![
+            snap(1, "2026-07-18", "2026-07-15", Some(2.0)),
+            snap(1, "2026-07-11", "2026-07-10", Some(4.0)),
+            snap(1, "2026-07-04", "2026-07-10", Some(4.0)),
+            snap(1, "2026-06-18", "2026-07-10", Some(4.0)),
+        ],
+    );
+    assert_eq!(set.volatility_pct(1, PriceField::Trend, false), None);
+}
+
+#[test]
+fn volatility_none_for_unknown_product_or_missing_values() {
+    let d = dates();
+    let set = SnapshotSet::new(
+        &d,
+        vec![
+            snap(1, "2026-07-18", "2026-07-18", None),
+            snap(1, "2026-07-11", "2026-07-11", None),
+            snap(1, "2026-07-04", "2026-07-04", None),
+        ],
+    );
+    assert_eq!(set.volatility_pct(1, PriceField::Trend, false), None);
+    assert_eq!(set.volatility_pct(99, PriceField::Trend, false), None);
+}
+
+#[test]
+fn volatility_zero_for_stable_prices() {
+    let d = dates();
+    let set = SnapshotSet::new(
+        &d,
+        vec![
+            snap(1, "2026-07-18", "2026-07-18", Some(3.0)),
+            snap(1, "2026-07-11", "2026-07-11", Some(3.0)),
+            snap(1, "2026-06-18", "2026-06-18", Some(3.0)),
+        ],
+    );
+    let v = set.volatility_pct(1, PriceField::Trend, false).unwrap();
+    assert!(v.abs() < 1e-9);
 }
 
 #[test]

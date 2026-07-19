@@ -12,10 +12,22 @@ use crate::inventory_db::InStockCard;
 use chrono::{Days, NaiveDate};
 use std::collections::HashMap;
 
-/// Slot indices into [`SnapshotSet`]: today, ~7 days ago, ~30 days ago.
+/// Days back from "today" for each snapshot slot. The 7/30-day slots feed the
+/// Δ7d/Δ30d columns; the extra 14/60/90-day slots exist so per-card volatility
+/// can be estimated locally without any server-side aggregation. Must stay
+/// within the server's `MAX_SNAPSHOT_DATES` limit.
+pub const SNAPSHOT_DAYS: [u64; 6] = [0, 7, 14, 30, 60, 90];
+
+/// Number of snapshot dates requested per fetch.
+pub const SNAPSHOT_SLOT_COUNT: usize = SNAPSHOT_DAYS.len();
+
+/// The dates array sent to `POST /api/price-snapshots`, oldest last.
+pub type SnapshotDates = [String; SNAPSHOT_SLOT_COUNT];
+
+/// Slot indices into [`SnapshotSet`] (see [`SNAPSHOT_DAYS`]).
 const SLOT_NOW: usize = 0;
 const SLOT_WEEK: usize = 1;
-const SLOT_MONTH: usize = 2;
+const SLOT_MONTH: usize = 3;
 
 /// Percentage change of a price field over the 7- and 30-day windows, plus the
 /// current value. `None` means "not enough history", never "no change".
@@ -35,29 +47,25 @@ pub fn pct_change(old: Option<f64>, new: Option<f64>) -> Option<f64> {
     }
 }
 
-/// Snapshot rows for many products on the three reference dates, indexed for
-/// cheap per-card lookup.
+/// Snapshot rows for many products on the [`SNAPSHOT_DAYS`] reference dates,
+/// indexed for cheap per-card lookup.
 #[derive(Default)]
 pub struct SnapshotSet {
-    by_product: HashMap<u64, [Option<PriceSnapshot>; 3]>,
+    by_product: HashMap<u64, [Option<PriceSnapshot>; SNAPSHOT_SLOT_COUNT]>,
 }
 
 impl SnapshotSet {
-    /// The three dates to request from the server: today, 7 and 30 days back.
-    pub fn request_dates(today: NaiveDate) -> [String; 3] {
-        let fmt = |d: NaiveDate| d.format("%Y-%m-%d").to_string();
-        [
-            fmt(today),
-            fmt(today - Days::new(7)),
-            fmt(today - Days::new(30)),
-        ]
+    /// The dates to request from the server: today and [`SNAPSHOT_DAYS`] back.
+    pub fn request_dates(today: NaiveDate) -> SnapshotDates {
+        SNAPSHOT_DAYS.map(|days| (today - Days::new(days)).format("%Y-%m-%d").to_string())
     }
 
     /// Indexes raw server rows by product and requested date. `dates` must be
     /// the same array the request was made with; rows for other dates are
     /// dropped.
-    pub fn new(dates: &[String; 3], snapshots: Vec<PriceSnapshot>) -> Self {
-        let mut by_product: HashMap<u64, [Option<PriceSnapshot>; 3]> = HashMap::new();
+    pub fn new(dates: &SnapshotDates, snapshots: Vec<PriceSnapshot>) -> Self {
+        let mut by_product: HashMap<u64, [Option<PriceSnapshot>; SNAPSHOT_SLOT_COUNT]> =
+            HashMap::new();
         for snap in snapshots {
             let Some(slot) = dates.iter().position(|d| *d == snap.requested_date) else {
                 continue;
@@ -100,6 +108,37 @@ impl SnapshotSet {
             pct_7d: window(SLOT_WEEK),
             pct_30d: window(SLOT_MONTH),
         }
+    }
+
+    /// Relative volatility of `field` for one product: the coefficient of
+    /// variation (population std-dev / mean, in percent) across the distinct
+    /// history rows behind this product's snapshot slots (~90 days).
+    ///
+    /// Slots that resolved to the same underlying row (sparse history) count
+    /// once. Returns `None` with fewer than 3 distinct values or a
+    /// non-positive mean — too little information to call anything volatile.
+    pub fn volatility_pct(&self, id_product: u64, field: PriceField, is_foil: bool) -> Option<f64> {
+        let slots = self.by_product.get(&id_product)?;
+        let mut seen: Vec<&str> = Vec::new();
+        let mut values: Vec<f64> = Vec::new();
+        for snap in slots.iter().flatten() {
+            if seen.contains(&snap.price_date.as_str()) {
+                continue;
+            }
+            seen.push(&snap.price_date);
+            if let Some(v) = snap.price_for(field, is_foil) {
+                values.push(v);
+            }
+        }
+        if values.len() < 3 {
+            return None;
+        }
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        if mean <= 0.0 {
+            return None;
+        }
+        let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64;
+        Some(variance.sqrt() / mean * 100.0)
     }
 }
 
