@@ -95,7 +95,9 @@ showing exactly what would change before anything is written.
 - **Inventory**: Cardmarket *inventory-report* CSV (comma-separated). Legacy *export* CSVs
   (with `nameDE`/`nameES`/`nameFR`/`nameIT` / `listedAt` columns) also load. Condition values
   may be either short codes (`NM`, `EX`, `GD`, `LP`, `PL`) or the inventory-report long form
-  (`near_mint`, `excellent`, `good`, `light_played`, `played`, `poor`).
+  (`near_mint`, `excellent`, `good`, `light_played`, `played`, `poor`). Columns a
+  given export omits (e.g. `isFoil`/`isSigned` in the Generic report) default to
+  empty rather than failing the parse.
 - **Wantslists / decklists**: `quantity name` text, plus the common deck-export
   formats — MTG Arena, MTGO, Moxfield, Archidekt and MTGGoldfish. Set codes,
   collector numbers, foil/etched markers (`*F*`/`*E*`), category `[…]` and tag
@@ -109,6 +111,43 @@ showing exactly what would change before anything is written.
   7/30-day movement, and per-card price history (see `inventory_sync/`; the
   server URL is configured once in the shared connection bar and used by the
   Pricing, Mispricing, Price Movers and Search screens)
+
+## Product Categories
+
+Cardmarket exports **one inventory report per game/category** — e.g.
+`inventory-report-45.csv` (Magic) and `inventory-report-Generic.csv` (sleeves,
+deck boxes and other accessories). Each file is complete only for its own
+category, so every sync is scoped to one:
+
+- A sync only inserts, updates and zeroes rows **within its own category**.
+  Importing the Generic report therefore leaves the Magic inventory untouched
+  (and vice versa) instead of recording it all as sold.
+- The category is part of the article key, because Cardmarket product IDs are
+  only unique *within* a category — the same ID can be a card in one and an
+  accessory in another.
+- The safety guard that blocks a suspicious import measures only the category
+  being synced, so it stays meaningful for both.
+
+The category is taken from the filename (`inventory-report-<game id or name>`);
+if the file has been renamed, it is inferred from the rows instead (accessory
+rows carry no set, collector number or rarity). Databases created before
+category tracking are migrated automatically, with all existing rows attributed
+to `Magic` and their quantities, sold history and dates preserved.
+
+Card-analysis screens (Stock Analysis, Mispricing, Price Movers) read the
+`Magic` category — accessories carry no rarity or set, and their prices are
+unrelated to card prices.
+
+Everything that reports **money rather than cards** deliberately spans all
+categories:
+
+- **Lot breakdown** — a lot is a purchase, and `lot_costs` records one
+  acquisition cost for the whole purchase. Sleeves bought alongside the cards
+  count towards the same lot's stock value, revenue, margin and payback;
+  splitting them out would measure half a lot against a full lot's cost.
+- **Restock recommendations** — fast-moving accessories are as worth re-buying
+  as cards, and each candidate keeps its source lot.
+- **Welcome digest** and **daily inventory snapshots** — whole-business position.
 
 ## Caching
 

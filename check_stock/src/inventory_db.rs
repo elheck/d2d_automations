@@ -7,7 +7,18 @@
 //! - Articles already at quantity 0 and not in the CSV are left untouched.
 //! - Multiple CSV rows for the same card variant (same condition/language/foil/signed)
 //!   in different physical locations are merged: quantities are summed, one DB row kept.
+//!
+//! # Category scoping
+//!
+//! Cardmarket exports one report per game/category (Magic, Generic accessories,
+//! …), each complete only for itself. Every sync is therefore scoped to a single
+//! category ([`crate::category`]): it only zeroes rows in that category, so
+//! loading the Generic export cannot wipe out the Magic inventory. The category
+//! is also part of the article key, because product IDs are namespaced per
+//! category and would otherwise collide across them.
 
+#[cfg_attr(not(test), allow(unused_imports))]
+use crate::category::DEFAULT_CATEGORY;
 use crate::models::{canonical_condition, Card, Language};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
@@ -342,13 +353,15 @@ fn open_db() -> DbResult<Connection> {
     Ok(conn)
 }
 
-// DDL for the current schema (v2): one row per unique card variant.
+// DDL for the current schema (v4): one row per unique card variant, per category.
 // `cardmarketId` is a Cardmarket product ID shared across all language/condition
-// variants of the same card — NOT unique per article. The composite key
-// (cardmarket_id, condition, language, is_foil, is_signed) identifies a variant.
+// variants of the same card — NOT unique per article — and it is only unique
+// *within* a category. The composite key
+// (category, cardmarket_id, condition, language, is_foil, is_signed) identifies a variant.
 // Multiple physical locations of the same variant are merged: quantities are summed.
 const INVENTORY_CARDS_DDL: &str = "
     CREATE TABLE inventory_cards (
+        category        TEXT NOT NULL DEFAULT 'Magic',
         cardmarket_id   TEXT NOT NULL,
         quantity        INTEGER NOT NULL,
         name            TEXT NOT NULL,
@@ -373,8 +386,9 @@ const INVENTORY_CARDS_DDL: &str = "
         last_synced_at  TEXT NOT NULL,
         sold_quantity   INTEGER NOT NULL DEFAULT 0
     );
-    CREATE UNIQUE INDEX idx_inventory_article_key
-        ON inventory_cards (cardmarket_id, condition, language, is_foil, is_signed);
+    CREATE UNIQUE INDEX idx_inventory_article_key_v4
+        ON inventory_cards (category, cardmarket_id, condition, language, is_foil, is_signed);
+    CREATE INDEX IF NOT EXISTS idx_inventory_category ON inventory_cards (category);
 ";
 
 // Daily point-in-time snapshot of the whole inventory, written once per sync day.
@@ -410,6 +424,7 @@ const APP_META_DDL: &str = "
 const SOLD_EVENTS_DDL: &str = "
     CREATE TABLE IF NOT EXISTS sold_events (
         date          TEXT NOT NULL,
+        category      TEXT NOT NULL DEFAULT 'Magic',
         cardmarket_id TEXT NOT NULL,
         condition     TEXT NOT NULL,
         language      TEXT NOT NULL,
@@ -419,7 +434,7 @@ const SOLD_EVENTS_DDL: &str = "
         price         REAL NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_sold_events_variant
-        ON sold_events (cardmarket_id, condition, language, is_foil, is_signed);
+        ON sold_events (category, cardmarket_id, condition, language, is_foil, is_signed);
     CREATE INDEX IF NOT EXISTS idx_sold_events_date ON sold_events (date);
 ";
 
@@ -538,14 +553,48 @@ const MIGRATION_V3_TO_V2: &str = "
     COMMIT;
 ";
 
-/// Creates or migrates the `inventory_cards` table to the current schema (v2).
+/// Migration v2 → v4: scope the article key by product category.
+///
+/// Adds the `category` column to `inventory_cards` and `sold_events`, backfilled
+/// with [`DEFAULT_CATEGORY`] — every row that predates category tracking came
+/// from a Magic export. The 5-field unique index is then replaced by the 6-field
+/// one so the same product ID can exist in two categories at once.
+///
+/// `ALTER TABLE ADD COLUMN` keeps all existing rows in place; no data is copied
+/// or rewritten, so `first_synced_at` / `sold_quantity` history survives intact.
+const MIGRATION_V2_TO_V4: &str = "
+    BEGIN;
+    ALTER TABLE inventory_cards ADD COLUMN category TEXT NOT NULL DEFAULT 'Magic';
+    DROP INDEX IF EXISTS idx_inventory_article_key;
+    CREATE UNIQUE INDEX idx_inventory_article_key_v4
+        ON inventory_cards (category, cardmarket_id, condition, language, is_foil, is_signed);
+    CREATE INDEX IF NOT EXISTS idx_inventory_category ON inventory_cards (category);
+    COMMIT;
+";
+
+/// Adds the matching `category` column to a pre-v4 `sold_events` table.
+///
+/// Split from [`MIGRATION_V2_TO_V4`] because `sold_events` is created on every
+/// open (it is orthogonal to the card-schema version), so it can be at any
+/// version independently of `inventory_cards`.
+const MIGRATION_SOLD_EVENTS_CATEGORY: &str = "
+    BEGIN;
+    ALTER TABLE sold_events ADD COLUMN category TEXT NOT NULL DEFAULT 'Magic';
+    DROP INDEX IF EXISTS idx_sold_events_variant;
+    CREATE INDEX idx_sold_events_variant
+        ON sold_events (category, cardmarket_id, condition, language, is_foil, is_signed);
+    COMMIT;
+";
+
+/// Creates or migrates the `inventory_cards` table to the current schema (v4).
 ///
 /// Migration chain:
-/// - Fresh DB  → create v2 schema directly.
-/// - v1 (cardmarket_id PRIMARY KEY, no composite index) → v2.
-/// - v2 (composite 5-field key, `idx_inventory_article_key`) → no-op.
-/// - v3 (composite 6-field key with location, `idx_inventory_article_key_v3`) → v2
+/// - Fresh DB  → create v4 schema directly.
+/// - v1 (cardmarket_id PRIMARY KEY, no composite index) → v2 → v4.
+/// - v2 (composite 5-field key, `idx_inventory_article_key`) → v4 (adds `category`).
+/// - v3 (composite 6-field key with location, `idx_inventory_article_key_v3`) → v2 → v4
 ///   (collapses per-location rows, sums quantities).
+/// - v4 (composite 6-field key with category, `idx_inventory_article_key_v4`) → no-op.
 fn init_schema(conn: &Connection) -> DbResult<()> {
     let table_exists: bool = conn
         .query_row(
@@ -559,7 +608,9 @@ fn init_schema(conn: &Connection) -> DbResult<()> {
     if !table_exists {
         conn.execute_batch(INVENTORY_CARDS_DDL)?;
         conn.execute_batch(INVENTORY_SNAPSHOTS_DDL)?;
-        conn.execute_batch(SOLD_EVENTS_DDL)?;
+        // Still goes through the migration helper: `sold_events` can predate
+        // `inventory_cards` in a partially-created DB.
+        migrate_sold_events(conn)?;
         conn.execute_batch(LOT_COSTS_DDL)?;
         return conn.execute_batch(APP_META_DDL);
     }
@@ -578,24 +629,26 @@ fn init_schema(conn: &Connection) -> DbResult<()> {
 
     if v3_index_exists {
         log::info!("Migrating inventory_db: collapsing location rows into variants (v3 → v2)");
-        return conn.execute_batch(MIGRATION_V3_TO_V2);
-    }
+        conn.execute_batch(MIGRATION_V3_TO_V2)?;
+    } else {
+        // v2 is identified by idx_inventory_article_key (5-field key, no location).
+        let v2_index_exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master \
+                 WHERE type='index' AND name='idx_inventory_article_key'",
+                [],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
 
-    // v2 is identified by idx_inventory_article_key (5-field key, no location).
-    let v2_index_exists: bool = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master \
-             WHERE type='index' AND name='idx_inventory_article_key'",
-            [],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some();
-
-    if !v2_index_exists {
-        // v1 schema: single cardmarket_id PRIMARY KEY. Migrate to v2.
-        log::info!("Migrating inventory_db: adding composite article key (v1 → v2)");
-        conn.execute_batch(MIGRATION_V1_TO_V2)?;
+        // Neither the v2 nor the v4 index means this is the v1 schema (single
+        // cardmarket_id PRIMARY KEY). Checking v4 too keeps this a no-op for an
+        // already-migrated DB.
+        if !v2_index_exists && !has_category_column(conn)? {
+            log::info!("Migrating inventory_db: adding composite article key (v1 → v2)");
+            conn.execute_batch(MIGRATION_V1_TO_V2)?;
+        }
     }
 
     // Add sold_quantity column if missing (added for lot revenue tracking).
@@ -615,29 +668,83 @@ fn init_schema(conn: &Connection) -> DbResult<()> {
         )?;
     }
 
+    // v2 → v4: scope the article key by category. Runs after the v1/v3 branches
+    // above so every older schema converges here.
+    if !has_category_column(conn)? {
+        log::info!("Migrating inventory_db: scoping article key by category (v2 → v4)");
+        conn.execute_batch(MIGRATION_V2_TO_V4)?;
+    }
+
     // Snapshot and sold-event tables are orthogonal to the card-schema migrations;
     // ensure they exist on every open regardless of which card-schema version we
     // came from.
     conn.execute_batch(INVENTORY_SNAPSHOTS_DDL)?;
-    conn.execute_batch(SOLD_EVENTS_DDL)?;
+    migrate_sold_events(conn)?;
     conn.execute_batch(LOT_COSTS_DDL)?;
     conn.execute_batch(APP_META_DDL)?;
 
     Ok(())
 }
 
+/// Ensures `sold_events` exists and carries the v4 `category` column.
+///
+/// The column migration must run *before* [`SOLD_EVENTS_DDL`], because that DDL
+/// creates an index over `category`: on a pre-v4 table the index would fail with
+/// "no such column" and abort the whole open.
+fn migrate_sold_events(conn: &Connection) -> DbResult<()> {
+    let table_exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sold_events'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+
+    if table_exists && !table_has_column(conn, "sold_events", "category")? {
+        log::info!("Migrating inventory_db: adding category to sold_events");
+        conn.execute_batch(MIGRATION_SOLD_EVENTS_CATEGORY)?;
+    }
+
+    conn.execute_batch(SOLD_EVENTS_DDL)
+}
+
+/// Returns true if `table` has a column named `column`.
+fn table_has_column(conn: &Connection, table: &str, column: &str) -> DbResult<bool> {
+    // pragma_table_info is a table-valued function; its argument is bound as a
+    // parameter rather than interpolated, keeping this injection-free.
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2",
+            params![table, column],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+/// Returns true if `inventory_cards` already carries the v4 `category` column.
+fn has_category_column(conn: &Connection) -> DbResult<bool> {
+    table_has_column(conn, "inventory_cards", "category")
+}
+
 /// Builds a stable composite key string identifying a unique card variant.
 ///
 /// Used during sync to detect which DB rows are no longer present in the CSV.
 /// ASCII unit separator (0x1F) is used as delimiter — it cannot appear in field values.
+///
+/// The category leads the key because Cardmarket product IDs are only unique
+/// within a category: without it, a sleeve and a card sharing an ID would
+/// collapse onto the same row.
 fn article_key(
+    category: &str,
     id: &str,
     condition: &str,
     language: &str,
     is_foil: &str,
     is_signed: &str,
 ) -> String {
-    format!("{id}\x1F{condition}\x1F{language}\x1F{is_foil}\x1F{is_signed}")
+    format!("{category}\x1F{id}\x1F{condition}\x1F{language}\x1F{is_foil}\x1F{is_signed}")
 }
 
 /// Returns today's date as `YYYY-MM-DD` using local system time.
@@ -656,20 +763,25 @@ fn today_date() -> String {
 ///    [`sync_inventory_forced`].
 ///
 /// Sync semantics:
-/// - Cards are pre-aggregated by variant (cardmarket_id + condition + language + foil +
-///   signed): quantities across multiple locations are summed into a single DB row.
+/// - The sync is scoped to `category`: only rows in that category are read,
+///   updated or zeroed. Loading the Generic export therefore leaves the Magic
+///   inventory completely untouched, and vice versa.
+/// - Cards are pre-aggregated by variant (category + cardmarket_id + condition +
+///   language + foil + signed): quantities across multiple locations are summed
+///   into a single DB row.
 /// - Existing variants are updated; new variants are inserted.
-/// - Variants not in `cards` that have `quantity > 0` are zeroed out.
+/// - Variants of this category not in `cards` that have `quantity > 0` are zeroed out.
 /// - Timestamps are only advanced once per day.
 ///
 /// Errors are returned to the caller; call sites treat them as non-fatal.
-pub fn sync_inventory(cards: &[Card]) -> DbResult<SyncOutcome> {
+pub fn sync_inventory(cards: &[Card], category: &str) -> DbResult<SyncOutcome> {
     let mut conn = open_db()?;
     backup_db_file(&conn, &today_date());
-    let preview = preview_sync_conn(&conn, cards)?;
+    let preview = preview_sync_conn(&conn, cards, category)?;
     if preview.is_suspicious() {
         log::warn!(
-            "Inventory sync blocked: would record {} of {} copies as sold ({} variants zeroed)",
+            "Inventory sync blocked for category '{}': would record {} of {} copies as sold ({} variants zeroed)",
+            category,
             preview.copies_sold,
             preview.copies_before,
             preview.zeroed_variants
@@ -679,16 +791,17 @@ pub fn sync_inventory(cards: &[Card]) -> DbResult<SyncOutcome> {
     Ok(SyncOutcome::Synced(sync_inventory_conn(
         &mut conn,
         cards,
+        category,
         &today_date(),
     )?))
 }
 
 /// Runs the sync without the suspicious-change guard (still takes the daily
 /// backup first). Use only after the user has confirmed a blocked sync.
-pub fn sync_inventory_forced(cards: &[Card]) -> DbResult<SyncStats> {
+pub fn sync_inventory_forced(cards: &[Card], category: &str) -> DbResult<SyncStats> {
     let mut conn = open_db()?;
     backup_db_file(&conn, &today_date());
-    sync_inventory_conn(&mut conn, cards, &today_date())
+    sync_inventory_conn(&mut conn, cards, category, &today_date())
 }
 
 /// Writes off (discards) copies of card variants **without** recording them as
@@ -705,13 +818,17 @@ pub fn sync_inventory_forced(cards: &[Card]) -> DbResult<SyncStats> {
 /// already reflected in both places and records no phantom sale.
 ///
 /// Errors are returned to the caller; call sites treat them as non-fatal.
-pub fn discard_cards(discards: &[(Card, i64)]) -> DbResult<DiscardStats> {
+pub fn discard_cards(discards: &[(Card, i64)], category: &str) -> DbResult<DiscardStats> {
     let mut conn = open_db()?;
-    discard_cards_conn(&mut conn, discards)
+    discard_cards_conn(&mut conn, discards, category)
 }
 
 /// Inner discard that accepts an explicit connection — used in tests.
-fn discard_cards_conn(conn: &mut Connection, discards: &[(Card, i64)]) -> DbResult<DiscardStats> {
+fn discard_cards_conn(
+    conn: &mut Connection,
+    discards: &[(Card, i64)],
+    category: &str,
+) -> DbResult<DiscardStats> {
     // Aggregate requested copies by the same canonical variant key the sync uses,
     // so two rows for the same variant (different physical locations) collapse into
     // a single UPDATE and clamp against the one merged DB row.
@@ -740,16 +857,17 @@ fn discard_cards_conn(conn: &mut Connection, discards: &[(Card, i64)]) -> DbResu
         let current: Option<i64> = tx
             .query_row(
                 "SELECT quantity FROM inventory_cards
-                 WHERE cardmarket_id = ?1 AND condition = ?2 AND language = ?3
+                 WHERE category = ?6 AND cardmarket_id = ?1 AND condition = ?2 AND language = ?3
                    AND is_foil = ?4 AND is_signed = ?5",
-                params![id, cond, lang, foil, signed],
+                params![id, cond, lang, foil, signed, category],
                 |r| r.get(0),
             )
             .optional()?;
 
         let Some(current) = current else {
             log::warn!(
-                "Discard skipped: no DB row for variant {id}/{cond}/{lang} (foil={foil}, signed={signed})"
+                "Discard skipped: no DB row for variant {id}/{cond}/{lang} \
+                 (foil={foil}, signed={signed}, category={category})"
             );
             continue;
         };
@@ -761,9 +879,9 @@ fn discard_cards_conn(conn: &mut Connection, discards: &[(Card, i64)]) -> DbResu
 
         tx.execute(
             "UPDATE inventory_cards SET quantity = quantity - ?1
-             WHERE cardmarket_id = ?2 AND condition = ?3 AND language = ?4
+             WHERE category = ?7 AND cardmarket_id = ?2 AND condition = ?3 AND language = ?4
                AND is_foil = ?5 AND is_signed = ?6",
-            params![removed, id, cond, lang, foil, signed],
+            params![removed, id, cond, lang, foil, signed, category],
         )?;
         stats.variants_updated += 1;
         stats.copies_discarded += removed;
@@ -780,10 +898,29 @@ fn discard_cards_conn(conn: &mut Connection, discards: &[(Card, i64)]) -> DbResu
     Ok(stats)
 }
 
-/// Queries aggregate statistics from the local inventory database.
-pub fn get_db_stats() -> DbResult<DbStats> {
+/// Queries aggregate statistics for one category of the local inventory database.
+///
+/// Pass [`DEFAULT_CATEGORY`] for the Magic figures. Breakdowns by rarity,
+/// condition and language are card concepts, so mixing accessories into them
+/// would only add noise.
+pub fn get_db_stats(category: &str) -> DbResult<DbStats> {
     let conn = open_db()?;
-    get_db_stats_conn(&conn, &today_date())
+    get_db_stats_conn(&conn, category, &today_date())
+}
+
+/// Returns the distinct categories present in the database, alphabetically.
+///
+/// Lets the UI offer a category switcher without hardcoding the list.
+pub fn get_categories() -> DbResult<Vec<String>> {
+    let conn = open_db()?;
+    get_categories_conn(&conn)
+}
+
+/// Inner query that accepts an explicit connection — used in tests.
+fn get_categories_conn(conn: &Connection) -> DbResult<Vec<String>> {
+    conn.prepare("SELECT DISTINCT category FROM inventory_cards ORDER BY category ASC")?
+        .query_map([], |r| r.get(0))?
+        .collect()
 }
 
 /// Records (or corrects) the total acquisition cost for a lot, in EUR.
@@ -817,14 +954,19 @@ fn delete_lot_cost_conn(conn: &Connection, lot: &str) -> DbResult<()> {
     Ok(())
 }
 
-/// Returns every in-stock card variant (quantity > 0) from the database.
-pub fn get_in_stock_cards() -> DbResult<Vec<InStockCard>> {
+/// Returns every in-stock card variant (quantity > 0) in the given category.
+///
+/// Pass [`DEFAULT_CATEGORY`] for the Magic inventory. Card-analysis features
+/// (mispricing, aging) want a single category: accessories carry no rarity or
+/// set and their prices are unrelated to card prices, so blending them in would
+/// distort the results.
+pub fn get_in_stock_cards(category: &str) -> DbResult<Vec<InStockCard>> {
     let conn = open_db()?;
-    get_in_stock_cards_conn(&conn)
+    get_in_stock_cards_conn(&conn, category)
 }
 
 /// Inner query that accepts an explicit connection — used in tests.
-fn get_in_stock_cards_conn(conn: &Connection) -> DbResult<Vec<InStockCard>> {
+fn get_in_stock_cards_conn(conn: &Connection, category: &str) -> DbResult<Vec<InStockCard>> {
     conn.prepare(
         "SELECT cardmarket_id, name, set_code, cn, condition, language,
                 (is_foil = '1' OR LOWER(is_foil) = 'true') AS foil,
@@ -832,9 +974,9 @@ fn get_in_stock_cards_conn(conn: &Connection) -> DbResult<Vec<InStockCard>> {
                 COALESCE(location, ''),
                 COALESCE(NULLIF(listed_at, ''), first_synced_at) AS effective_date
          FROM inventory_cards
-         WHERE quantity > 0",
+         WHERE quantity > 0 AND category = ?1",
     )?
-    .query_map([], |r| {
+    .query_map(params![category], |r| {
         Ok(InStockCard {
             cardmarket_id: r.get(0)?,
             name: r.get(1)?,
@@ -853,19 +995,19 @@ fn get_in_stock_cards_conn(conn: &Connection) -> DbResult<Vec<InStockCard>> {
     .collect()
 }
 
-/// Returns every recorded sold event, oldest first.
-pub fn get_sold_events() -> DbResult<Vec<SoldEvent>> {
+/// Returns every recorded sold event in the given category, oldest first.
+pub fn get_sold_events(category: &str) -> DbResult<Vec<SoldEvent>> {
     let conn = open_db()?;
-    get_sold_events_conn(&conn)
+    get_sold_events_conn(&conn, category)
 }
 
 /// Inner query that accepts an explicit connection — used in tests.
-fn get_sold_events_conn(conn: &Connection) -> DbResult<Vec<SoldEvent>> {
+fn get_sold_events_conn(conn: &Connection, category: &str) -> DbResult<Vec<SoldEvent>> {
     conn.prepare(
         "SELECT date, cardmarket_id, condition, language, is_foil, is_signed, copies, price
-         FROM sold_events ORDER BY date ASC, rowid ASC",
+         FROM sold_events WHERE category = ?1 ORDER BY date ASC, rowid ASC",
     )?
-    .query_map([], |r| {
+    .query_map(params![category], |r| {
         Ok(SoldEvent {
             date: r.get(0)?,
             cardmarket_id: r.get(1)?,
@@ -880,11 +1022,16 @@ fn get_sold_events_conn(conn: &Connection) -> DbResult<Vec<SoldEvent>> {
     .collect()
 }
 
-/// Returns every sold-out variant (quantity 0, sold copies > 0) enriched with
-/// its sale history — the raw input for the restock recommendations report.
-pub fn get_restock_candidates() -> DbResult<Vec<RestockCandidate>> {
+/// Returns every sold-out variant (quantity 0, sold copies > 0) in the given
+/// category, enriched with its sale history — the raw input for the restock
+/// recommendations report.
+///
+/// Pass `None` to span all categories. Restocking is a purchasing decision, and
+/// fast-moving accessories (sleeves, deck boxes) are as worth re-buying as
+/// cards, so the report defaults to everything.
+pub fn get_restock_candidates(category: Option<&str>) -> DbResult<Vec<RestockCandidate>> {
     let conn = open_db()?;
-    get_restock_candidates_conn(&conn)
+    get_restock_candidates_conn(&conn, category)
 }
 
 /// Reads one value from the app bookkeeping store.
@@ -932,6 +1079,9 @@ pub fn visit_digest() -> DbResult<VisitDigest> {
 }
 
 /// Inner digest that accepts an explicit connection and date — used in tests.
+///
+/// Spans all categories on purpose: the welcome screen answers "what happened
+/// while I was away" across the whole business, not per product line.
 fn visit_digest_conn(conn: &Connection, today: &str) -> DbResult<VisitDigest> {
     let last = get_meta(conn, "last_visit")?;
     let baseline = match last {
@@ -984,7 +1134,10 @@ fn visit_digest_conn(conn: &Connection, today: &str) -> DbResult<VisitDigest> {
 /// are valued at the variant's last listed price. The sold-out date prefers the
 /// last event date and falls back to `last_synced_at`, which for a zeroed row is
 /// the day the sync zeroed it.
-fn get_restock_candidates_conn(conn: &Connection) -> DbResult<Vec<RestockCandidate>> {
+fn get_restock_candidates_conn(
+    conn: &Connection,
+    category: Option<&str>,
+) -> DbResult<Vec<RestockCandidate>> {
     conn.prepare(
         "SELECT c.cardmarket_id, c.name, c.set_code, c.cn, c.condition, c.language,
                 (c.is_foil = '1' OR LOWER(c.is_foil) = 'true') AS foil,
@@ -998,20 +1151,22 @@ fn get_restock_candidates_conn(conn: &Connection) -> DbResult<Vec<RestockCandida
                 COALESCE(c.location, '') AS location
          FROM inventory_cards c
          LEFT JOIN (
-             SELECT cardmarket_id, condition, language, is_foil, is_signed,
+             SELECT category, cardmarket_id, condition, language, is_foil, is_signed,
                     MAX(date) AS last_sale_date,
                     SUM(copies) AS copies,
                     SUM(copies * price) AS revenue
              FROM sold_events
-             GROUP BY cardmarket_id, condition, language, is_foil, is_signed
-         ) e ON e.cardmarket_id = c.cardmarket_id
+             GROUP BY category, cardmarket_id, condition, language, is_foil, is_signed
+         ) e ON e.category = c.category
+            AND e.cardmarket_id = c.cardmarket_id
             AND e.condition = c.condition
             AND e.language = c.language
             AND e.is_foil = c.is_foil
             AND e.is_signed = c.is_signed
-         WHERE c.quantity = 0 AND c.sold_quantity > 0",
+         WHERE c.quantity = 0 AND c.sold_quantity > 0
+           AND (?1 IS NULL OR c.category = ?1)",
     )?
-    .query_map([], |r| {
+    .query_map(params![category], |r| {
         let location: String = r.get(13)?;
         Ok(RestockCandidate {
             cardmarket_id: r.get(0)?,
@@ -1121,8 +1276,14 @@ fn lot_costs_map(conn: &Connection) -> DbResult<std::collections::HashMap<String
         .collect()
 }
 
-/// Builds the per-lot revenue breakdown from all inventory rows that carry a
+/// Builds the per-lot revenue breakdown from every inventory row that carries a
 /// location with a recognisable lot number.
+///
+/// Deliberately spans **all categories**, unlike the rest of the stats. A lot is
+/// a purchase, and `lot_costs` records one acquisition cost for the whole
+/// purchase — sleeves and other accessories bought alongside the cards included.
+/// Splitting a lot per category would measure both halves against that single
+/// cost and make margin and payback meaningless for any mixed lot.
 fn lot_breakdown_from(conn: &Connection) -> DbResult<Vec<LotBreakdown>> {
     let mut stmt = conn.prepare(
         "SELECT location, quantity, CAST(price AS REAL), sold_quantity
@@ -1194,7 +1355,8 @@ fn lot_breakdown_from(conn: &Connection) -> DbResult<Vec<LotBreakdown>> {
 
 /// Inner stats query that accepts an explicit connection and reference date —
 /// used in tests. `today` (as `YYYY-MM-DD`) anchors the dead-stock aging report.
-fn get_db_stats_conn(conn: &Connection, today: &str) -> DbResult<DbStats> {
+/// Every figure is scoped to `category`.
+fn get_db_stats_conn(conn: &Connection, category: &str, today: &str) -> DbResult<DbStats> {
     let (total_articles, in_stock_articles, total_copies, total_value): (i64, i64, i64, f64) = conn
         .query_row(
             "SELECT
@@ -1202,40 +1364,41 @@ fn get_db_stats_conn(conn: &Connection, today: &str) -> DbResult<DbStats> {
                 COALESCE(SUM(CASE WHEN quantity > 0 THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(quantity), 0),
                 COALESCE(SUM(CAST(price AS REAL) * quantity), 0.0)
-             FROM inventory_cards",
-            [],
+             FROM inventory_cards WHERE category = ?1",
+            params![category],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )?;
 
     let foil_count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM inventory_cards
-         WHERE quantity > 0 AND (is_foil = '1' OR LOWER(is_foil) = 'true')",
-        [],
+         WHERE quantity > 0 AND category = ?1 AND (is_foil = '1' OR LOWER(is_foil) = 'true')",
+        params![category],
         |r| r.get(0),
     )?;
 
     let signed_count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM inventory_cards
-         WHERE quantity > 0 AND (is_signed = '1' OR LOWER(is_signed) = 'true')",
-        [],
+         WHERE quantity > 0 AND category = ?1 AND (is_signed = '1' OR LOWER(is_signed) = 'true')",
+        params![category],
         |r| r.get(0),
     )?;
 
     let top_by_quantity: Vec<(String, i64)> = conn
         .prepare(
             "SELECT name, SUM(quantity) AS total FROM inventory_cards
-             WHERE quantity > 0 GROUP BY name ORDER BY total DESC LIMIT 5",
+             WHERE quantity > 0 AND category = ?1
+             GROUP BY name ORDER BY total DESC LIMIT 5",
         )?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .query_map(params![category], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<DbResult<Vec<_>>>()?;
 
     let top_by_price: Vec<(String, f64)> = conn
         .prepare(
             "SELECT name, CAST(price AS REAL) AS p FROM inventory_cards
-             WHERE quantity > 0 AND CAST(price AS REAL) > 0
+             WHERE quantity > 0 AND category = ?1 AND CAST(price AS REAL) > 0
              ORDER BY p DESC LIMIT 5",
         )?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .query_map(params![category], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<DbResult<Vec<_>>>()?;
 
     // Use listed_at when available; fall back to first_synced_at when empty.
@@ -1247,10 +1410,10 @@ fn get_db_stats_conn(conn: &Connection, today: &str) -> DbResult<DbStats> {
                     quantity,
                     COALESCE(location, '')
              FROM inventory_cards
-             WHERE quantity > 0
+             WHERE quantity > 0 AND category = ?1
              ORDER BY effective_date ASC, quantity DESC LIMIT 5",
         )?
-        .query_map([], |r| {
+        .query_map(params![category], |r| {
             Ok(OldestInStockEntry {
                 name: r.get(0)?,
                 date: r.get(1)?,
@@ -1264,9 +1427,9 @@ fn get_db_stats_conn(conn: &Connection, today: &str) -> DbResult<DbStats> {
     let oldest_listed: Option<(String, String)> = conn
         .query_row(
             "SELECT name, COALESCE(NULLIF(listed_at, ''), first_synced_at)
-             FROM inventory_cards WHERE quantity > 0
+             FROM inventory_cards WHERE quantity > 0 AND category = ?1
              ORDER BY COALESCE(NULLIF(listed_at, ''), first_synced_at) ASC LIMIT 1",
-            [],
+            params![category],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
@@ -1274,48 +1437,50 @@ fn get_db_stats_conn(conn: &Connection, today: &str) -> DbResult<DbStats> {
     let newest_listed: Option<(String, String)> = conn
         .query_row(
             "SELECT name, COALESCE(NULLIF(listed_at, ''), first_synced_at)
-             FROM inventory_cards WHERE quantity > 0
+             FROM inventory_cards WHERE quantity > 0 AND category = ?1
              ORDER BY COALESCE(NULLIF(listed_at, ''), first_synced_at) DESC LIMIT 1",
-            [],
+            params![category],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
 
     // MIN on an empty table returns a single row with NULL, so we use Option<String>
     let first_synced_date: Option<String> = conn.query_row(
-        "SELECT MIN(first_synced_at) FROM inventory_cards",
-        [],
+        "SELECT MIN(first_synced_at) FROM inventory_cards WHERE category = ?1",
+        params![category],
         |r| r.get(0),
     )?;
 
     let language_breakdown: Vec<(String, i64)> = conn
         .prepare(
             "SELECT language, SUM(quantity) AS total FROM inventory_cards
-             WHERE quantity > 0 GROUP BY language ORDER BY total DESC",
+             WHERE quantity > 0 AND category = ?1 GROUP BY language ORDER BY total DESC",
         )?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .query_map(params![category], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<DbResult<Vec<_>>>()?;
 
     let condition_breakdown: Vec<(String, i64)> = conn
         .prepare(
             "SELECT condition, SUM(quantity) AS total FROM inventory_cards
-             WHERE quantity > 0 GROUP BY condition ORDER BY total DESC",
+             WHERE quantity > 0 AND category = ?1 GROUP BY condition ORDER BY total DESC",
         )?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .query_map(params![category], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<DbResult<Vec<_>>>()?;
 
     let rarity_breakdown: Vec<(String, i64)> = conn
         .prepare(
             "SELECT rarity, SUM(quantity) AS total FROM inventory_cards
-             WHERE quantity > 0 GROUP BY rarity ORDER BY total DESC",
+             WHERE quantity > 0 AND category = ?1 GROUP BY rarity ORDER BY total DESC",
         )?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .query_map(params![category], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<DbResult<Vec<_>>>()?;
 
+    // Lots span all categories on purpose — see `lot_breakdown_from`. A lot's
+    // recorded cost covers the whole purchase, so its revenue must too.
     let lot_breakdown = lot_breakdown_from(conn)?;
 
     // Dead-stock aging: bucket in-stock cards by listing age relative to `today`.
-    let in_stock = get_in_stock_cards_conn(conn)?;
+    let in_stock = get_in_stock_cards_conn(conn, category)?;
     let aging_buckets = parse_date(today)
         .map(|d| crate::aging::bucket_cards(&in_stock, d))
         .unwrap_or_default();
@@ -1345,23 +1510,30 @@ fn get_db_stats_conn(conn: &Connection, today: &str) -> DbResult<DbStats> {
     })
 }
 
-/// Pre-aggregates CSV rows by (cardmarket_id, condition, language, is_foil,
-/// is_signed), summing quantities. The key components are normalised to the
-/// canonical form stored in the DB so the legacy Cardmarket export and the new
+/// Pre-aggregates CSV rows by (category, cardmarket_id, condition, language,
+/// is_foil, is_signed), summing quantities. The key components are normalised to
+/// the canonical form stored in the DB so the legacy Cardmarket export and the new
 /// inventory-report CSV produce identical variant keys (see `normalize_flag` /
 /// `normalize_language` / `canonical_condition` for the encodings used).
+///
+/// All rows in one CSV share the same `category` — Cardmarket exports one report
+/// per category — so it is passed in rather than derived per row.
 ///
 /// The inventory-report CSV emits a placeholder "summary" row (quantity 0,
 /// empty location) *before* the real per-location row for a variant; the
 /// representative card therefore prefers any row with a non-empty location.
 #[allow(clippy::type_complexity)]
-fn aggregate_by_variant(
-    cards: &[Card],
-) -> std::collections::HashMap<(String, String, String, String, String), (&Card, i64)> {
-    let mut agg: std::collections::HashMap<(String, String, String, String, String), (&Card, i64)> =
-        std::collections::HashMap::new();
+fn aggregate_by_variant<'a>(
+    cards: &'a [Card],
+    category: &str,
+) -> std::collections::HashMap<(String, String, String, String, String, String), (&'a Card, i64)> {
+    let mut agg: std::collections::HashMap<
+        (String, String, String, String, String, String),
+        (&Card, i64),
+    > = std::collections::HashMap::new();
     for card in cards {
         let key = (
+            category.to_string(),
             card.cardmarket_id.clone(),
             canonical_condition(&card.condition),
             normalize_language(&card.language),
@@ -1387,8 +1559,12 @@ fn parse_csv_price(price: &str) -> Option<f64> {
 }
 
 /// Computes what a sync of `cards` would change, without writing anything.
-fn preview_sync_conn(conn: &Connection, cards: &[Card]) -> DbResult<SyncPreview> {
-    let agg = aggregate_by_variant(cards);
+///
+/// Scoped to `category`: rows in other categories are neither counted in
+/// `copies_before` nor reported as zeroed, so the suspicious-change guard
+/// measures only the slice this sync actually owns.
+fn preview_sync_conn(conn: &Connection, cards: &[Card], category: &str) -> DbResult<SyncPreview> {
+    let agg = aggregate_by_variant(cards, category);
     let mut preview = SyncPreview::default();
 
     // Current DB state keyed like the sync keys it.
@@ -1396,11 +1572,13 @@ fn preview_sync_conn(conn: &Connection, cards: &[Card]) -> DbResult<SyncPreview>
     let rows = conn
         .prepare(
             "SELECT cardmarket_id, condition, language, is_foil, is_signed,
-                    quantity, CAST(price AS REAL) FROM inventory_cards",
+                    quantity, CAST(price AS REAL) FROM inventory_cards
+             WHERE category = ?1",
         )?
-        .query_map([], |row| {
+        .query_map(params![category], |row| {
             Ok((
                 article_key(
+                    category,
                     &row.get::<_, String>(0)?,
                     &row.get::<_, String>(1)?,
                     &row.get::<_, String>(2)?,
@@ -1420,8 +1598,8 @@ fn preview_sync_conn(conn: &Connection, cards: &[Card]) -> DbResult<SyncPreview>
     }
 
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for ((id, cond, lang, foil, signed), (card, qty)) in &agg {
-        let key = article_key(id, cond, lang, foil, signed);
+    for ((cat, id, cond, lang, foil, signed), (card, qty)) in &agg {
+        let key = article_key(cat, id, cond, lang, foil, signed);
         preview.copies_after += *qty;
         match db.get(&key) {
             None => preview.new_variants += 1,
@@ -1500,22 +1678,35 @@ fn backup_db_at(
 }
 
 /// Inner sync that accepts an explicit connection and date — used in tests.
-fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> DbResult<SyncStats> {
-    log::debug!("Syncing {} cards to inventory DB ({})", cards.len(), today);
+fn sync_inventory_conn(
+    conn: &mut Connection,
+    cards: &[Card],
+    category: &str,
+    today: &str,
+) -> DbResult<SyncStats> {
+    log::debug!(
+        "Syncing {} cards to inventory DB (category '{}', {})",
+        cards.len(),
+        category,
+        today
+    );
     let tx = conn.transaction()?;
     let mut stats = SyncStats::default();
-    let agg = aggregate_by_variant(cards);
+    let agg = aggregate_by_variant(cards, category);
 
-    // Pre-sync DB state, read once: used to detect per-variant sold deltas (this
-    // sync's quantity drops) and to find rows that vanished from the CSV (phase 2).
+    // Pre-sync DB state for *this category only*, read once: used to detect
+    // per-variant sold deltas (this sync's quantity drops) and to find rows that
+    // vanished from the CSV (phase 2). Scoping the read is what stops a Generic
+    // sync from treating every Magic row as vanished.
     // Tuple layout: key fields, quantity, listed price, last_synced_at.
     #[allow(clippy::type_complexity)]
     let db_rows: Vec<(String, String, String, String, String, i64, f64, String)> = tx
         .prepare(
             "SELECT cardmarket_id, condition, language, is_foil, is_signed,
-                    quantity, CAST(price AS REAL), last_synced_at FROM inventory_cards",
+                    quantity, CAST(price AS REAL), last_synced_at FROM inventory_cards
+             WHERE category = ?1",
         )?
-        .query_map([], |row| {
+        .query_map(params![category], |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,
@@ -1532,7 +1723,10 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
     let db_qty_price: std::collections::HashMap<String, (i64, f64)> = db_rows
         .iter()
         .map(|(id, cond, lang, foil, signed, qty, price, _)| {
-            (article_key(id, cond, lang, foil, signed), (*qty, *price))
+            (
+                article_key(category, id, cond, lang, foil, signed),
+                (*qty, *price),
+            )
         })
         .collect();
 
@@ -1543,17 +1737,17 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
     {
         let mut stmt = tx.prepare_cached(
             "INSERT INTO inventory_cards (
-                cardmarket_id, quantity, name, set_name, set_code, cn,
+                category, cardmarket_id, quantity, name, set_name, set_code, cn,
                 condition, language, is_foil, is_playset, is_signed,
                 price, comment, location, name_de, name_es, name_fr, name_it,
                 rarity, listed_at, first_synced_at, last_synced_at
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6,
+                ?22, ?1, ?2, ?3, ?4, ?5, ?6,
                 ?7, ?8, ?9, ?10, ?11,
                 ?12, ?13, ?14, ?15, ?16, ?17, ?18,
                 ?19, ?20, ?21, ?21
             )
-            ON CONFLICT(cardmarket_id, condition, language, is_foil, is_signed) DO UPDATE SET
+            ON CONFLICT(category, cardmarket_id, condition, language, is_foil, is_signed) DO UPDATE SET
                 sold_quantity   = CASE
                     WHEN excluded.quantity < inventory_cards.quantity
                     THEN inventory_cards.sold_quantity
@@ -1583,11 +1777,11 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
                 -- first_synced_at is intentionally excluded: preserved from the original INSERT.",
         )?;
 
-        for ((id, cond, lang, foil, signed), (rep_card, total_qty)) in &agg {
+        for ((cat, id, cond, lang, foil, signed), (rep_card, total_qty)) in &agg {
             // Mirror the upsert's sold_quantity CASE: a lower CSV quantity than the
             // stored one means the difference sold, at the price it was listed at.
             if let Some((old_qty, old_price)) =
-                db_qty_price.get(&article_key(id, cond, lang, foil, signed))
+                db_qty_price.get(&article_key(cat, id, cond, lang, foil, signed))
             {
                 if total_qty < old_qty {
                     sold_events.push((
@@ -1623,6 +1817,7 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
                 rep_card.rarity,
                 rep_card.listed_at,
                 today,
+                category,
             ])?;
             stats.upserted += 1;
         }
@@ -1630,10 +1825,13 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
 
     // Phase 2: zero out card variants no longer in the CSV (identified by composite key).
     // Normalise the same way as the aggregation above so keys line up with DB rows.
+    // `db_rows` only holds this category's rows, so other categories can never be
+    // considered "missing from the CSV" and are left entirely alone.
     let csv_keys: HashSet<String> = cards
         .iter()
         .map(|c| {
             article_key(
+                category,
                 &c.cardmarket_id,
                 &canonical_condition(&c.condition),
                 &normalize_language(&c.language),
@@ -1646,7 +1844,7 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
     // Phase 1 only touched CSV variants, so the pre-sync rows read above are still
     // accurate for everything the CSV no longer contains.
     for (id, condition, language, is_foil, is_signed, quantity, price, last_synced_at) in &db_rows {
-        let key = article_key(id, condition, language, is_foil, is_signed);
+        let key = article_key(category, id, condition, language, is_foil, is_signed);
         if !csv_keys.contains(&key) && *quantity > 0 {
             let new_date = if last_synced_at == today {
                 last_synced_at.as_str()
@@ -1658,9 +1856,9 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
                  SET sold_quantity = sold_quantity + quantity,
                      quantity = 0,
                      last_synced_at = ?1
-                 WHERE cardmarket_id = ?2 AND condition = ?3 AND language = ?4
+                 WHERE category = ?7 AND cardmarket_id = ?2 AND condition = ?3 AND language = ?4
                    AND is_foil = ?5 AND is_signed = ?6",
-                params![new_date, id, condition, language, is_foil, is_signed],
+                params![new_date, id, condition, language, is_foil, is_signed, category],
             )?;
             sold_events.push((
                 id.clone(),
@@ -1681,11 +1879,14 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
     if !sold_events.is_empty() {
         let mut stmt = tx.prepare_cached(
             "INSERT INTO sold_events
-                (date, cardmarket_id, condition, language, is_foil, is_signed, copies, price)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                (date, category, cardmarket_id, condition, language, is_foil, is_signed,
+                 copies, price)
+             VALUES (?1, ?9, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
         for (id, cond, lang, foil, signed, copies, price) in &sold_events {
-            stmt.execute(params![today, id, cond, lang, foil, signed, copies, price])?;
+            stmt.execute(params![
+                today, id, cond, lang, foil, signed, copies, price, category
+            ])?;
         }
         log::info!(
             "Inventory DB sync: recorded {} sold event(s)",
@@ -1697,6 +1898,11 @@ fn sync_inventory_conn(conn: &mut Connection, cards: &[Card], today: &str) -> Db
     // sold figures let later reads diff any two dates into a period velocity.
     // INSERT OR REPLACE keyed on `date` keeps at most one row per day (same-day
     // re-syncs overwrite it with the latest numbers).
+    //
+    // Deliberately spans *all* categories: a snapshot is the whole-business
+    // position (capital tied up, revenue earned), not a per-category one. Since
+    // it is recomputed from the full table after every sync, syncing either
+    // category alone still produces a correct combined figure.
     tx.execute(
         "INSERT OR REPLACE INTO inventory_snapshots
             (date, in_stock_copies, in_stock_value,

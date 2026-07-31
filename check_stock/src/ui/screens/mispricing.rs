@@ -722,7 +722,7 @@ impl MispricingScreen {
     /// the inventory_sync server. Only raw rows cross the wire; deltas are
     /// derived locally.
     fn spawn_sync_fetch(state: &mut MispricingState, url: &str) {
-        let ids: Vec<u64> = match get_in_stock_cards() {
+        let ids: Vec<u64> = match get_in_stock_cards(crate::category::DEFAULT_CATEGORY) {
             Ok(cards) => cards
                 .iter()
                 .filter_map(|c| c.cardmarket_id.parse::<u64>().ok())
@@ -790,7 +790,7 @@ impl MispricingScreen {
 
     /// Rebuilds the report from the current DB inventory + the active market source.
     fn rebuild(state: &mut MispricingState) {
-        let cards = match get_in_stock_cards() {
+        let cards = match get_in_stock_cards(crate::category::DEFAULT_CATEGORY) {
             Ok(c) => c,
             Err(e) => {
                 state.error = Some(format!("Failed to read inventory: {e}"));

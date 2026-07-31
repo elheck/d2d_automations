@@ -2,7 +2,7 @@ use crate::{
     api::inventory_sync::{InventorySyncClient, PriceField, PriceFields},
     card_matching::MatchedCard,
     formatters::format_update_stock_csv,
-    io::read_csv,
+    io::read_csv_with_category,
     price_trends::roc_from_history,
     ui::{
         components::{FilePicker, InventorySyncBar},
@@ -267,7 +267,7 @@ impl SearchScreen {
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             if style::primary_button(ui, "Discard & Export CSV…").clicked() {
-                                Self::perform_discard(state);
+                                Self::perform_discard(app_state, state);
                             }
                             if style::secondary_button(ui, "Clear All").clicked() {
                                 state.selected_cards.clear();
@@ -282,7 +282,7 @@ impl SearchScreen {
     /// stock-update CSV (the save dialog acts as the confirmation gate), reduces the
     /// inventory DB without touching `sold_quantity`, decrements the in-memory
     /// quantities so the results reflect the write-off, and clears the selection.
-    fn perform_discard(state: &mut SearchState) {
+    fn perform_discard(app_state: &mut AppState, state: &mut SearchState) {
         if state.selected_cards.is_empty() {
             return;
         }
@@ -321,11 +321,15 @@ impl SearchScreen {
             .iter()
             .map(|sc| (sc.card.clone(), sc.quantity as i64))
             .collect();
-        match crate::inventory_db::discard_cards(&discards) {
-            Ok(stats) => info!(
-                "Discarded {} copies across {} variants",
-                stats.copies_discarded, stats.variants_updated
-            ),
+        match crate::inventory_db::discard_cards(&discards, crate::category::DEFAULT_CATEGORY) {
+            Ok(stats) => {
+                info!(
+                    "Discarded {} copies across {} variants",
+                    stats.copies_discarded, stats.variants_updated
+                );
+                // Stock and lot values changed; make caching screens reload.
+                app_state.mark_db_changed();
+            }
             Err(e) => log::warn!("Inventory DB discard failed: {e}"),
         }
 
@@ -795,10 +799,14 @@ impl SearchScreen {
 
     fn load_csv(app_state: &mut AppState, state: &mut SearchState) {
         info!("Loading CSV for search: {}", state.csv_path);
-        match read_csv(&state.csv_path) {
-            Ok(cards) => {
-                info!("Loaded {} cards for searching", cards.len());
-                app_state.sync_inventory_guarded(&cards);
+        match read_csv_with_category(&state.csv_path) {
+            Ok(crate::io::InventoryCsv { cards, category }) => {
+                info!(
+                    "Loaded {} cards for searching (category '{}')",
+                    cards.len(),
+                    category
+                );
+                app_state.sync_inventory_guarded(&cards, &category);
                 state.cards = cards.clone();
                 state.filtered_cards = cards;
                 state.quantity_inputs.clear();

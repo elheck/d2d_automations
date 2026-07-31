@@ -1,7 +1,29 @@
+use crate::category::detect_category;
 use crate::models::{Card, WantsEntry};
 use crate::wantslist::parse_wantslist;
 use log::info;
 use std::io;
+
+/// An inventory CSV together with the product category it belongs to.
+///
+/// Cardmarket exports one report per category; the category must travel with
+/// the rows so a sync only claims ownership of its own slice of the database
+/// (see [`crate::inventory_db::sync_inventory`]).
+#[derive(Debug, Clone)]
+pub struct InventoryCsv {
+    pub cards: Vec<Card>,
+    pub category: String,
+}
+
+/// Reads an inventory CSV and determines which product category it holds.
+///
+/// Use this for anything that writes to the inventory DB; [`read_csv`] remains
+/// available for read-only consumers that don't care about the category.
+pub fn read_csv_with_category(path: &str) -> Result<InventoryCsv, Box<dyn std::error::Error>> {
+    let cards = read_csv(path)?;
+    let category = detect_category(path, &cards);
+    Ok(InventoryCsv { cards, category })
+}
 
 pub fn read_csv(path: &str) -> Result<Vec<Card>, Box<dyn std::error::Error>> {
     info!("Reading inventory CSV from: {}", path);

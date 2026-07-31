@@ -3,7 +3,7 @@ use crate::{
     formatters::{
         format_invoice_list, format_picking_list, format_regular_output, format_update_stock_csv,
     },
-    io::{load_wantslist, read_csv},
+    io::{load_wantslist, read_csv, read_csv_with_category},
     models::{Card, WantsEntry},
     ui::{
         components::{FilePicker, OutputWindow},
@@ -161,8 +161,8 @@ impl StockCheckerScreen {
                     .with_filter("CSV", &["csv"])
                     .show(ui)
                 {
-                    if let Ok(inventory) = read_csv(&state.inventory_path) {
-                        state.sync_inventory_guarded(&inventory);
+                    if let Ok(csv) = read_csv_with_category(&state.inventory_path) {
+                        state.sync_inventory_guarded(&csv.cards, &csv.category);
                     }
                 }
                 FilePicker::new("Wantslist:", &mut state.wantslist_path).show(ui);

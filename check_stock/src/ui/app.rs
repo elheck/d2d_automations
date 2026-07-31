@@ -101,6 +101,7 @@ impl eframe::App for StockCheckerApp {
                     ctx,
                     &mut self.app_state.current_screen,
                     &mut self.restock_state,
+                    self.app_state.db_generation,
                 );
             }
         }
@@ -170,14 +171,7 @@ fn show_sync_guard_modal(ctx: &egui::Context, app_state: &mut AppState) {
 
     if confirm {
         if let Some(guard) = app_state.sync_guard.take() {
-            match crate::inventory_db::sync_inventory_forced(&guard.cards) {
-                Ok(stats) => log::info!(
-                    "Forced inventory sync applied: {} upserted, {} zeroed",
-                    stats.upserted,
-                    stats.zeroed
-                ),
-                Err(e) => log::warn!("Forced inventory sync failed: {e}"),
-            }
+            app_state.sync_inventory_confirmed(&guard.cards, &guard.category);
         }
     } else if cancel {
         app_state.sync_guard = None;

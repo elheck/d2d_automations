@@ -1,6 +1,6 @@
 use crate::{
     inventory_db::{AgingBucket, DbStats, LotBreakdown, OldestInStockEntry, SalesVelocity},
-    io::read_csv,
+    io::read_csv_with_category,
     ui::{
         components::FilePicker,
         state::{AppState, LotSortColumn, Screen, StockAnalysisState},
@@ -13,9 +13,13 @@ pub struct StockAnalysisScreen;
 
 impl StockAnalysisScreen {
     pub fn show(ctx: &egui::Context, app_state: &mut AppState, state: &mut StockAnalysisState) {
-        // Load stats once on first render (non-blocking, DB is local SQLite)
-        if !state.stats_loaded {
+        // Load stats on first render, and again whenever the DB has been written
+        // since (non-blocking, DB is local SQLite). The generation check is what
+        // catches a sync confirmed from the guard modal, which writes from the
+        // app shell rather than from this screen.
+        if !state.stats_loaded || state.stats_generation != app_state.db_generation {
             state.stats_loaded = true;
+            state.stats_generation = app_state.db_generation;
             Self::refresh_stats(state);
         }
 
@@ -36,10 +40,13 @@ impl StockAnalysisScreen {
                             .with_filter("CSV", &["csv"])
                             .show(ui)
                         {
-                            if let Ok(inventory) = read_csv(&state.inventory_path) {
-                                app_state.sync_inventory_guarded(&inventory);
+                            if let Ok(csv) = read_csv_with_category(&state.inventory_path) {
+                                // A successful sync bumps `db_generation`, which
+                                // reloads the stats at the top of the next frame.
+                                // A blocked one deliberately does not — nothing
+                                // was written, so the current figures still hold.
+                                app_state.sync_inventory_guarded(&csv.cards, &csv.category);
                             }
-                            Self::refresh_stats(state);
                         }
                     });
 
@@ -58,7 +65,7 @@ impl StockAnalysisScreen {
     }
 
     fn refresh_stats(state: &mut StockAnalysisState) {
-        match crate::inventory_db::get_db_stats() {
+        match crate::inventory_db::get_db_stats(crate::category::DEFAULT_CATEGORY) {
             Ok(stats) => {
                 state.db_stats = Some(stats);
                 state.db_stats_error = None;

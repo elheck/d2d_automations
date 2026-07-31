@@ -68,32 +68,69 @@ pub struct AppState {
     /// Since-last-visit digest, computed once per app run on the welcome
     /// screen (`None` = not yet computed; `Err` = DB unavailable).
     pub digest: Option<Result<crate::inventory_db::VisitDigest, String>>,
+    /// Bumped on every write to the inventory DB. Screens that cache derived
+    /// data (stats, restock rows) compare it against the generation they last
+    /// loaded and reload when it moves. Without this a sync confirmed from the
+    /// guard modal would leave those screens showing pre-import numbers, since
+    /// the write happens outside the screen that triggered it.
+    pub db_generation: u64,
 }
 
 /// A blocked inventory import held for the confirmation dialog.
 pub struct SyncGuard {
     /// The loaded CSV rows the user may still choose to sync.
     pub cards: Vec<Card>,
+    /// The product category those rows belong to — a forced sync must apply to
+    /// the same scope the blocked one was previewed against.
+    pub category: String,
     /// What the sync would have changed.
     pub preview: crate::inventory_db::SyncPreview,
 }
 
 impl AppState {
-    /// Syncs a freshly loaded inventory CSV into the local DB. When the
-    /// safety check blocks the import (it would record most of the inventory
-    /// as sold), the CSV is parked in [`AppState::sync_guard`] for the
-    /// confirmation modal instead; nothing is written until confirmed.
-    pub fn sync_inventory_guarded(&mut self, cards: &[Card]) {
-        match crate::inventory_db::sync_inventory(cards) {
-            Ok(crate::inventory_db::SyncOutcome::Synced(_)) => {}
+    /// Syncs a freshly loaded inventory CSV into the local DB, scoped to the
+    /// category the CSV belongs to. When the safety check blocks the import (it
+    /// would record most of that category's inventory as sold), the CSV is
+    /// parked in [`AppState::sync_guard`] for the confirmation modal instead;
+    /// nothing is written until confirmed.
+    pub fn sync_inventory_guarded(&mut self, cards: &[Card], category: &str) {
+        match crate::inventory_db::sync_inventory(cards, category) {
+            Ok(crate::inventory_db::SyncOutcome::Synced(_)) => self.mark_db_changed(),
             Ok(crate::inventory_db::SyncOutcome::Blocked(preview)) => {
                 self.sync_guard = Some(SyncGuard {
                     cards: cards.to_vec(),
+                    category: category.to_string(),
                     preview,
                 });
             }
             Err(e) => log::warn!("Inventory DB sync failed: {e}"),
         }
+    }
+
+    /// Applies a sync the safety guard had blocked, after the user confirmed it.
+    ///
+    /// Goes through `AppState` rather than calling `inventory_db` directly so the
+    /// write is recorded in [`AppState::db_generation`] — the confirmation modal
+    /// lives in the app shell, not in the screen whose cached data just went
+    /// stale, so nothing else would invalidate it.
+    pub fn sync_inventory_confirmed(&mut self, cards: &[Card], category: &str) {
+        match crate::inventory_db::sync_inventory_forced(cards, category) {
+            Ok(stats) => {
+                log::info!(
+                    "Forced inventory sync applied ({}): {} upserted, {} zeroed",
+                    category,
+                    stats.upserted,
+                    stats.zeroed
+                );
+                self.mark_db_changed();
+            }
+            Err(e) => log::warn!("Forced inventory sync failed: {e}"),
+        }
+    }
+
+    /// Records that the inventory DB changed, so caching screens reload.
+    pub fn mark_db_changed(&mut self) {
+        self.db_generation = self.db_generation.wrapping_add(1);
     }
 }
 
@@ -119,6 +156,7 @@ impl Default for AppState {
             inventory_health_rx: None,
             sync_guard: None,
             digest: None,
+            db_generation: 0,
         }
     }
 }
@@ -143,6 +181,10 @@ pub struct StockAnalysisState {
     pub db_stats_error: Option<String>,
     /// Set to true after the first stats load attempt so we don't query on every frame.
     pub stats_loaded: bool,
+    /// [`AppState::db_generation`] the cached stats were loaded at. A mismatch
+    /// means the DB was written since (e.g. a sync confirmed from the guard
+    /// modal) and the figures on screen — including the lot table — are stale.
+    pub stats_generation: u64,
     pub lot_sort_column: LotSortColumn,
     pub lot_sort_ascending: bool,
     /// Lot whose acquisition cost is currently being edited, plus the raw text in
@@ -1083,6 +1125,9 @@ pub struct RestockState {
     pub error: Option<String>,
     /// Guards the one-shot auto-load when the screen is first shown.
     pub loaded: bool,
+    /// [`AppState::db_generation`] the cached rows were built at; a mismatch
+    /// means a sync has landed since and the report is stale.
+    pub generation: u64,
     pub sort: RestockSort,
     pub sort_desc: bool,
 }
@@ -1094,6 +1139,7 @@ impl Default for RestockState {
             rows: None,
             error: None,
             loaded: false,
+            generation: 0,
             sort: RestockSort::default(),
             sort_desc: true,
         }

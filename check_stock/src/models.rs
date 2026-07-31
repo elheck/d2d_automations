@@ -100,23 +100,32 @@ pub struct Card {
     pub cardmarket_id: String,
     pub quantity: String,
     pub name: String,
+    // Card-specific metadata: present but empty in the Generic (accessories)
+    // export, and omitted outright by some variants of it. Defaulting keeps a
+    // missing column from failing the entire file.
+    #[serde(default)]
     pub set: String,
-    #[serde(rename = "setCode")]
+    #[serde(rename = "setCode", default)]
     pub set_code: String,
+    #[serde(default)]
     pub cn: String,
     pub condition: String,
     pub language: String,
-    #[serde(rename = "isFoil")]
+    /// Absent entirely from the Generic (accessories) export — sleeves have no
+    /// finish — so this defaults rather than failing the whole parse.
+    #[serde(rename = "isFoil", default)]
     pub is_foil: String,
     #[serde(rename = "isPlayset", default)]
     pub is_playset: Option<String>,
-    #[serde(rename = "isSigned")]
+    /// Also absent from some Generic exports; see `is_foil`.
+    #[serde(rename = "isSigned", default)]
     pub is_signed: String,
     #[serde(rename = "isFirstEd", default)]
     pub is_first_ed: Option<String>,
     #[serde(rename = "isReverseHolo", default)]
     pub is_reverse_holo: Option<String>,
     pub price: String,
+    #[serde(default)]
     pub comment: String,
     pub location: Option<String>,
     #[serde(rename = "nameDE", default)]
@@ -127,6 +136,7 @@ pub struct Card {
     pub name_fr: String,
     #[serde(rename = "nameIT", default)]
     pub name_it: String,
+    #[serde(default)]
     pub rarity: String,
     #[serde(rename = "listedAt", default)]
     pub listed_at: String,

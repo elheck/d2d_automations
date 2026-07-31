@@ -23,10 +23,17 @@ const MAX_ROWS: usize = 300;
 pub struct RestockScreen;
 
 impl RestockScreen {
-    pub fn show(ctx: &egui::Context, current_screen: &mut Screen, state: &mut RestockState) {
-        // All data is local (inventory DB), so build the report on first entry.
-        if !state.loaded {
+    pub fn show(
+        ctx: &egui::Context,
+        current_screen: &mut Screen,
+        state: &mut RestockState,
+        db_generation: u64,
+    ) {
+        // All data is local (inventory DB), so build the report on first entry —
+        // and again whenever a sync has written to the DB since it was built.
+        if !state.loaded || state.generation != db_generation {
             state.loaded = true;
+            state.generation = db_generation;
             Self::rebuild(state);
         }
 
@@ -261,7 +268,9 @@ impl RestockScreen {
 
     /// Rebuilds the report from the inventory DB with the current threshold.
     fn rebuild(state: &mut RestockState) {
-        match get_restock_candidates() {
+        // `None` = all categories: sleeves and other accessories are restock
+        // candidates too, and the lot column already spans both.
+        match get_restock_candidates(None) {
             Ok(candidates) => {
                 state.rows = Some(rank_candidates(candidates, state.min_copies));
                 state.error = None;

@@ -1,4 +1,4 @@
-use d2d_automations::io::{read_csv, read_wantslist};
+use d2d_automations::io::{read_csv, read_csv_with_category, read_wantslist};
 use d2d_automations::models::Card;
 use std::io::Write;
 use tempfile::NamedTempFile;
@@ -467,5 +467,93 @@ mod edge_cases {
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].name, "Überkarte");
         assert_eq!(cards[0].set, "Sét Spéciał");
+    }
+}
+
+// ── Generic (accessories) export ───────────────────────────────────────────
+
+#[test]
+fn test_read_csv_generic_export_omitting_foil_and_signed_columns() {
+    // The Generic export drops isFoil/isSigned entirely — accessories have no
+    // finish and cannot be signed. A missing column must not fail the parse.
+    let mut temp_file = NamedTempFile::new().unwrap();
+    let content = r#"cardmarketId,quantity,name,set,setCode,cn,condition,language,isSigned,finishType,price,comment,location,nameDE,nameES,nameFR,nameIT,rarity,listedAt
+716833,14,100 TCG Guru Perfect Slim Fit Inner Sleeves,,,,NM,English,,Regular,1.7,,A-0-0-0-L22-R,100 TCG Guru Perfect Slim Fit Inner Huellen,100 Fundas,100 Proteges,100 Buste,,
+"#;
+    write!(temp_file, "{}", content).unwrap();
+
+    let cards = read_csv(temp_file.path().to_str().unwrap()).unwrap();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].cardmarket_id, "716833");
+    assert_eq!(cards[0].quantity, "14");
+    // Accessory rows carry no card metadata.
+    assert_eq!(cards[0].set, "");
+    assert_eq!(cards[0].set_code, "");
+    assert_eq!(cards[0].cn, "");
+    assert_eq!(cards[0].rarity, "");
+    // Absent columns default rather than erroring.
+    assert_eq!(cards[0].is_foil, "");
+    assert_eq!(cards[0].is_signed, "");
+}
+
+#[test]
+fn test_read_csv_with_category_detects_generic_from_filename() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("inventory-report-Generic.csv");
+    std::fs::write(
+        &path,
+        "cardmarketId,quantity,name,set,setCode,cn,condition,language,isSigned,finishType,price,comment,location,rarity,listedAt\n\
+         716833,14,Sleeves,,,,NM,English,,Regular,1.7,,A-0-0-0-L22-R,,\n",
+    )
+    .unwrap();
+
+    let csv = read_csv_with_category(path.to_str().unwrap()).unwrap();
+    assert_eq!(csv.category, "Generic");
+    assert_eq!(csv.cards.len(), 1);
+}
+
+#[test]
+fn test_read_csv_with_category_detects_magic_from_filename() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("inventory-report-45.csv");
+    std::fs::write(
+        &path,
+        "cardmarketId,quantity,name,set,setCode,cn,condition,language,isFoil,isSigned,price,comment,location,rarity\n\
+         510275,37,Brazen Freebooter,Commander Legends,CMR,164,near_mint,english,false,false,0.05,\"\",A-0-0-25-L0-R,Common\n",
+    )
+    .unwrap();
+
+    let csv = read_csv_with_category(path.to_str().unwrap()).unwrap();
+    assert_eq!(csv.category, "Magic");
+    assert_eq!(csv.cards.len(), 1);
+}
+
+#[test]
+fn test_read_csv_real_generic_report_file() {
+    // Integration test against the real Generic export shipped as a fixture.
+    let path = "tests/fixtures/inventory-report-Generic.csv";
+    if !std::path::Path::new(path).exists() {
+        eprintln!("Skipping: {} not found", path);
+        return;
+    }
+    let csv = read_csv_with_category(path).expect("should parse real Generic report");
+    assert_eq!(csv.category, "Generic");
+    // The quantity-0 row is a sold-out placeholder and is dropped by read_csv.
+    assert_eq!(csv.cards.len(), 1);
+    assert_eq!(csv.cards[0].cardmarket_id, "716833");
+    assert_eq!(csv.cards[0].quantity, "14");
+    assert_eq!(csv.cards[0].location.as_deref(), Some("A-0-0-0-L22-R"));
+}
+
+#[test]
+fn test_read_csv_real_magic_report_still_detected_as_magic() {
+    // The Magic export shipped in the repo root must keep its own scope, so a
+    // Generic import can never be mistaken for it.
+    for path in ["inventory-report-45.csv", "inventory-report-Magic.csv"] {
+        if !std::path::Path::new(path).exists() {
+            continue;
+        }
+        let csv = read_csv_with_category(path).expect("should parse real Magic report");
+        assert_eq!(csv.category, "Magic", "for {path}");
     }
 }
