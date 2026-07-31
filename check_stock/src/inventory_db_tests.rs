@@ -1655,3 +1655,21 @@ fn digest_counts_restock_candidates() {
     let d = visit_digest_conn(&conn, "2026-01-02").unwrap();
     assert_eq!(d.restock_candidates, 1);
 }
+
+#[test]
+fn restock_candidates_carry_source_lot() {
+    let mut conn = test_conn();
+    let mut with_lot = make_card("1", "Alpha", "2");
+    with_lot.location = Some("A-0-0-31-L2-R".to_string());
+    let mut no_lot = make_card("2", "Beta", "1");
+    no_lot.location = Some("A-0-0-32".to_string());
+    sync_inventory_conn(&mut conn, &[with_lot, no_lot], "2026-01-01").unwrap();
+    // Both sell out entirely.
+    sync_inventory_conn(&mut conn, &[], "2026-01-02").unwrap();
+
+    let mut cands = get_restock_candidates_conn(&conn).unwrap();
+    cands.sort_by(|a, b| a.name.cmp(&b.name));
+    assert_eq!(cands.len(), 2);
+    assert_eq!(cands[0].lot.as_deref(), Some("L2"));
+    assert_eq!(cands[1].lot, None);
+}

@@ -77,7 +77,10 @@ showing exactly what would change before anything is written.
 - **Restock Report** — Sold-out variants (quantity 0, copies sold > 0) ranked by
   sell-through speed (copies/week over the listing → last-sale window), with a
   minimum-copies filter to hide one-off sales and a buy-list CSV export. Answers
-  "what should I buy again?". Backed by the per-variant **sold-events log**: every
+  "what should I buy again?". A sortable **Lot** column shows which lot the
+  copies were sourced from (the `L` part of the last known location, also in
+  the CSV export) — fast sellers clustered in one lot tell you which supplier
+  or purchase to repeat. Backed by the per-variant **sold-events log**: every
   inventory sync records which variant sold how many copies on what date and at
   what listed price (discards/write-offs never count as sales). Strictly read-only.
 - **Price Movers** — Joins the in-stock inventory with 7/30-day market movement

@@ -176,7 +176,7 @@ impl RestockScreen {
         };
 
         egui::Grid::new("restock_table")
-            .num_columns(8)
+            .num_columns(9)
             .striped(true)
             .spacing([12.0, 2.0])
             .show(ui, |ui| {
@@ -188,6 +188,13 @@ impl RestockScreen {
                     &mut state.sort_desc,
                 );
                 ui.label(egui::RichText::new("Set").strong());
+                header(
+                    ui,
+                    "Lot",
+                    RestockSort::Lot,
+                    &mut state.sort,
+                    &mut state.sort_desc,
+                );
                 header(
                     ui,
                     "Sold",
@@ -235,6 +242,7 @@ impl RestockScreen {
                     };
                     ui.label(name);
                     ui.label(format!("{} {}", c.set_code, c.condition));
+                    ui.label(c.lot.as_deref().unwrap_or("—"));
                     ui.label(format!("×{}", c.sold_copies));
                     ui.label(
                         egui::RichText::new(format!("{:.2}", r.copies_per_week))
@@ -306,6 +314,14 @@ fn compare(a: &RankedRestock, b: &RankedRestock, sort: RestockSort) -> std::cmp:
         RestockSort::SoldCopies => Some(a.candidate.sold_copies.cmp(&b.candidate.sold_copies)),
         RestockSort::Days => Some(a.days_to_sell_out.cmp(&b.days_to_sell_out)),
         RestockSort::Name => Some(a.candidate.name.cmp(&b.candidate.name)),
+        // Option<String> orders None first, then lexicographically — good
+        // enough for lot labels of the same width; ties broken by name.
+        RestockSort::Lot => Some(
+            a.candidate
+                .lot
+                .cmp(&b.candidate.lot)
+                .then_with(|| a.candidate.name.cmp(&b.candidate.name)),
+        ),
     }
     .unwrap_or(eq)
 }

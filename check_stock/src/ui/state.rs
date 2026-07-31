@@ -1070,6 +1070,8 @@ pub enum RestockSort {
     Days,
     Price,
     Name,
+    /// Source lot extracted from the last known location.
+    Lot,
 }
 
 /// State for the read-only Restock Recommendations screen.

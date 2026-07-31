@@ -15,6 +15,7 @@ fn candidate(name: &str, sold: i64, listed: &str, sold_out: &str, price: f64) ->
         last_price: price,
         listed_date: listed.to_string(),
         sold_out_date: sold_out.to_string(),
+        lot: Some("L1".to_string()),
     }
 }
 
@@ -98,7 +99,17 @@ fn buy_list_csv_has_header_and_rows_in_given_order() {
     let csv = format_buy_list_csv(&ranked);
     let lines: Vec<&str> = csv.lines().collect();
     assert_eq!(lines.len(), 3);
-    assert!(lines[0].starts_with("name,setCode,cn,condition,language,isFoil,rarity,soldCopies"));
-    assert!(lines[1].starts_with("Fast,TST,1,NM,English,,Common,4,4.00,7,1.50,6.00"));
-    assert!(lines[2].starts_with("Slow,TST,1,NM,English,,Common,2,1.00,14,5.00,10.00"));
+    assert!(lines[0].starts_with("name,setCode,cn,condition,language,isFoil,rarity,lot,soldCopies"));
+    assert!(lines[1].starts_with("Fast,TST,1,NM,English,,Common,L1,4,4.00,7,1.50,6.00"));
+    assert!(lines[2].starts_with("Slow,TST,1,NM,English,,Common,L1,2,1.00,14,5.00,10.00"));
+}
+
+#[test]
+fn buy_list_csv_empty_lot_stays_empty() {
+    let mut c = candidate("Bolt", 2, "2026-01-01", "2026-01-08", 1.0);
+    c.lot = None;
+    let ranked = rank_candidates(vec![c], 1);
+    let csv = format_buy_list_csv(&ranked);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert!(lines[1].starts_with("Bolt,TST,1,NM,English,,Common,,2,"));
 }

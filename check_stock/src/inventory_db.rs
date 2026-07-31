@@ -167,6 +167,9 @@ pub struct RestockCandidate {
     /// Date of the last recorded sale; falls back to `last_synced_at` (the sync
     /// that zeroed the variant) for pre-event-log history.
     pub sold_out_date: String,
+    /// Lot the copies were sourced from (`L` part of the last known location,
+    /// e.g. `L2`); `None` when the location carries no lot number.
+    pub lot: Option<String>,
 }
 
 /// One daily inventory snapshot row. `sold_*_cumulative` are running totals since
@@ -991,7 +994,8 @@ fn get_restock_candidates_conn(conn: &Connection) -> DbResult<Vec<RestockCandida
                 COALESCE(e.last_sale_date, c.last_synced_at) AS sold_out_date,
                 COALESCE(e.revenue, 0.0)
                     + MAX(c.sold_quantity - COALESCE(e.copies, 0), 0)
-                      * CAST(c.price AS REAL) AS realized_revenue
+                      * CAST(c.price AS REAL) AS realized_revenue,
+                COALESCE(c.location, '') AS location
          FROM inventory_cards c
          LEFT JOIN (
              SELECT cardmarket_id, condition, language, is_foil, is_signed,
@@ -1008,6 +1012,7 @@ fn get_restock_candidates_conn(conn: &Connection) -> DbResult<Vec<RestockCandida
          WHERE c.quantity = 0 AND c.sold_quantity > 0",
     )?
     .query_map([], |r| {
+        let location: String = r.get(13)?;
         Ok(RestockCandidate {
             cardmarket_id: r.get(0)?,
             name: r.get(1)?,
@@ -1022,6 +1027,7 @@ fn get_restock_candidates_conn(conn: &Connection) -> DbResult<Vec<RestockCandida
             listed_date: r.get(10)?,
             sold_out_date: r.get(11)?,
             realized_revenue: r.get(12)?,
+            lot: extract_lot_number(&location).map(str::to_string),
         })
     })?
     .collect()
