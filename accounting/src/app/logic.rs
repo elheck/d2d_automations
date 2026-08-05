@@ -3,7 +3,7 @@
 use log::{debug, error, info, warn};
 
 use crate::{
-    csv_processor::CsvProcessor,
+    csv_processor::{cardtrader_parser, CsvProcessor, LoadedCsv},
     models::{CheckAccountResponse, InvoiceCreationResult, InvoiceWorkflowOptions},
     sevdesk_api::SevDeskApi,
 };
@@ -86,8 +86,14 @@ impl InvoiceApp {
 
             let processor = CsvProcessor::new();
             debug!("Starting CSV file processing");
-            match self.runtime.block_on(processor.load_orders_from_csv(&path)) {
-                Ok(orders) => {
+
+            // Reset both paths so a newly loaded file never mixes with the previous one.
+            self.orders.clear();
+            self.cardtrader_rows.clear();
+            self.consolidated_invoice = None;
+
+            match self.runtime.block_on(processor.load_csv(&path)) {
+                Ok(LoadedCsv::Cardmarket(orders)) => {
                     info!("Successfully loaded {} orders from CSV", orders.len());
                     // Validate orders
                     debug!("Validating loaded orders");
@@ -106,16 +112,170 @@ impl InvoiceApp {
 
                     self.processing_state = ProcessingState::Idle;
                 }
+                Ok(LoadedCsv::CardTrader(rows)) => {
+                    info!("Loaded {} rows from CardTrader sales report", rows.len());
+                    self.cardtrader_rows = rows;
+                    self.rebuild_consolidated_invoice();
+                    self.processing_state = ProcessingState::Idle;
+                }
                 Err(e) => {
                     error!("Failed to load CSV file: {e}");
                     self.validation_errors = vec![format!("Failed to load CSV file: {}", e)];
                     self.orders.clear();
+                    self.cardtrader_rows.clear();
+                    self.consolidated_invoice = None;
                     self.processing_state = ProcessingState::Idle;
                 }
             }
         } else {
             debug!("File dialog cancelled by user");
         }
+    }
+
+    /// Recomputes the consolidated invoice from the loaded CardTrader rows and
+    /// the current recipient, refreshing validation errors.
+    ///
+    /// Called after loading a report and whenever the recipient is edited.
+    pub(super) fn rebuild_consolidated_invoice(&mut self) {
+        if self.cardtrader_rows.is_empty() {
+            self.consolidated_invoice = None;
+            return;
+        }
+
+        match cardtrader_parser::consolidate(
+            &self.cardtrader_rows,
+            self.cardtrader_recipient.clone(),
+        ) {
+            Ok(invoice) => {
+                self.validation_errors = cardtrader_parser::validate_consolidated(&invoice);
+                if self.validation_errors.is_empty() {
+                    info!(
+                        "Consolidated invoice: {} positions, net {:.2} {}",
+                        invoice.positions.len(),
+                        invoice.total(),
+                        invoice.currency
+                    );
+                } else {
+                    for error in &self.validation_errors {
+                        warn!("Consolidated invoice validation error: {error}");
+                    }
+                }
+                self.consolidated_invoice = Some(invoice);
+            }
+            Err(e) => {
+                error!("Failed to consolidate CardTrader report: {e}");
+                self.validation_errors = vec![format!("Failed to consolidate report: {}", e)];
+                self.consolidated_invoice = None;
+            }
+        }
+    }
+
+    /// Creates the single consolidated invoice for a loaded CardTrader report.
+    pub(super) fn process_consolidated_invoice(&mut self) {
+        let Some(invoice) = self.consolidated_invoice.clone() else {
+            warn!("Cannot process consolidated invoice: nothing consolidated");
+            return;
+        };
+
+        if self.api_token.is_empty() {
+            warn!("Cannot process consolidated invoice: API token is empty");
+            return;
+        }
+
+        let validation_errors = cardtrader_parser::validate_consolidated(&invoice);
+        if !validation_errors.is_empty() {
+            warn!("Refusing to invoice: consolidated invoice is invalid");
+            self.validation_errors = validation_errors;
+            return;
+        }
+
+        self.results.clear();
+        self.processing_state = ProcessingState::Processing {
+            current: 0,
+            total: 1,
+        };
+
+        let api = SevDeskApi::new(self.api_token.clone());
+
+        let result = if self.dry_run_mode {
+            self.runtime
+                .block_on(api.simulate_consolidated_invoice(&invoice))
+        } else {
+            self.runtime
+                .block_on(api.create_consolidated_invoice(&invoice))
+        };
+
+        match result {
+            Ok(invoice_result) => {
+                let mut final_result = invoice_result;
+
+                if let Some(ref err) = final_result.error {
+                    error!("Failed to create consolidated invoice: {err}");
+                } else {
+                    info!(
+                        "{} consolidated invoice: {}",
+                        if self.dry_run_mode {
+                            "Simulated"
+                        } else {
+                            "Created"
+                        },
+                        final_result
+                            .invoice_number
+                            .as_deref()
+                            .unwrap_or("[DRY RUN]")
+                    );
+                }
+
+                if let Some(invoice_id) = final_result.invoice_id {
+                    if final_result.error.is_none() {
+                        let workflow_options =
+                            self.build_workflow_options_with_date(&invoice.invoice_date);
+                        if workflow_options.finalize
+                            || workflow_options.enshrine
+                            || workflow_options.book
+                        {
+                            let invoice_number =
+                                final_result.invoice_number.as_deref().unwrap_or("Unknown");
+
+                            let workflow_status = if self.dry_run_mode {
+                                self.runtime.block_on(api.simulate_invoice_workflow(
+                                    invoice_id,
+                                    invoice_number,
+                                    &workflow_options,
+                                ))
+                            } else {
+                                self.runtime.block_on(api.execute_invoice_workflow(
+                                    invoice_id,
+                                    invoice_number,
+                                    &workflow_options,
+                                ))
+                            };
+
+                            if let Some(ref err) = workflow_status.workflow_error {
+                                error!("Workflow error for consolidated invoice: {err}");
+                            }
+
+                            final_result.workflow_status = Some(workflow_status);
+                        }
+                    }
+                }
+
+                self.results.push(final_result);
+            }
+            Err(e) => {
+                error!("Error processing consolidated invoice: {e}");
+                self.results.push(InvoiceCreationResult {
+                    order_id: format!("CardTrader {}", invoice.period_label),
+                    customer_name: invoice.recipient.name.clone(),
+                    invoice_id: None,
+                    invoice_number: None,
+                    error: Some(e.to_string()),
+                    workflow_status: None,
+                });
+            }
+        }
+
+        self.processing_state = ProcessingState::Completed;
     }
 
     pub(super) fn process_invoices(&mut self) {

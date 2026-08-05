@@ -22,6 +22,12 @@ impl eframe::App for InvoiceApp {
                 ui.add_space(20.0);
                 self.render_csv_file_section(ui);
                 ui.add_space(20.0);
+                // Recipient address is only meaningful for CardTrader reports,
+                // which are billed as one invoice to a single recipient.
+                if self.is_cardtrader_mode() {
+                    self.render_cardtrader_section(ui);
+                    ui.add_space(20.0);
+                }
                 self.render_check_account_section(ui);
                 ui.add_space(20.0);
                 self.render_workflow_options_section(ui);
@@ -116,6 +122,137 @@ impl InvoiceApp {
                     if ui.button("Review Orders").clicked() {
                         self.show_order_preview = true;
                     }
+                });
+            }
+        });
+    }
+
+    /// Renders the CardTrader consolidated invoice section.
+    ///
+    /// Only shown when a CardTrader sales report is loaded. The recipient
+    /// address defaults to GRAY FOX SRL but is fully editable here.
+    fn render_cardtrader_section(&mut self, ui: &mut egui::Ui) {
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.strong("CardTrader Sales Report");
+                ui.colored_label(
+                    egui::Color32::LIGHT_BLUE,
+                    format!("{} rows loaded", self.cardtrader_rows.len()),
+                );
+            });
+            ui.label("The entire report is billed as one invoice (net amounts only).");
+            ui.add_space(8.0);
+
+            ui.label("Invoice Recipient:");
+            let mut recipient_changed = false;
+
+            egui::Grid::new("cardtrader_recipient_grid")
+                .num_columns(2)
+                .spacing([10.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label("Name:");
+                    recipient_changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.cardtrader_recipient.name)
+                                .desired_width(320.0),
+                        )
+                        .changed();
+                    ui.end_row();
+
+                    ui.label("Street:");
+                    recipient_changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.cardtrader_recipient.street)
+                                .desired_width(320.0),
+                        )
+                        .changed();
+                    ui.end_row();
+
+                    ui.label("ZIP:");
+                    recipient_changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.cardtrader_recipient.zip)
+                                .desired_width(320.0),
+                        )
+                        .changed();
+                    ui.end_row();
+
+                    ui.label("City:");
+                    recipient_changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.cardtrader_recipient.city)
+                                .desired_width(320.0),
+                        )
+                        .changed();
+                    ui.end_row();
+
+                    ui.label("Country:");
+                    recipient_changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.cardtrader_recipient.country)
+                                .desired_width(320.0),
+                        )
+                        .changed();
+                    ui.end_row();
+                });
+
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Reset to default")
+                    .on_hover_text("Restore the default GRAY FOX SRL address")
+                    .clicked()
+                {
+                    self.cardtrader_recipient = crate::models::InvoiceRecipient::default();
+                    recipient_changed = true;
+                }
+            });
+
+            if recipient_changed {
+                self.rebuild_consolidated_invoice();
+            }
+
+            // Consolidated summary
+            if let Some(invoice) = &self.consolidated_invoice {
+                ui.add_space(8.0);
+                ui.separator();
+                ui.label(format!("Period: {}", invoice.period_label));
+                ui.label(format!(
+                    "{} positions ({} cards) from {} rows",
+                    invoice.positions.len(),
+                    invoice.total_quantity(),
+                    invoice.row_count
+                ));
+                if invoice.skipped_row_count > 0 {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        format!(
+                            "{} cancelled/zero-value rows excluded",
+                            invoice.skipped_row_count
+                        ),
+                    );
+                }
+                ui.colored_label(
+                    egui::Color32::GREEN,
+                    format!("Net total: {:.2} {}", invoice.total(), invoice.currency),
+                );
+
+                ui.add_space(5.0);
+                ui.collapsing("Preview positions", |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(240.0)
+                        .show(ui, |ui| {
+                            for (idx, position) in invoice.positions.iter().enumerate() {
+                                ui.label(format!(
+                                    "{}. {}x {} [{}] - {:.2} {}",
+                                    idx + 1,
+                                    position.quantity,
+                                    position.display_name(),
+                                    position.display_text(),
+                                    position.total_price(),
+                                    invoice.currency
+                                ));
+                            }
+                        });
                 });
             }
         });
@@ -321,14 +458,22 @@ impl InvoiceApp {
 
             match &self.processing_state {
                 ProcessingState::Idle => {
-                    let can_process = !self.orders.is_empty()
+                    let cardtrader_mode = self.is_cardtrader_mode();
+                    let has_data = if cardtrader_mode {
+                        self.consolidated_invoice.is_some() && self.validation_errors.is_empty()
+                    } else {
+                        !self.orders.is_empty()
+                    };
+
+                    let can_process = has_data
                         && !self.api_token.is_empty()
                         && (self.dry_run_mode || self.api_connection_status == Some(true));
 
-                    let button_text = if self.dry_run_mode {
-                        "Simulate Invoice Creation (Dry Run)"
-                    } else {
-                        "Create Invoices"
+                    let button_text = match (cardtrader_mode, self.dry_run_mode) {
+                        (true, true) => "Simulate Consolidated Invoice (Dry Run)",
+                        (true, false) => "Create Consolidated Invoice",
+                        (false, true) => "Simulate Invoice Creation (Dry Run)",
+                        (false, false) => "Create Invoices",
                     };
 
                     if ui
@@ -338,16 +483,28 @@ impl InvoiceApp {
                         )
                         .clicked()
                     {
-                        info!(
-                            "Starting invoice {} for {} orders",
-                            if self.dry_run_mode {
-                                "simulation"
-                            } else {
-                                "creation process"
-                            },
-                            self.orders.len()
-                        );
-                        self.process_invoices();
+                        if cardtrader_mode {
+                            info!(
+                                "Starting consolidated invoice {}",
+                                if self.dry_run_mode {
+                                    "simulation"
+                                } else {
+                                    "creation"
+                                }
+                            );
+                            self.process_consolidated_invoice();
+                        } else {
+                            info!(
+                                "Starting invoice {} for {} orders",
+                                if self.dry_run_mode {
+                                    "simulation"
+                                } else {
+                                    "creation process"
+                                },
+                                self.orders.len()
+                            );
+                            self.process_invoices();
+                        }
                     }
                 }
                 ProcessingState::LoadingCsv => {

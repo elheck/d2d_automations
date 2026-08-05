@@ -36,6 +36,177 @@ pub struct OrderRecord {
     pub items: Vec<OrderItem>, // Parsed individual items for multi-item orders
 }
 
+/// A single line from a CardTrader sales report.
+///
+/// Monetary values are kept as integer cents exactly as the report provides them,
+/// so that summing hundreds of rows cannot accumulate floating point error.
+/// Conversion to `f64` happens only at the SevDesk API boundary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CardTraderSaleRow {
+    pub id: String,
+    pub order_code: String,
+    pub sold_at: String,
+    pub item_name: String,
+    pub item_expansion: String,
+    pub item_properties: String,
+    /// Sale amount in cents (gross, before CardTrader fee).
+    pub amount_cents: i64,
+    /// Cancellation amount in cents. Negative when the sale was cancelled.
+    pub cancelation_cents: i64,
+    /// CardTrader fee in cents. Always negative or zero.
+    pub fee_cents: i64,
+    pub currency: String,
+}
+
+impl CardTraderSaleRow {
+    /// Net amount actually earned on this row, in cents.
+    ///
+    /// A cancelled row carries a `cancelation_cents` that offsets its `amount_cents`,
+    /// so cancelled sales naturally contribute zero.
+    pub fn net_cents(&self) -> i64 {
+        self.amount_cents + self.cancelation_cents
+    }
+
+    /// True when this row contributes nothing to the invoice (cancelled or zero-value).
+    pub fn is_void(&self) -> bool {
+        self.net_cents() == 0
+    }
+
+    /// Grouping key: identical cards in identical condition collapse into one position.
+    pub fn grouping_key(&self) -> (String, String, String) {
+        (
+            self.item_name.clone(),
+            self.item_expansion.clone(),
+            self.item_properties.clone(),
+        )
+    }
+}
+
+/// A grouped invoice position built from one or more identical `CardTraderSaleRow`s.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConsolidatedPosition {
+    pub item_name: String,
+    pub item_expansion: String,
+    pub item_properties: String,
+    pub quantity: u32,
+    /// Summed net amount for all rows in this group, in cents.
+    pub total_cents: i64,
+}
+
+impl ConsolidatedPosition {
+    /// Position name shown on the invoice.
+    pub fn display_name(&self) -> String {
+        if self.item_expansion.is_empty() {
+            self.item_name.clone()
+        } else {
+            format!("{} ({})", self.item_name, self.item_expansion)
+        }
+    }
+
+    /// Position description shown beneath the name.
+    pub fn display_text(&self) -> String {
+        self.item_properties.clone()
+    }
+
+    /// Unit price in euros, derived from the group total and quantity.
+    pub fn unit_price(&self) -> f64 {
+        if self.quantity == 0 {
+            return 0.0;
+        }
+        (self.total_cents as f64 / 100.0) / self.quantity as f64
+    }
+
+    /// Total price for this position in euros.
+    pub fn total_price(&self) -> f64 {
+        self.total_cents as f64 / 100.0
+    }
+}
+
+/// Billing recipient for a consolidated CardTrader invoice.
+///
+/// Defaults to GRAY FOX SRL but is editable in the UI before invoicing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InvoiceRecipient {
+    pub name: String,
+    pub street: String,
+    pub zip: String,
+    pub city: String,
+    pub country: String,
+}
+
+impl Default for InvoiceRecipient {
+    fn default() -> Self {
+        Self {
+            name: "GRAY FOX SRL".to_string(),
+            street: "Via San Gregorio 55".to_string(),
+            zip: "20124".to_string(),
+            city: "Milano".to_string(),
+            country: "Italien".to_string(),
+        }
+    }
+}
+
+impl InvoiceRecipient {
+    /// Formats the recipient as a multi-line address block for the invoice.
+    pub fn formatted_address(&self) -> String {
+        format!(
+            "{}\n{}\n{} {}\n{}",
+            self.name, self.street, self.zip, self.city, self.country
+        )
+    }
+
+    /// Returns validation errors for the recipient fields. Empty when valid.
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.name.trim().is_empty() {
+            errors.push("Recipient name is empty".to_string());
+        }
+        if self.street.trim().is_empty() {
+            errors.push("Recipient street is empty".to_string());
+        }
+        if self.city.trim().is_empty() {
+            errors.push("Recipient city is empty".to_string());
+        }
+        if self.country.trim().is_empty() {
+            errors.push("Recipient country is empty".to_string());
+        }
+        errors
+    }
+}
+
+/// A whole CardTrader sales report consolidated into a single invoice.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConsolidatedInvoice {
+    pub recipient: InvoiceRecipient,
+    /// Invoice/delivery date in `YYYY-MM-DD` form (latest sale in the report).
+    pub invoice_date: String,
+    /// Human readable period, e.g. `2026-07-01 - 2026-07-05`.
+    pub period_label: String,
+    pub positions: Vec<ConsolidatedPosition>,
+    pub currency: String,
+    /// Number of report rows that contributed to the invoice (excludes voids).
+    pub row_count: usize,
+    /// Number of rows skipped because they were cancelled or zero-value.
+    pub skipped_row_count: usize,
+}
+
+impl ConsolidatedInvoice {
+    /// Net total across all positions, in cents.
+    pub fn total_cents(&self) -> i64 {
+        self.positions.iter().map(|p| p.total_cents).sum()
+    }
+
+    /// Net total across all positions, in euros.
+    pub fn total(&self) -> f64 {
+        self.total_cents() as f64 / 100.0
+    }
+
+    /// Total number of cards billed.
+    pub fn total_quantity(&self) -> u32 {
+        self.positions.iter().map(|p| p.quantity).sum()
+    }
+}
+
 // Simplified structure for card inventory data
 #[derive(Debug, Clone)]
 #[allow(dead_code)]

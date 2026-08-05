@@ -32,16 +32,17 @@ This document contains feature requests for the SevDesk Invoicing Application.
 | Component | Coverage | Tests |
 |-----------|----------|-------|
 | CSV Processor | ~95% | 35 tests |
+| CardTrader Consolidation | ~90% | 37 tests |
 | SevDesk API Utils | ~80% | 16 tests |
 | Workflow Operations | ~80% | 18 tests |
 | Contacts & Invoices | ~80% | 22 tests |
 | UI/App Logic | <5% | 0 tests |
-| **Total** | **~146 tests** | **All passing** |
+| **Total** | **~206 tests** | **All passing** |
 
 ### Strengths to Maintain
 
 - Security-first approach (no credentials in code)
-- Comprehensive test fixtures (8 real-world CSV samples)
+- Comprehensive test fixtures (10 real-world CSV samples)
 - Excellent error messages (descriptive, actionable, with context)
 - Clean module boundaries (minimal coupling)
 - Dry-run mode (excellent for testing without side effects)

@@ -5,6 +5,7 @@
 
 mod check_accounts;
 mod client;
+mod consolidated_invoice;
 mod contacts;
 mod countries;
 mod invoice_workflow;

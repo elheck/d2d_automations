@@ -333,3 +333,127 @@ mod price_handling {
         assert_eq!(orders[0].shipment_costs, "0,00");
     }
 }
+
+// ==================== CardTrader Sales Report Tests ====================
+
+mod cardtrader_reports {
+    use super::*;
+    use sevdesk_invoicing::csv_processor::{cardtrader_parser, LoadedCsv};
+    use sevdesk_invoicing::models::InvoiceRecipient;
+
+    #[tokio::test]
+    async fn cardmarket_files_still_route_to_the_order_path() {
+        let processor = CsvProcessor::new();
+        let path = fixtures_path().join("valid_single_order.csv");
+
+        match processor.load_csv(&path).await.unwrap() {
+            LoadedCsv::Cardmarket(orders) => {
+                assert_eq!(orders.len(), 1);
+                assert_eq!(orders[0].order_id, "1218804750");
+            }
+            LoadedCsv::CardTrader(_) => panic!("Cardmarket export misrouted to CardTrader path"),
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_item_cardmarket_file_still_routes_to_the_order_path() {
+        let processor = CsvProcessor::new();
+        let path = fixtures_path().join("multi_item_order.csv");
+
+        match processor.load_csv(&path).await.unwrap() {
+            LoadedCsv::Cardmarket(orders) => assert!(!orders.is_empty()),
+            LoadedCsv::CardTrader(_) => panic!("Cardmarket export misrouted to CardTrader path"),
+        }
+    }
+
+    #[tokio::test]
+    async fn detects_and_loads_a_cardtrader_report() {
+        let processor = CsvProcessor::new();
+        let path = fixtures_path().join("cardtrader_sales_report.csv");
+
+        match processor.load_csv(&path).await.unwrap() {
+            LoadedCsv::CardTrader(rows) => assert_eq!(rows.len(), 8),
+            LoadedCsv::Cardmarket(_) => panic!("CardTrader report misrouted to Cardmarket path"),
+        }
+    }
+
+    #[tokio::test]
+    async fn consolidates_the_full_july_report() {
+        let processor = CsvProcessor::new();
+        let path = fixtures_path().join("cardtrader_sales_report_full.csv");
+
+        let rows = match processor.load_csv(&path).await.unwrap() {
+            LoadedCsv::CardTrader(rows) => rows,
+            LoadedCsv::Cardmarket(_) => panic!("expected a CardTrader report"),
+        };
+        assert_eq!(rows.len(), 248);
+
+        let invoice = cardtrader_parser::consolidate(&rows, InvoiceRecipient::default()).unwrap();
+
+        // 4 rows net to zero (3 cancellations + 1 zero-value duplicate).
+        assert_eq!(invoice.row_count, 244);
+        assert_eq!(invoice.skipped_row_count, 4);
+
+        // Grouping collapses 244 billable rows into 175 positions.
+        assert_eq!(invoice.positions.len(), 175);
+        assert_eq!(invoice.total_quantity(), 244);
+
+        // Net of cancellations, excluding CardTrader fees entirely.
+        assert_eq!(invoice.total_cents(), 3794);
+        assert!((invoice.total() - 37.94).abs() < 1e-9);
+
+        // Both July 5 rows are fully cancelled, so the last *billable* sale is July 4.
+        // The invoice date deliberately reflects billable sales only.
+        assert_eq!(invoice.invoice_date, "2026-07-04");
+        assert_eq!(invoice.period_label, "2026-07-01 - 2026-07-04");
+        assert_eq!(invoice.currency, "EUR");
+        assert_eq!(invoice.recipient.name, "GRAY FOX SRL");
+
+        assert!(cardtrader_parser::validate_consolidated(&invoice).is_empty());
+    }
+
+    #[tokio::test]
+    async fn full_report_total_equals_sum_of_positions() {
+        let processor = CsvProcessor::new();
+        let path = fixtures_path().join("cardtrader_sales_report_full.csv");
+
+        let rows = match processor.load_csv(&path).await.unwrap() {
+            LoadedCsv::CardTrader(rows) => rows,
+            LoadedCsv::Cardmarket(_) => panic!("expected a CardTrader report"),
+        };
+        let invoice = cardtrader_parser::consolidate(&rows, InvoiceRecipient::default()).unwrap();
+
+        // Every billable row must land in exactly one position.
+        let summed: i64 = invoice.positions.iter().map(|p| p.total_cents).sum();
+        let quantity: u32 = invoice.positions.iter().map(|p| p.quantity).sum();
+        assert_eq!(summed, invoice.total_cents());
+        assert_eq!(quantity as usize, invoice.row_count);
+    }
+
+    #[tokio::test]
+    async fn edited_recipient_flows_into_the_invoice() {
+        let processor = CsvProcessor::new();
+        let path = fixtures_path().join("cardtrader_sales_report.csv");
+
+        let rows = match processor.load_csv(&path).await.unwrap() {
+            LoadedCsv::CardTrader(rows) => rows,
+            LoadedCsv::Cardmarket(_) => panic!("expected a CardTrader report"),
+        };
+
+        let recipient = InvoiceRecipient {
+            name: "ANOTHER BUYER SPA".to_string(),
+            street: "Via Roma 1".to_string(),
+            zip: "00100".to_string(),
+            city: "Roma".to_string(),
+            country: "Italien".to_string(),
+        };
+        let invoice = cardtrader_parser::consolidate(&rows, recipient.clone()).unwrap();
+
+        assert_eq!(invoice.recipient, recipient);
+        assert_eq!(
+            invoice.recipient.formatted_address(),
+            "ANOTHER BUYER SPA\nVia Roma 1\n00100 Roma\nItalien"
+        );
+        assert!(cardtrader_parser::validate_consolidated(&invoice).is_empty());
+    }
+}

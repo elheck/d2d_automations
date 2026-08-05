@@ -305,6 +305,75 @@ impl SevDeskApi {
 
         Ok(())
     }
+
+    /// Adds a position to an invoice, returning an error if the API rejects it.
+    ///
+    /// [`Self::add_invoice_position`] logs and swallows failures, which is
+    /// tolerable for small per-order invoices but would silently understate a
+    /// consolidated invoice built from many positions.
+    pub(crate) async fn add_invoice_position_strict(
+        &self,
+        invoice_id: &str,
+        position_number: u32,
+        name: &str,
+        description: &str,
+        quantity: f64,
+        price_gross: f64,
+    ) -> Result<()> {
+        debug!(
+            "Adding invoice position (strict) {position_number}: {quantity} x {name} @ {price_gross}"
+        );
+
+        // For Kleingewerbe (tax rule 11), no VAT is applied
+        let tax_rate = 0.0;
+        let price_net = price_gross;
+        let price_tax = 0.0;
+
+        let position = SevDeskInvoicePos {
+            invoice: SevDeskInvoiceRef {
+                id: invoice_id.to_string(),
+                object_name: "Invoice".to_string(),
+            },
+            part: None,
+            quantity,
+            price: price_net,
+            name: name.to_string(),
+            unity: SevDeskUnity {
+                id: 1,
+                object_name: "Unity".to_string(),
+            }, // Piece
+            position_number,
+            text: description.to_string(),
+            discount: None,
+            tax_rate,
+            price_net,
+            price_tax,
+            price_gross,
+        };
+
+        let create_position_url = format!("{}/InvoicePos", self.base_url);
+
+        let response = self
+            .client
+            .post(&create_position_url)
+            .header("Authorization", &self.api_token)
+            .header("Content-Type", "application/json")
+            .json(&position)
+            .send()
+            .await
+            .context("Failed to create invoice position")?;
+
+        let status = response.status();
+        debug!("Create position response status: {status}");
+
+        if !status.is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            error!("Failed to create invoice position: {status} - {error_text}");
+            anyhow::bail!("Failed to create invoice position: {status} - {error_text}");
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

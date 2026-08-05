@@ -29,6 +29,7 @@
 //! ```
 
 pub mod card_parser;
+pub mod cardtrader_parser;
 pub mod field_parsers;
 pub mod order_parser;
 pub mod validator;
@@ -37,7 +38,19 @@ use anyhow::{Context, Result};
 use log::{debug, info, warn};
 use std::path::Path;
 
-use crate::models::OrderRecord;
+use crate::models::{CardTraderSaleRow, OrderRecord};
+
+/// The kind of CSV that was loaded.
+///
+/// Cardmarket exports produce per-order invoices; a CardTrader sales report
+/// produces one consolidated invoice for the whole file.
+#[derive(Debug, Clone)]
+pub enum LoadedCsv {
+    /// Cardmarket order export - one invoice per order.
+    Cardmarket(Vec<OrderRecord>),
+    /// CardTrader sales report - a single consolidated invoice.
+    CardTrader(Vec<CardTraderSaleRow>),
+}
 
 /// CSV processor for Cardmarket order and inventory data.
 ///
@@ -64,6 +77,10 @@ impl CsvProcessor {
     ///
     /// # Returns
     /// A vector of parsed OrderRecord, or an error if the file cannot be read or parsed.
+    ///
+    /// The GUI uses [`Self::load_csv`] instead, which also recognises CardTrader
+    /// reports; this remains part of the library API for Cardmarket-only callers.
+    #[allow(dead_code)]
     pub async fn load_orders_from_csv<P: AsRef<Path>>(
         &self,
         file_path: P,
@@ -77,6 +94,40 @@ impl CsvProcessor {
 
         debug!("CSV file size: {} bytes", file_content.len());
         self.parse_csv_content(&file_content)
+    }
+
+    /// Loads a CSV file, detecting whether it is a Cardmarket export or a
+    /// CardTrader sales report.
+    ///
+    /// # Arguments
+    /// * `file_path` - Path to the CSV file
+    ///
+    /// # Returns
+    /// A [`LoadedCsv`] describing which format was found and its parsed contents.
+    pub async fn load_csv<P: AsRef<Path>>(&self, file_path: P) -> Result<LoadedCsv> {
+        let path = file_path.as_ref();
+        info!("Loading CSV file: {path:?}");
+
+        let file_content = tokio::fs::read_to_string(path)
+            .await
+            .context("Failed to read CSV file")?;
+
+        debug!("CSV file size: {} bytes", file_content.len());
+        self.parse_any_csv_content(&file_content)
+    }
+
+    /// Parses CSV content, routing to the CardTrader parser when the header
+    /// identifies a sales report and to the existing Cardmarket path otherwise.
+    pub fn parse_any_csv_content(&self, content: &str) -> Result<LoadedCsv> {
+        let header_line = content.lines().next().unwrap_or_default();
+
+        if cardtrader_parser::is_cardtrader_report(header_line) {
+            info!("Detected CardTrader sales report format");
+            let rows = cardtrader_parser::parse_sales_report(content)?;
+            return Ok(LoadedCsv::CardTrader(rows));
+        }
+
+        Ok(LoadedCsv::Cardmarket(self.parse_csv_content(content)?))
     }
 
     /// Parses CSV content, auto-detecting the format.

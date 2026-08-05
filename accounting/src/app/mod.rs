@@ -1,7 +1,10 @@
 mod logic;
 mod ui;
 
-use crate::models::{CheckAccountResponse, InvoiceCreationResult, OrderRecord, SendType};
+use crate::models::{
+    CardTraderSaleRow, CheckAccountResponse, ConsolidatedInvoice, InvoiceCreationResult,
+    InvoiceRecipient, OrderRecord, SendType,
+};
 
 use std::path::PathBuf;
 use tokio::runtime::Runtime;
@@ -38,6 +41,20 @@ pub struct InvoiceApp {
     pdf_download_path: Option<PathBuf>,
     // Order preview window
     show_order_preview: bool,
+    // CardTrader consolidated invoicing
+    /// Raw rows of a loaded CardTrader report. Empty for Cardmarket exports.
+    cardtrader_rows: Vec<CardTraderSaleRow>,
+    /// Editable recipient, only shown while a CardTrader report is loaded.
+    cardtrader_recipient: InvoiceRecipient,
+    /// Consolidated invoice recomputed whenever rows or recipient change.
+    consolidated_invoice: Option<ConsolidatedInvoice>,
+}
+
+impl InvoiceApp {
+    /// True when the currently loaded CSV is a CardTrader sales report.
+    pub(super) fn is_cardtrader_mode(&self) -> bool {
+        !self.cardtrader_rows.is_empty()
+    }
 }
 
 impl Default for InvoiceApp {
@@ -78,6 +95,10 @@ impl Default for InvoiceApp {
             pdf_download_path: None,
             // Order preview window - default to closed
             show_order_preview: false,
+            // CardTrader - inactive until a report is loaded
+            cardtrader_rows: Vec::new(),
+            cardtrader_recipient: InvoiceRecipient::default(),
+            consolidated_invoice: None,
         }
     }
 }
