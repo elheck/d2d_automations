@@ -11,6 +11,7 @@ use super::{
         AppState, BinAnalysisState, BuyHelperState, MispricingState, MoversState, PricingState,
         RestockState, Screen, SearchState, StockAnalysisState, StockListingState,
     },
+    style,
 };
 
 #[derive(Default)]
@@ -106,7 +107,43 @@ impl eframe::App for StockCheckerApp {
             }
         }
 
+        show_sync_report_banner(ctx, &mut self.app_state);
         show_sync_guard_modal(ctx, &mut self.app_state);
+    }
+}
+
+/// Banner reporting the result of the last inventory sync. Shown over whichever
+/// screen is active — a sync confirmed from the guard modal can land while the
+/// user is anywhere — and stays until dismissed.
+fn show_sync_report_banner(ctx: &egui::Context, app_state: &mut AppState) {
+    let Some(report) = &app_state.sync_report else {
+        return;
+    };
+    let summary = report.summary();
+    let failed = report.error.is_some();
+    let mut dismiss = false;
+
+    egui::Window::new("Inventory sync")
+        .collapsible(false)
+        .resizable(false)
+        .title_bar(false)
+        .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -16.0])
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if failed {
+                    style::status_error(ui, &format!("✖ {summary}"));
+                } else {
+                    style::status_ok(ui, &format!("✔ {summary}"));
+                }
+                ui.add_space(8.0);
+                if ui.button("Dismiss").clicked() {
+                    dismiss = true;
+                }
+            });
+        });
+
+    if dismiss {
+        app_state.sync_report = None;
     }
 }
 

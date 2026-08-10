@@ -65,6 +65,11 @@ pub struct AppState {
     /// A CSV import the safety check blocked, awaiting user confirmation.
     /// Rendered as a modal by the app shell on every screen.
     pub sync_guard: Option<SyncGuard>,
+    /// Outcome of the most recent inventory sync, shown as a banner by the app
+    /// shell until dismissed. Syncs are triggered from several screens (and can
+    /// be confirmed from the guard modal, which is not on any screen), so the
+    /// result is held here rather than in a per-screen state.
+    pub sync_report: Option<SyncReport>,
     /// Since-last-visit digest, computed once per app run on the welcome
     /// screen (`None` = not yet computed; `Err` = DB unavailable).
     pub digest: Option<Result<crate::inventory_db::VisitDigest, String>>,
@@ -87,6 +92,42 @@ pub struct SyncGuard {
     pub preview: crate::inventory_db::SyncPreview,
 }
 
+/// Result of the last inventory sync, in a form the GUI can render directly.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncReport {
+    /// Product category the sync was scoped to.
+    pub category: String,
+    /// Variants inserted or updated from the CSV.
+    pub upserted: usize,
+    /// In-stock variants missing from the CSV that were set to quantity 0.
+    pub zeroed: usize,
+    /// Set when the sync failed; `upserted`/`zeroed` are then meaningless.
+    pub error: Option<String>,
+    /// True when the user overrode a blocked sync from the guard modal.
+    pub forced: bool,
+}
+
+impl SyncReport {
+    /// One-line summary for the banner.
+    pub fn summary(&self) -> String {
+        match &self.error {
+            Some(e) => format!("Inventory sync failed ({}): {e}", self.category),
+            None => format!(
+                "{} sync ({}): {} variant{} updated, {} zeroed out",
+                if self.forced {
+                    "Forced inventory"
+                } else {
+                    "Inventory"
+                },
+                self.category,
+                self.upserted,
+                if self.upserted == 1 { "" } else { "s" },
+                self.zeroed
+            ),
+        }
+    }
+}
+
 impl AppState {
     /// Syncs a freshly loaded inventory CSV into the local DB, scoped to the
     /// category the CSV belongs to. When the safety check blocks the import (it
@@ -95,15 +136,36 @@ impl AppState {
     /// nothing is written until confirmed.
     pub fn sync_inventory_guarded(&mut self, cards: &[Card], category: &str) {
         match crate::inventory_db::sync_inventory(cards, category) {
-            Ok(crate::inventory_db::SyncOutcome::Synced(_)) => self.mark_db_changed(),
+            Ok(crate::inventory_db::SyncOutcome::Synced(stats)) => {
+                self.sync_report = Some(SyncReport {
+                    category: category.to_string(),
+                    upserted: stats.upserted,
+                    zeroed: stats.zeroed,
+                    error: None,
+                    forced: false,
+                });
+                self.mark_db_changed();
+            }
             Ok(crate::inventory_db::SyncOutcome::Blocked(preview)) => {
+                // No banner: the guard modal is the feedback, and confirming it
+                // produces its own report.
+                self.sync_report = None;
                 self.sync_guard = Some(SyncGuard {
                     cards: cards.to_vec(),
                     category: category.to_string(),
                     preview,
                 });
             }
-            Err(e) => log::warn!("Inventory DB sync failed: {e}"),
+            Err(e) => {
+                log::warn!("Inventory DB sync failed: {e}");
+                self.sync_report = Some(SyncReport {
+                    category: category.to_string(),
+                    upserted: 0,
+                    zeroed: 0,
+                    error: Some(e.to_string()),
+                    forced: false,
+                });
+            }
         }
     }
 
@@ -122,9 +184,25 @@ impl AppState {
                     stats.upserted,
                     stats.zeroed
                 );
+                self.sync_report = Some(SyncReport {
+                    category: category.to_string(),
+                    upserted: stats.upserted,
+                    zeroed: stats.zeroed,
+                    error: None,
+                    forced: true,
+                });
                 self.mark_db_changed();
             }
-            Err(e) => log::warn!("Forced inventory sync failed: {e}"),
+            Err(e) => {
+                log::warn!("Forced inventory sync failed: {e}");
+                self.sync_report = Some(SyncReport {
+                    category: category.to_string(),
+                    upserted: 0,
+                    zeroed: 0,
+                    error: Some(e.to_string()),
+                    forced: true,
+                });
+            }
         }
     }
 
@@ -155,6 +233,7 @@ impl Default for AppState {
             inventory_sync_status: ConnectionStatus::Unchecked,
             inventory_health_rx: None,
             sync_guard: None,
+            sync_report: None,
             digest: None,
             db_generation: 0,
         }
@@ -1177,3 +1256,7 @@ impl Default for SearchState {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "state_tests.rs"]
+mod tests;
