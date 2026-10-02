@@ -1,4 +1,5 @@
 mod logic;
+pub mod progress;
 mod ui;
 
 use crate::models::{
@@ -6,7 +7,9 @@ use crate::models::{
     InvoiceRecipient, OrderRecord, SendType,
 };
 
+use progress::ProgressTracker;
 use std::path::PathBuf;
+use std::time::Duration;
 use tokio::runtime::Runtime;
 
 #[derive(Debug, Clone)]
@@ -23,6 +26,10 @@ pub struct InvoiceApp {
     orders: Vec<OrderRecord>,
     processing_state: ProcessingState,
     results: Vec<InvoiceCreationResult>,
+    /// Live progress of the background invoice job, if one is running.
+    progress: Option<ProgressTracker>,
+    /// How long the last finished run took.
+    last_run_duration: Option<Duration>,
     api_connection_status: Option<bool>,
     runtime: Runtime,
     validation_errors: Vec<String>,
@@ -77,6 +84,8 @@ impl Default for InvoiceApp {
             orders: Vec::new(),
             processing_state: ProcessingState::Idle,
             results: Vec::new(),
+            progress: None,
+            last_run_duration: None,
             api_connection_status: None,
             runtime,
             validation_errors: Vec::new(),

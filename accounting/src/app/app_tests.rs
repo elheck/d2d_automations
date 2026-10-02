@@ -266,3 +266,85 @@ mod progress_calculation_tests {
         assert!((progress - 1.0).abs() < 0.001);
     }
 }
+
+mod invoice_worker_tests {
+    use super::logic::{run_invoice_jobs, InvoiceJob};
+    use super::progress::ProgressEvent;
+    use crate::models::{InvoiceWorkflowOptions, OrderRecord};
+    use crate::sevdesk_api::SevDeskApi;
+    use std::sync::mpsc;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn test_order(order_id: &str, name: &str) -> OrderRecord {
+        OrderRecord {
+            order_id: order_id.to_string(),
+            username: "testuser".to_string(),
+            name: name.to_string(),
+            street: "Hauptstraße 42".to_string(),
+            zip: "10115".to_string(),
+            city: "Berlin".to_string(),
+            country: "Deutschland".to_string(),
+            is_professional: None,
+            vat_number: None,
+            date_of_purchase: "2025-01-15 10:30:00".to_string(),
+            article_count: 1,
+            merchandise_value: "10,00".to_string(),
+            shipment_costs: "0,00".to_string(),
+            total_value: "10,00".to_string(),
+            commission: "1,00".to_string(),
+            currency: "EUR".to_string(),
+            description: "Lightning Bolt".to_string(),
+            product_id: "12345".to_string(),
+            localized_product_name: "Blitzschlag".to_string(),
+            items: vec![],
+        }
+    }
+
+    #[test]
+    fn job_label_contains_name_and_order_id() {
+        let job = InvoiceJob::Order(Box::new(test_order("ORD-1", "Alice")));
+        assert_eq!(job.label(), "Alice (ORD-1)");
+    }
+
+    #[tokio::test]
+    async fn worker_reports_every_item_and_closes_channel() {
+        // Every API call fails, so each order must surface as an error result
+        // without aborting the remaining orders.
+        let mock_server = MockServer::start().await;
+        Mock::given(wiremock::matchers::any())
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&mock_server)
+            .await;
+
+        let mut api = SevDeskApi::new("test_token".to_string());
+        api.base_url = mock_server.uri();
+
+        let jobs = vec![
+            InvoiceJob::Order(Box::new(test_order("ORD-1", "Alice"))),
+            InvoiceJob::Order(Box::new(test_order("ORD-2", "Bob"))),
+        ];
+        let (tx, rx) = mpsc::channel();
+
+        run_invoice_jobs(api, jobs, false, InvoiceWorkflowOptions::default(), tx).await;
+
+        let events: Vec<ProgressEvent> = rx.try_iter().collect();
+        assert_eq!(events.len(), 4);
+        assert!(
+            matches!(&events[0], ProgressEvent::ItemStarted { label } if label == "Alice (ORD-1)")
+        );
+        assert!(
+            matches!(&events[1], ProgressEvent::ItemFinished(r) if r.order_id == "ORD-1" && r.error.is_some())
+        );
+        assert!(
+            matches!(&events[2], ProgressEvent::ItemStarted { label } if label == "Bob (ORD-2)")
+        );
+        assert!(
+            matches!(&events[3], ProgressEvent::ItemFinished(r) if r.order_id == "ORD-2" && r.error.is_some())
+        );
+        // Sender was dropped with the worker: the GUI sees the run as done.
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
+}

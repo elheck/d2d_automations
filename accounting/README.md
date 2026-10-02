@@ -11,6 +11,7 @@ and CardTrader sales reports.
 - Full invoice workflow: finalize, send, enshrine, book, PDF download
 - Check account selection for booking
 - Dry-run mode for testing without API side effects
+- Invoices are created in the background with a live progress bar (current order and step, success/error counts, elapsed time and ETA)
 - Kleingewerbe tax rules (0% VAT, section 19 UStG)
 
 ## CSV Formats

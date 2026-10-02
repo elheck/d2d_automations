@@ -5,10 +5,21 @@ use log::info;
 
 use crate::models::SendType;
 
+use super::progress::format_duration;
 use super::{InvoiceApp, ProcessingState};
+
+/// How often the GUI refreshes while a background invoice job is running.
+const PROGRESS_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 impl eframe::App for InvoiceApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_progress();
+        let processing = self.progress.is_some();
+        if processing {
+            // Keep polling the worker and ticking the elapsed time.
+            ctx.request_repaint_after(PROGRESS_REPAINT_INTERVAL);
+        }
+
         self.render_order_preview_window(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -18,20 +29,23 @@ impl eframe::App for InvoiceApp {
                     ui.add_space(20.0);
                 });
 
-                self.render_api_token_section(ui);
-                ui.add_space(20.0);
-                self.render_csv_file_section(ui);
-                ui.add_space(20.0);
-                // Recipient address is only meaningful for CardTrader reports,
-                // which are billed as one invoice to a single recipient.
-                if self.is_cardtrader_mode() {
-                    self.render_cardtrader_section(ui);
+                // Inputs are locked while a job runs: it works on a snapshot of them.
+                ui.add_enabled_ui(!processing, |ui| {
+                    self.render_api_token_section(ui);
                     ui.add_space(20.0);
-                }
-                self.render_check_account_section(ui);
-                ui.add_space(20.0);
-                self.render_workflow_options_section(ui);
-                ui.add_space(20.0);
+                    self.render_csv_file_section(ui);
+                    ui.add_space(20.0);
+                    // Recipient address is only meaningful for CardTrader reports,
+                    // which are billed as one invoice to a single recipient.
+                    if self.is_cardtrader_mode() {
+                        self.render_cardtrader_section(ui);
+                        ui.add_space(20.0);
+                    }
+                    self.render_check_account_section(ui);
+                    ui.add_space(20.0);
+                    self.render_workflow_options_section(ui);
+                    ui.add_space(20.0);
+                });
                 self.render_processing_section(ui);
                 ui.add_space(20.0);
                 self.render_results_section(ui);
@@ -441,7 +455,10 @@ impl InvoiceApp {
     fn render_processing_section(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.dry_run_mode, "Dry Run Mode")
+                ui.add_enabled(
+                    self.progress.is_none(),
+                    egui::Checkbox::new(&mut self.dry_run_mode, "Dry Run Mode"),
+                )
                     .on_hover_text(
                         "Enable to simulate invoice creation without actually creating invoices in SevDesk",
                     );
@@ -518,8 +535,40 @@ impl InvoiceApp {
                         "Processing"
                     };
                     ui.label(format!("{action} invoices... ({current}/{total})"));
-                    let progress = *current as f32 / *total as f32;
-                    ui.add(egui::ProgressBar::new(progress));
+                    let progress = self
+                        .progress
+                        .as_ref()
+                        .map_or(0.0, |tracker| tracker.fraction());
+                    ui.add(
+                        egui::ProgressBar::new(progress)
+                            .show_percentage()
+                            .animate(true),
+                    );
+
+                    if let Some(tracker) = &self.progress {
+                        if let Some(item) = &tracker.current_item {
+                            ui.label(format!("Current: {item}"));
+                            ui.label(format!("Step: {}", tracker.step.label(tracker.dry_run)));
+                        }
+                        ui.horizontal(|ui| {
+                            ui.colored_label(
+                                egui::Color32::GREEN,
+                                format!("✓ {} successful", tracker.success_count),
+                            );
+                            ui.colored_label(
+                                egui::Color32::RED,
+                                format!("✗ {} errors", tracker.error_count),
+                            );
+                        });
+                        let eta = tracker
+                            .eta()
+                            .map(|eta| format!("~{} remaining", format_duration(eta)))
+                            .unwrap_or_else(|| "estimating remaining time...".to_string());
+                        ui.label(format!(
+                            "Elapsed: {} · {eta}",
+                            format_duration(tracker.elapsed())
+                        ));
+                    }
                 }
                 ProcessingState::Completed => {
                     let message = if self.dry_run_mode {
@@ -528,6 +577,13 @@ impl InvoiceApp {
                         "Processing completed!"
                     };
                     ui.colored_label(egui::Color32::GREEN, message);
+                    if let Some(duration) = self.last_run_duration {
+                        ui.label(format!(
+                            "{} invoices in {}",
+                            self.results.len(),
+                            format_duration(duration)
+                        ));
+                    }
                     if ui.button("Clear Results").clicked() {
                         info!("Clearing processing results");
                         self.results.clear();
