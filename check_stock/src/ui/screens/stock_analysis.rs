@@ -1,5 +1,7 @@
 use crate::{
-    inventory_db::{AgingBucket, DbStats, LotBreakdown, OldestInStockEntry, SalesVelocity},
+    inventory_db::{
+        AgingBucket, DbStats, LotBreakdown, LotTotals, OldestInStockEntry, SalesVelocity,
+    },
     io::read_csv_with_category,
     ui::{
         components::FilePicker,
@@ -450,6 +452,7 @@ impl StockAnalysisScreen {
         let mut edit = state.lot_cost_edit.take();
         let mut save: Option<(String, f64)> = None;
         let mut clear: Option<String> = None;
+        let mut invalid: Option<String> = None;
 
         egui::Grid::new("lot_breakdown")
             .num_columns(9)
@@ -465,11 +468,6 @@ impl StockAnalysisScreen {
                 header(ui, "Margin", LotSortColumn::Margin, state);
                 ui.label(egui::RichText::new("Payback").strong());
                 ui.end_row();
-
-                let mut total_stock_value = 0.0;
-                let mut total_sold_copies: i64 = 0;
-                let mut total_revenue = 0.0;
-                let mut total_cost = 0.0;
 
                 for lot in &sorted {
                     ui.label(&lot.lot);
@@ -503,13 +501,10 @@ impl StockAnalysisScreen {
                         // another cell). An empty value clears the recorded cost.
                         let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
                         if resp.lost_focus() || enter_pressed {
-                            let trimmed = buf.trim().replace(',', ".");
-                            if trimmed.is_empty() {
-                                clear = Some(lot.lot.clone());
-                            } else if let Ok(v) = trimmed.parse::<f64>() {
-                                if v >= 0.0 {
-                                    save = Some((lot.lot.clone(), v));
-                                }
+                            match crate::inventory_db::parse_lot_cost(buf) {
+                                Ok(Some(cost)) => save = Some((lot.lot.clone(), cost)),
+                                Ok(None) => clear = Some(lot.lot.clone()),
+                                Err(msg) => invalid = Some(msg),
                             }
                             edit = None;
                             ui.data_mut(|d| d.remove::<bool>(focus_flag));
@@ -576,29 +571,21 @@ impl StockAnalysisScreen {
                         }
                     }
                     ui.end_row();
-
-                    total_stock_value += lot.in_stock_value;
-                    total_sold_copies += lot.sold_copies;
-                    total_revenue += lot.sold_revenue;
-                    total_cost += lot.cost.unwrap_or(0.0);
                 }
 
                 // Totals row
-                let total_margin = if total_cost > 0.0 {
-                    Some((total_revenue - total_cost) / total_cost)
-                } else {
-                    None
-                };
+                let totals = LotTotals::of(sorted.iter().copied());
                 ui.label(egui::RichText::new("Total").strong());
                 ui.label("");
                 ui.label("");
-                ui.label(egui::RichText::new(format!("€{total_stock_value:.2}")).strong());
-                ui.label(egui::RichText::new(format!("×{total_sold_copies}")).strong());
-                ui.label(egui::RichText::new(format!("€{total_revenue:.2}")).strong());
-                ui.label(egui::RichText::new(format!("€{total_cost:.2}")).strong());
-                match total_margin {
+                ui.label(egui::RichText::new(format!("€{:.2}", totals.in_stock_value)).strong());
+                ui.label(egui::RichText::new(format!("×{}", totals.sold_copies)).strong());
+                ui.label(egui::RichText::new(format!("€{:.2}", totals.sold_revenue)).strong());
+                ui.label(egui::RichText::new(format!("€{:.2}", totals.cost)).strong());
+                match totals.realized_margin_fraction() {
                     Some(m) => {
-                        ui.label(egui::RichText::new(format!("{:+.0}%", m * 100.0)).strong());
+                        ui.label(egui::RichText::new(format!("{:+.0}%", m * 100.0)).strong())
+                            .on_hover_text("Across the lots that have a recorded cost");
                     }
                     None => {
                         ui.label(egui::RichText::new("—").strong());
@@ -612,7 +599,9 @@ impl StockAnalysisScreen {
 
         // Apply any DB action collected during rendering.
         let mut needs_refresh = false;
-        if let Some((lot, cost)) = save {
+        if let Some(msg) = invalid {
+            state.lot_cost_error = Some(msg);
+        } else if let Some((lot, cost)) = save {
             match crate::inventory_db::set_lot_cost(&lot, cost) {
                 Ok(()) => {
                     state.lot_cost_error = None;

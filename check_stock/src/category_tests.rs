@@ -95,10 +95,68 @@ fn known_non_magic_game_ids_get_their_own_scope() {
 }
 
 #[test]
-fn unknown_numeric_game_id_gets_synthetic_scope_not_magic() {
-    // An unrecognised game must never fall back to Magic — that would let its
-    // export zero out the Magic inventory.
-    assert_eq!(detect_category("inventory-report-99.csv", &[]), "Game99");
+fn unknown_numeric_suffix_is_decided_by_rows() {
+    // `inventory-report-5173.csv` is a plain Magic export: the number is not a
+    // game ID, so it must not open a category of its own.
+    assert_eq!(
+        detect_category("inventory-report-5173.csv", &[magic_card()]),
+        "Magic"
+    );
+    assert_eq!(
+        detect_category("inventory-report-5173.csv", &[generic_card()]),
+        "Generic"
+    );
+    assert_eq!(detect_category("inventory-report-5173.csv", &[]), "Magic");
+}
+
+#[test]
+fn duplicate_download_suffix_does_not_open_a_new_category() {
+    for name in [
+        "inventory-report-Magic (1).csv",
+        "inventory-report-Magic(2).csv",
+        "inventory-report-Magic (1) (2).csv",
+        "inventory-report-Magic - Copy.csv",
+        "inventory-report-magic copy.csv",
+        "inventory-report-45 (3).csv",
+    ] {
+        assert_eq!(detect_category(name, &[]), "Magic", "{name}");
+    }
+    assert_eq!(
+        detect_category("inventory-report-Generic (1).csv", &[magic_card()]),
+        "Generic"
+    );
+}
+
+#[test]
+fn canonical_category_folds_legacy_names() {
+    assert_eq!(
+        canonical_category("Magic (1)", true).as_deref(),
+        Some("Magic")
+    );
+    assert_eq!(
+        canonical_category("Generic (1)", false).as_deref(),
+        Some("Generic")
+    );
+    // Legacy synthetic scopes carry no information; the rows decide.
+    assert_eq!(
+        canonical_category("Game5173", true).as_deref(),
+        Some("Magic")
+    );
+    assert_eq!(
+        canonical_category("Game5173", false).as_deref(),
+        Some("Generic")
+    );
+    assert_eq!(
+        canonical_category("Game3", true).as_deref(),
+        Some("Pokemon")
+    );
+}
+
+#[test]
+fn canonical_category_leaves_canonical_names_alone() {
+    for name in ["Magic", "Generic", "Pokemon", "Gamers"] {
+        assert_eq!(canonical_category(name, true), None, "{name}");
+    }
 }
 
 #[test]

@@ -19,14 +19,16 @@ use std::path::Path;
 /// schema migration backfills this value (see `MIGRATION_ADD_CATEGORY`).
 pub const DEFAULT_CATEGORY: &str = "Magic";
 
+/// The category of accessories (sleeves, deck boxes, playmats).
+pub const GENERIC_CATEGORY: &str = "Generic";
+
 /// Cardmarket's numeric game ID for Magic, as it appears in `inventory-report-45.csv`.
 const MAGIC_GAME_ID: &str = "45";
 
 /// Maps Cardmarket's numeric game IDs to the names we store.
 ///
-/// Only IDs we have actually seen in exports are listed; anything else falls
-/// through to the raw suffix so an unknown game still gets its own scope rather
-/// than being silently merged into Magic.
+/// Only IDs we have actually seen in exports are listed. Any other number is
+/// treated as carrying no category information (see [`category_from_filename`]).
 const GAME_IDS: &[(&str, &str)] = &[
     (MAGIC_GAME_ID, "Magic"),
     ("1", "Magic"),
@@ -58,12 +60,14 @@ pub fn detect_category(path: &str, cards: &[Card]) -> String {
 
 /// Extracts the category from an `inventory-report-<suffix>.csv` filename.
 ///
-/// Numeric suffixes are Cardmarket game IDs and are mapped to names; textual
-/// suffixes (`Generic`) are used as-is. Returns `None` for filenames that carry
-/// no usable suffix, leaving the decision to content inspection.
+/// Known numeric suffixes are Cardmarket game IDs and are mapped to names;
+/// textual suffixes (`Generic`) are used as-is, after [`canonical_category`]
+/// has removed any duplicate-download decoration. Returns `None` for filenames
+/// that carry no usable suffix — including numeric suffixes we have no name for
+/// — leaving the decision to content inspection.
 fn category_from_filename(path: &str) -> Option<String> {
     let stem = Path::new(path).file_stem()?.to_str()?;
-    let suffix = strip_report_prefix(stem)?.trim();
+    let suffix = strip_duplicate_marker(strip_report_prefix(stem)?);
     if suffix.is_empty() {
         return None;
     }
@@ -75,13 +79,68 @@ fn category_from_filename(path: &str) -> Option<String> {
         return Some((*name).to_string());
     }
 
-    // A purely numeric suffix we don't have a name for is still a distinct game;
-    // scope it under a stable synthetic name rather than guessing at Magic.
+    // A number we have no name for is not evidence of a separate game:
+    // Cardmarket also names reports `inventory-report-5173.csv` for a plain
+    // Magic export. Giving it a scope of its own (`Game5173`) duplicated the
+    // whole inventory, so the rows decide instead.
     if suffix.bytes().all(|b| b.is_ascii_digit()) {
-        return Some(format!("Game{suffix}"));
+        return None;
     }
 
     Some(normalize_name(suffix))
+}
+
+/// Maps a stored category name onto the name the current detection rules would
+/// produce, or `None` when it is already canonical.
+///
+/// Older versions scoped `inventory-report-Magic (1).csv` as `Magic (1)` and
+/// `inventory-report-5173.csv` as `Game5173`, splitting one inventory across
+/// several categories. `has_card_metadata` says whether the category's rows
+/// look like cards (see [`category_from_rows`]); it settles the legacy
+/// `Game<digits>` names, which carry no information of their own.
+pub fn canonical_category(name: &str, has_card_metadata: bool) -> Option<String> {
+    let stripped = strip_duplicate_marker(name);
+    let legacy_game_id = stripped
+        .strip_prefix("Game")
+        .filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()));
+
+    let canonical = match legacy_game_id {
+        Some(id) => match GAME_IDS.iter().find(|(known, _)| *known == id) {
+            Some((_, known_name)) => (*known_name).to_string(),
+            None if has_card_metadata => DEFAULT_CATEGORY.to_string(),
+            None => GENERIC_CATEGORY.to_string(),
+        },
+        None => normalize_name(stripped),
+    };
+    (canonical != name && !canonical.is_empty()).then_some(canonical)
+}
+
+/// Removes the decoration browsers and file managers add to a repeated
+/// download — `Magic (1)`, `Magic(2)`, `Magic - Copy`, `Magic copy` — so every
+/// copy of an export lands in the same category.
+fn strip_duplicate_marker(name: &str) -> &str {
+    let mut name = name.trim();
+    loop {
+        let before = name;
+        if let Some(open) = name.rfind('(') {
+            let inner = &name[open + 1..];
+            if let Some(digits) = inner.strip_suffix(')') {
+                if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+                    name = name[..open].trim_end();
+                }
+            }
+        }
+        let lower = name.to_lowercase();
+        for marker in [" - copy", " copy"] {
+            if lower.ends_with(marker) {
+                name = name[..name.len() - marker.len()].trim_end();
+                break;
+            }
+        }
+        if name == before {
+            return name;
+        }
+    }
 }
 
 /// Strips a leading `inventory-report-` / `inventory_report_` marker (in any
@@ -123,7 +182,7 @@ fn category_from_rows(cards: &[Card]) -> Option<String> {
     if has_card_metadata {
         None
     } else {
-        Some("Generic".to_string())
+        Some(GENERIC_CATEGORY.to_string())
     }
 }
 

@@ -21,7 +21,11 @@ showing exactly what would change before anything is written.
   table: per-lot revenue, remaining stock value, and — once you record a lot's
   acquisition cost — realized margin % and payback status. Click a Cost cell to
   enter or correct a lot's purchase price; the figure is saved to the inventory DB
-  (`lot_costs` table) and can be edited or cleared at any time.
+  (`lot_costs` table) and can be edited or cleared at any time. Stock and sales
+  are tracked per lot (`lot_stock` table): a card held in several lots counts in
+  each, a sale is credited to the lot the copies left, and revenue keeps the
+  price the copies sold at. The Total margin covers only lots with a recorded
+  cost.
 - **Bin Analysis** — Bin capacity utilization and free-slot analysis, plus two
   consolidation tools:
   - **Consolidation suggestions** — empties sparse bins into fuller ones (preferring
@@ -130,7 +134,17 @@ category, so every sync is scoped to one:
 
 The category is taken from the filename (`inventory-report-<game id or name>`);
 if the file has been renamed, it is inferred from the rows instead (accessory
-rows carry no set, collector number or rarity). Databases created before
+rows carry no set, collector number or rarity). Duplicate-download decorations
+(`inventory-report-Magic (1).csv`, `… - Copy.csv`) are ignored, and a number
+that is not a known game ID (`inventory-report-5173.csv`) says nothing about
+the category, so the rows decide there too.
+
+Earlier versions gave such files a category of their own (`Magic (1)`,
+`Game5173`), splitting one inventory into several copies. These are merged back
+automatically the next time the database is opened: stock comes from the most
+recently synced copy, sold counts are reconciled so a sale seen by several
+copies counts once, and a `pre-category-merge-<date>.inventory.db.bak` backup is
+written next to the database first. Databases created before
 category tracking are migrated automatically, with all existing rows attributed
 to `Magic` and their quantities, sold history and dates preserved.
 
@@ -145,6 +159,8 @@ categories:
   acquisition cost for the whole purchase. Sleeves bought alongside the cards
   count towards the same lot's stock value, revenue, margin and payback;
   splitting them out would measure half a lot against a full lot's cost.
+  A variant whose whole stock moves to a single other lot without growing is
+  treated as relabelled and takes its sales history along.
 - **Restock recommendations** — fast-moving accessories are as worth re-buying
   as cards, and each candidate keeps its source lot.
 - **Welcome digest** and **daily inventory snapshots** — whole-business position.

@@ -2512,11 +2512,10 @@ fn unscoped_restock_does_not_merge_same_id_across_categories() {
 
 #[test]
 fn lot_revenue_follows_a_variant_that_moved_lots() {
-    // When a variant's location changes, the upsert overwrites `location`, so
-    // its whole history (including copies sold while it sat in the old lot)
-    // moves to the new lot. Revenue is derived from the current location, not
-    // from where the copies sold — this is the documented behaviour, and the
-    // lot table must reflect the move rather than keeping a stale split.
+    // A variant whose whole stock changes lot without growing was relabelled:
+    // its history (including copies sold while it carried the old label) moves
+    // to the new lot, and the lot table must reflect the move rather than
+    // keeping a stale split.
     let mut conn = test_conn();
     let mut before = make_generic("716833", "Sleeves", "10");
     before.location = Some("A-0-0-0-L22-R".to_string());
@@ -2576,4 +2575,504 @@ fn forced_sync_writes_the_same_lot_figures_as_a_normal_one() {
     assert_eq!(a[0].sold_copies, b[0].sold_copies);
     assert!((a[0].sold_revenue - b[0].sold_revenue).abs() < 0.001);
     assert!((a[0].sold_revenue - 18.0).abs() < 0.001, "9 × €2");
+}
+
+// ── Per-lot stock tracking ───────────────────────────────────────────────────
+
+fn card_in(id: &str, qty: &str, price: &str, location: &str) -> Card {
+    let mut card = make_card(id, "Card", qty);
+    card.price = price.to_string();
+    card.location = Some(location.to_string());
+    card
+}
+
+fn lot<'a>(lots: &'a [LotBreakdown], name: &str) -> &'a LotBreakdown {
+    lots.iter()
+        .find(|l| l.lot == name)
+        .unwrap_or_else(|| panic!("no lot {name} in {lots:?}"))
+}
+
+#[test]
+fn variant_stored_in_two_lots_is_counted_in_each() {
+    // inventory_cards keeps one location per variant; the lot table must not
+    // credit the whole stock to whichever location happened to be kept.
+    let mut conn = test_conn();
+    let cards = [
+        card_in("1", "3", "2.00", "A-0-0-1-L4-R"),
+        card_in("1", "5", "2.00", "A-0-0-2-L24-R"),
+    ];
+    sync_inventory_conn(&mut conn, &cards, "2026-01-01").unwrap();
+
+    let lots = super::lot_breakdown_from(&conn).unwrap();
+    assert_eq!(lots.len(), 2);
+    assert_eq!(lot(&lots, "L4").in_stock_copies, 3);
+    assert_eq!(lot(&lots, "L4").in_stock_listings, 1);
+    assert!((lot(&lots, "L4").in_stock_value - 6.0).abs() < 0.001);
+    assert_eq!(lot(&lots, "L24").in_stock_copies, 5);
+    assert!((lot(&lots, "L24").in_stock_value - 10.0).abs() < 0.001);
+}
+
+#[test]
+fn sale_is_credited_to_the_lot_the_copies_left() {
+    let mut conn = test_conn();
+    let before = [
+        card_in("1", "3", "2.00", "A-0-0-1-L4-R"),
+        card_in("1", "5", "2.00", "A-0-0-2-L24-R"),
+    ];
+    sync_inventory_conn(&mut conn, &before, "2026-01-01").unwrap();
+    let after = [
+        card_in("1", "3", "2.00", "A-0-0-1-L4-R"),
+        card_in("1", "1", "2.00", "A-0-0-2-L24-R"),
+    ];
+    sync_inventory_conn(&mut conn, &after, "2026-01-02").unwrap();
+
+    let lots = super::lot_breakdown_from(&conn).unwrap();
+    assert_eq!(lot(&lots, "L4").sold_copies, 0);
+    assert_eq!(lot(&lots, "L24").sold_copies, 4);
+    assert!((lot(&lots, "L24").sold_revenue - 8.0).abs() < 0.001);
+}
+
+#[test]
+fn lot_revenue_keeps_the_price_the_copies_sold_at() {
+    // Repricing the remaining stock must not rewrite what past sales earned.
+    let mut conn = test_conn();
+    sync_inventory_conn(
+        &mut conn,
+        &[card_in("1", "3", "137", "A-0-0-0-L26-R")],
+        "2026-01-01",
+    )
+    .unwrap();
+    sync_inventory_conn(
+        &mut conn,
+        &[card_in("1", "1", "125", "A-0-0-0-L26-R")],
+        "2026-01-02",
+    )
+    .unwrap();
+
+    let lots = super::lot_breakdown_from(&conn).unwrap();
+    let l26 = lot(&lots, "L26");
+    assert_eq!(l26.sold_copies, 2);
+    assert!(
+        (l26.sold_revenue - 274.0).abs() < 0.001,
+        "{}",
+        l26.sold_revenue
+    );
+    assert!((l26.in_stock_value - 125.0).abs() < 0.001);
+}
+
+#[test]
+fn sold_out_variant_is_credited_to_its_lot() {
+    let mut conn = test_conn();
+    sync_inventory_conn(
+        &mut conn,
+        &[card_in("1", "2", "3.00", "A-0-0-0-L5-R")],
+        "2026-01-01",
+    )
+    .unwrap();
+    sync_inventory_conn(&mut conn, &[], "2026-01-02").unwrap();
+
+    let lots = super::lot_breakdown_from(&conn).unwrap();
+    let l5 = lot(&lots, "L5");
+    assert_eq!(l5.in_stock_copies, 0);
+    assert_eq!(l5.in_stock_listings, 0);
+    assert_eq!(l5.sold_copies, 2);
+    assert!((l5.sold_revenue - 6.0).abs() < 0.001);
+}
+
+#[test]
+fn stock_shifting_between_lots_is_not_a_sale() {
+    let mut conn = test_conn();
+    let before = [
+        card_in("1", "4", "1.00", "A-0-0-1-L4-R"),
+        card_in("1", "4", "1.00", "A-0-0-2-L24-R"),
+    ];
+    sync_inventory_conn(&mut conn, &before, "2026-01-01").unwrap();
+    // Two copies re-shelved from L4 to L24, one sold.
+    let after = [
+        card_in("1", "1", "1.00", "A-0-0-1-L4-R"),
+        card_in("1", "6", "1.00", "A-0-0-2-L24-R"),
+    ];
+    sync_inventory_conn(&mut conn, &after, "2026-01-02").unwrap();
+
+    let lots = super::lot_breakdown_from(&conn).unwrap();
+    assert_eq!(lot(&lots, "L4").sold_copies, 1);
+    assert_eq!(lot(&lots, "L24").sold_copies, 0);
+    assert_eq!(lot(&lots, "L4").in_stock_copies, 1);
+    assert_eq!(lot(&lots, "L24").in_stock_copies, 6);
+}
+
+#[test]
+fn restock_from_a_new_purchase_is_not_a_relabel() {
+    // L5 sold out, then more copies arrived with lot L25: the copies grew, so
+    // L5 keeps its sales instead of handing them to L25.
+    let mut conn = test_conn();
+    sync_inventory_conn(
+        &mut conn,
+        &[card_in("1", "5", "1.00", "A-0-0-0-L5-R")],
+        "2026-01-01",
+    )
+    .unwrap();
+    sync_inventory_conn(
+        &mut conn,
+        &[card_in("1", "2", "1.00", "A-0-0-0-L5-R")],
+        "2026-01-02",
+    )
+    .unwrap();
+    sync_inventory_conn(
+        &mut conn,
+        &[card_in("1", "4", "1.00", "A-0-0-0-L25-R")],
+        "2026-01-03",
+    )
+    .unwrap();
+
+    let lots = super::lot_breakdown_from(&conn).unwrap();
+    assert_eq!(lot(&lots, "L5").sold_copies, 3);
+    assert_eq!(lot(&lots, "L5").in_stock_copies, 0);
+    assert_eq!(lot(&lots, "L25").sold_copies, 0);
+    assert_eq!(lot(&lots, "L25").in_stock_copies, 4);
+}
+
+#[test]
+fn lot_sold_copies_match_variant_sold_quantity() {
+    let mut conn = test_conn();
+    let before = [
+        card_in("1", "3", "1.00", "A-0-0-1-L4-R"),
+        card_in("1", "5", "1.00", "A-0-0-2-L24-R"),
+        card_in("2", "7", "1.00", "A-0-0-2-L24-R"),
+    ];
+    sync_inventory_conn(&mut conn, &before, "2026-01-01").unwrap();
+    let after = [card_in("1", "2", "1.00", "A-0-0-2-L24-R")];
+    sync_inventory_conn(&mut conn, &after, "2026-01-02").unwrap();
+
+    let lots = super::lot_breakdown_from(&conn).unwrap();
+    let lot_sold: i64 = lots.iter().map(|l| l.sold_copies).sum();
+    assert_eq!(lot_sold, sold_qty(&conn, "1") + sold_qty(&conn, "2"));
+    assert_eq!(lot_sold, 13);
+}
+
+#[test]
+fn allocate_sold_serves_largest_drop_first_and_caps_at_the_drop() {
+    let mut lots = std::collections::BTreeMap::new();
+    for (name, old, new) in [("L1", 5, 4), ("L2", 6, 2), ("L3", 1, 3)] {
+        lots.insert(
+            name.to_string(),
+            super::LotDelta {
+                old_quantity: old,
+                new_quantity: new,
+                new_value: 0.0,
+            },
+        );
+    }
+    let allocation = super::allocate_sold_to_lots(&lots, 3);
+    assert_eq!(allocation.get("L2"), Some(&3));
+    assert_eq!(allocation.get("L1"), None);
+
+    let allocation = super::allocate_sold_to_lots(&lots, 5);
+    assert_eq!(allocation.get("L2"), Some(&4));
+    assert_eq!(allocation.get("L1"), Some(&1));
+}
+
+#[test]
+fn allocate_sold_puts_unexplained_copies_on_the_largest_lot() {
+    let mut lots = std::collections::BTreeMap::new();
+    for (name, old, new) in [("L1", 2, 2), ("L2", 6, 5)] {
+        lots.insert(
+            name.to_string(),
+            super::LotDelta {
+                old_quantity: old,
+                new_quantity: new,
+                new_value: 0.0,
+            },
+        );
+    }
+    let allocation = super::allocate_sold_to_lots(&lots, 4);
+    assert_eq!(allocation.get("L2"), Some(&4));
+    assert_eq!(allocation.values().sum::<i64>(), 4);
+}
+
+#[test]
+fn discard_takes_copies_out_of_their_lot_without_a_sale() {
+    let mut conn = test_conn();
+    let cards = [
+        card_in("1", "4", "2.00", "A-0-0-1-L4-R"),
+        card_in("1", "4", "2.00", "A-0-0-2-L24-R"),
+    ];
+    sync_inventory_conn(&mut conn, &cards, "2026-01-01").unwrap();
+    discard_cards_conn(&mut conn, &[(cards[1].clone(), 3)]).unwrap();
+
+    let lots = super::lot_breakdown_from(&conn).unwrap();
+    assert_eq!(lot(&lots, "L4").in_stock_copies, 4);
+    assert_eq!(lot(&lots, "L24").in_stock_copies, 1);
+    assert!((lot(&lots, "L24").in_stock_value - 2.0).abs() < 0.001);
+    assert_eq!(lot(&lots, "L24").sold_copies, 0);
+}
+
+// ── Lot totals and cost input ────────────────────────────────────────────────
+
+#[test]
+fn lot_totals_margin_ignores_revenue_of_uncosted_lots() {
+    let lots = [lot_with(Some(100.0), 150.0), lot_with(None, 1000.0)];
+    let totals = LotTotals::of(&lots);
+    assert!((totals.sold_revenue - 1150.0).abs() < 0.001);
+    assert!((totals.cost - 100.0).abs() < 0.001);
+    let margin = totals.realized_margin_fraction().unwrap();
+    assert!((margin - 0.5).abs() < 0.001, "got {margin}");
+}
+
+#[test]
+fn lot_totals_margin_none_without_any_cost() {
+    let totals = LotTotals::of(&[lot_with(None, 10.0)]);
+    assert_eq!(totals.realized_margin_fraction(), None);
+}
+
+#[test]
+fn parse_lot_cost_accepts_amounts_and_empty() {
+    assert_eq!(parse_lot_cost(""), Ok(None));
+    assert_eq!(parse_lot_cost("   "), Ok(None));
+    assert_eq!(parse_lot_cost("42.5"), Ok(Some(42.5)));
+    assert_eq!(parse_lot_cost(" 42,50 "), Ok(Some(42.5)));
+    assert_eq!(parse_lot_cost("€342"), Ok(Some(342.0)));
+    assert_eq!(parse_lot_cost("0"), Ok(Some(0.0)));
+}
+
+#[test]
+fn parse_lot_cost_rejects_invalid_amounts() {
+    for input in ["abc", "-1", "inf", "infinity", "NaN", "1e999", "12 34"] {
+        assert!(parse_lot_cost(input).is_err(), "{input}");
+    }
+}
+
+#[test]
+fn set_lot_cost_rejects_non_finite_and_negative() {
+    let conn = test_conn();
+    for cost in [f64::INFINITY, f64::NAN, -1.0] {
+        assert!(set_lot_cost_conn(&conn, "L5", cost, "2026-01-01").is_err());
+    }
+    assert!(lot_costs_map(&conn).unwrap().is_empty());
+}
+
+// ── Split-category repair ────────────────────────────────────────────────────
+
+/// Reproduces the split: the same export synced under the names older filename
+/// rules produced for it.
+fn split_category_db() -> Connection {
+    let mut conn = test_conn();
+    // "Magic" sees 5 copies, then misses a while.
+    super::sync_inventory_conn(
+        &mut conn,
+        &[card_in("1", "5", "1.00", "A-0-0-0-L5-R")],
+        "Magic",
+        "2026-01-01",
+    )
+    .unwrap();
+    // "Magic (1)" sees the card at 4, a box that just arrived, and a card that
+    // sells out before "Magic" ever sees it.
+    let seen = [
+        card_in("1", "4", "1.00", "A-0-0-0-L5-R"),
+        card_in("box", "3", "137", "A-0-0-0-L26-R"),
+        card_in("gone", "2", "5.00", "A-0-0-0-L5-R"),
+    ];
+    super::sync_inventory_conn(&mut conn, &seen, "Magic (1)", "2026-01-02").unwrap();
+    let seen = [
+        card_in("1", "3", "1.00", "A-0-0-0-L5-R"),
+        card_in("box", "3", "137", "A-0-0-0-L26-R"),
+    ];
+    super::sync_inventory_conn(&mut conn, &seen, "Magic (1)", "2026-01-03").unwrap();
+    // The current state, synced as both "Magic" and "Game5173".
+    let now = [
+        card_in("1", "3", "1.00", "A-0-0-0-L5-R"),
+        card_in("box", "1", "125", "A-0-0-0-L26-R"),
+    ];
+    super::sync_inventory_conn(&mut conn, &now, "Magic", "2026-01-04").unwrap();
+    super::sync_inventory_conn(&mut conn, &now, "Game5173", "2026-01-05").unwrap();
+    conn
+}
+
+fn repair(conn: &mut Connection, today: &str) {
+    let merges = super::pending_category_merges(conn).unwrap();
+    super::merge_categories_conn(conn, &merges, today).unwrap();
+    super::backfill_lot_stock_conn(conn).unwrap();
+}
+
+#[test]
+fn pending_merges_group_split_categories_under_their_real_one() {
+    let conn = split_category_db();
+    let merges = super::pending_category_merges(&conn).unwrap();
+    assert_eq!(merges.len(), 1);
+    assert_eq!(merges[0].canonical, "Magic");
+    assert_eq!(merges[0].members, ["Game5173", "Magic", "Magic (1)"]);
+}
+
+#[test]
+fn pending_merges_empty_for_a_healthy_db() {
+    let mut conn = test_conn();
+    sync_inventory_conn(&mut conn, &[make_card("1", "Card", "1")], "2026-01-01").unwrap();
+    super::sync_inventory_conn(
+        &mut conn,
+        &[make_generic("716833", "Sleeves", "3")],
+        GENERIC,
+        "2026-01-01",
+    )
+    .unwrap();
+    assert!(super::pending_category_merges(&conn).unwrap().is_empty());
+}
+
+#[test]
+fn merge_leaves_one_row_per_variant_in_the_canonical_category() {
+    let mut conn = split_category_db();
+    repair(&mut conn, "2026-01-06");
+
+    assert_eq!(get_categories_conn(&conn).unwrap(), ["Magic"]);
+    assert_eq!(count_rows(&conn), 3);
+    assert!(super::pending_category_merges(&conn).unwrap().is_empty());
+}
+
+#[test]
+fn merge_takes_stock_from_the_latest_sync_and_recovers_missed_sales() {
+    let mut conn = split_category_db();
+    repair(&mut conn, "2026-01-06");
+
+    let qty_sold = |id: &str| -> (i64, i64) {
+        conn.query_row(
+            "SELECT quantity, sold_quantity FROM inventory_cards WHERE cardmarket_id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    };
+    // Seen dropping 5 → 3 by "Magic" and 4 → 3 by "Magic (1)": two sales, not three.
+    assert_eq!(qty_sold("1"), (3, 2));
+    // "Magic" only ever saw one box; the two that sold were known to "Magic (1)".
+    assert_eq!(qty_sold("box"), (1, 2));
+    // Listed and sold out entirely within "Magic (1)"'s view.
+    assert_eq!(qty_sold("gone"), (0, 2));
+}
+
+#[test]
+fn merge_keeps_one_view_of_each_variants_sold_events() {
+    let mut conn = split_category_db();
+    repair(&mut conn, "2026-01-06");
+
+    let events = get_sold_events_conn(&conn).unwrap();
+    let copies = |id: &str| -> i64 {
+        events
+            .iter()
+            .filter(|e| e.cardmarket_id == id)
+            .map(|e| e.copies)
+            .sum()
+    };
+    assert_eq!(
+        copies("1"),
+        2,
+        "Magic's 5 → 3, without Magic (1)'s 4 → 3 on top"
+    );
+    assert_eq!(copies("gone"), 2);
+    let stray: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sold_events WHERE category != 'Magic'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(stray, 0);
+}
+
+#[test]
+fn merge_rebuilds_the_lot_table_without_duplicates() {
+    let mut conn = split_category_db();
+    // Before the repair the box is listed once per split category.
+    let before = super::lot_breakdown_from(&conn).unwrap();
+    assert_eq!(lot(&before, "L26").in_stock_copies, 5);
+
+    repair(&mut conn, "2026-01-06");
+    let lots = super::lot_breakdown_from(&conn).unwrap();
+    let l26 = lot(&lots, "L26");
+    assert_eq!(l26.in_stock_listings, 1);
+    assert_eq!(l26.in_stock_copies, 1);
+    assert!((l26.in_stock_value - 125.0).abs() < 0.001);
+    assert_eq!(l26.sold_copies, 2);
+    let l5 = lot(&lots, "L5");
+    assert_eq!(l5.in_stock_copies, 3);
+    assert_eq!(l5.sold_copies, 4);
+    // Card 1: two events at €1. "gone": two events at €5.
+    assert!(
+        (l5.sold_revenue - 12.0).abs() < 0.001,
+        "{}",
+        l5.sold_revenue
+    );
+}
+
+#[test]
+fn merge_rewrites_snapshots_from_the_split_period() {
+    let mut conn = split_category_db();
+    repair(&mut conn, "2026-01-06");
+
+    let snaps = read_snapshots_conn(&conn).unwrap();
+    let sold: Vec<(&str, i64)> = snaps
+        .iter()
+        .map(|s| (s.date.as_str(), s.sold_copies_cumulative))
+        .collect();
+    assert_eq!(snaps.last().unwrap().date, "2026-01-06");
+    assert_eq!(snaps.last().unwrap().in_stock_copies, 4);
+    assert_eq!(snaps.last().unwrap().sold_copies_cumulative, 6);
+    assert!(
+        sold.windows(2).all(|w| w[0].1 <= w[1].1),
+        "cumulative sold must never fall: {sold:?}"
+    );
+    // Untouched: taken before the first split category appeared.
+    assert_eq!(sold[0], ("2026-01-01", 0));
+}
+
+#[test]
+fn sync_after_merge_records_no_phantom_sales() {
+    let mut conn = split_category_db();
+    repair(&mut conn, "2026-01-06");
+    let now = [
+        card_in("1", "3", "1.00", "A-0-0-0-L5-R"),
+        card_in("box", "1", "125", "A-0-0-0-L26-R"),
+    ];
+    let before = get_sold_events_conn(&conn).unwrap().len();
+    sync_inventory_conn(&mut conn, &now, "2026-01-07").unwrap();
+
+    assert_eq!(get_sold_events_conn(&conn).unwrap().len(), before);
+    let lots = super::lot_breakdown_from(&conn).unwrap();
+    assert_eq!(lot(&lots, "L26").sold_copies, 2);
+    assert_eq!(lot(&lots, "L5").sold_copies, 4);
+}
+
+#[test]
+fn backfill_seeds_lots_for_a_db_from_before_lot_tracking() {
+    let mut conn = test_conn();
+    sync_inventory_conn(
+        &mut conn,
+        &[card_in("1", "5", "2.00", "A-0-0-0-L5-R")],
+        "2026-01-01",
+    )
+    .unwrap();
+    sync_inventory_conn(
+        &mut conn,
+        &[card_in("1", "3", "3.00", "A-0-0-0-L5-R")],
+        "2026-01-02",
+    )
+    .unwrap();
+    // One sale predates the event log: bump sold_quantity without an event.
+    conn.execute("UPDATE inventory_cards SET sold_quantity = 3", [])
+        .unwrap();
+    conn.execute("DELETE FROM lot_stock", []).unwrap();
+
+    super::backfill_lot_stock_conn(&mut conn).unwrap();
+    let lots = super::lot_breakdown_from(&conn).unwrap();
+    let l5 = lot(&lots, "L5");
+    assert_eq!(l5.in_stock_copies, 3);
+    assert!((l5.in_stock_value - 9.0).abs() < 0.001);
+    assert_eq!(l5.sold_copies, 3);
+    // Two recorded at €2 (the price they sold at), one valued at today's €3.
+    assert!((l5.sold_revenue - 7.0).abs() < 0.001, "{}", l5.sold_revenue);
+
+    // Already seeded: a second run changes nothing.
+    super::backfill_lot_stock_conn(&mut conn).unwrap();
+    assert_eq!(
+        lot(&super::lot_breakdown_from(&conn).unwrap(), "L5").sold_copies,
+        3
+    );
 }
