@@ -9,7 +9,7 @@ projects: API types, HTTP clients, and caching primitives.
 | Module | Contents |
 |--------|----------|
 | `scryfall` | `ScryfallCard` (superset of fields used across projects), `ImageUris`, `CardFace`, `ScryfallPrices`, `PurchaseUris`, and fetch functions (`fetch_card`, `fetch_card_by_cardmarket_id`, `fetch_card_by_name`, `fetch_image`) |
-| `cardmarket` | `PriceGuide` (lookup by product ID with `load`/`fetch`), `PriceGuideEntry`, `PriceGuideFile` |
+| `cardmarket` | `PriceGuide` (lookup by product ID with `load`/`fetch`), `PriceGuideEntry`, `PriceGuideFile`, and `product_url(id)` — the Cardmarket page of any product id (`Products?idProduct=…`, the same link Scryfall/MTGJSON publish; singles and sealed) |
 | `inventory_sync` | Wire types (`ApiResponse`, `LatestPrice`, `PriceSnapshot`, `PriceData`, …) shared between the `inventory_sync` server (serializes) and client apps (deserialize), the `InventorySyncClient` HTTP client (`health`, `search`, `latest_prices`, `price_history`, `price_snapshots` — chunks ids and dates to the server limits), and `PriceField`/`PriceFields` — the foil-aware selector for the 12 standard Cardmarket price columns, also implemented for `PriceGuideEntry` |
 | `mtgjson` | `MtgjsonClient` (`deck_list`, `sealed_index`, `deck`) for MTGJSON precon data, compact cacheable types (`PreconDeck`, `DeckCard`, `SealedIndex`, `DeckRef`), and pure helpers (`build_sealed_index`, `resolve_decks`, `parse_deck`). Responses are size-capped while streaming; deck `fileName`s must pass `is_safe_deck_file_name` before use in a URL or path |
 | `file_cache` | `FileCache` — best-effort persistent byte cache backed by files in a directory; foundation for the projects' image caches |

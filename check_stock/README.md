@@ -103,6 +103,8 @@ showing exactly what would change before anything is written.
   Set") are valued as the sum of their decks. Foil cards use the foil price and
   fall back to non-foil (flagged); tokens, display commanders and sample packs
   are excluded. Changing the cutoff or price field recomputes locally.
+  Clicking a sealed price (ranking or detail) or a card name in the breakdown
+  opens that exact product/printing on Cardmarket in the browser.
 
 ## Data Sources
 

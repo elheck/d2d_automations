@@ -108,7 +108,7 @@ pub(super) fn show_table(ui: &mut egui::Ui, state: &mut PreconEvState) -> Rankin
                 }
                 ui.label(&row.set_label);
                 ui.label(row.release_date.as_deref().unwrap_or("—"));
-                ui.label(euro(row.sealed_price));
+                super::cardmarket_link(ui, euro(row.sealed_price), row.id_product);
                 ui.label(euro(row.ev.as_ref().map(|e| e.ev)));
                 ratio_label(ui, row.ratio);
                 ui.label(euro(row.ev.as_ref().map(|e| e.top5)));

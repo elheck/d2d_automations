@@ -3,6 +3,14 @@
 use super::*;
 
 #[test]
+fn product_url_uses_id_product_query() {
+    assert_eq!(
+        product_url(779297),
+        "https://www.cardmarket.com/en/Magic/Products?idProduct=779297"
+    );
+}
+
+#[test]
 fn price_guide_entry_deserializes_with_nulls() {
     let json = r#"{
         "idProduct": 12345,

@@ -5,7 +5,7 @@ pub mod inventory_sync;
 pub mod mtgjson;
 pub mod scryfall;
 
-pub use cardmarket::{PriceGuide, PriceGuideEntry, PriceGuideFile};
+pub use cardmarket::{product_url, PriceGuide, PriceGuideEntry, PriceGuideFile};
 pub use error::{MtgError, MtgResult};
 pub use file_cache::FileCache;
 pub use inventory_sync::InventorySyncClient;

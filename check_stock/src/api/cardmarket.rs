@@ -3,4 +3,4 @@
 //! `PriceGuide::load`/`fetch_blocking` return `MtgError`, which converts into
 //! this crate's `ApiError` via `From` at call sites.
 
-pub use mtg_common::cardmarket::{PriceGuide, PriceGuideEntry, PriceGuideFile};
+pub use mtg_common::cardmarket::{product_url, PriceGuide, PriceGuideEntry, PriceGuideFile};

@@ -5,6 +5,17 @@ use std::time::Duration;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Cardmarket resolves this URL plus a product id to the product's page —
+/// the same link Scryfall and MTGJSON publish as their Cardmarket purchase
+/// URL. Works for singles (exact printing) and sealed products alike.
+pub const PRODUCT_URL_PREFIX: &str = "https://www.cardmarket.com/en/Magic/Products?idProduct=";
+
+/// Cardmarket page of a product. The id is numeric, so the URL cannot be
+/// steered anywhere else.
+pub fn product_url(id_product: u64) -> String {
+    format!("{PRODUCT_URL_PREFIX}{id_product}")
+}
+
 /// Cardmarket price guide entry for a single product.
 ///
 /// Matches the JSON schema from Cardmarket's CDN price guide files.

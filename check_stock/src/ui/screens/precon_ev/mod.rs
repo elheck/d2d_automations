@@ -11,7 +11,7 @@ mod detail;
 mod ranking;
 
 use crate::{
-    api::{inventory_sync::InventorySyncClient, mtgjson::MtgjsonClient},
+    api::{cardmarket::product_url, inventory_sync::InventorySyncClient, mtgjson::MtgjsonClient},
     cache::DeckCache,
     precon_ev::{
         build_rows, ev_history, history_start, sort_rows, trim_leading_gaps, weekly_dates,
@@ -30,6 +30,12 @@ use eframe::egui;
 use log::info;
 
 pub struct PreconEvScreen;
+
+/// Link that opens a product's Cardmarket page in the system browser
+/// (hovering shows the URL).
+fn cardmarket_link(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, id_product: u64) {
+    ui.hyperlink_to(text, product_url(id_product));
+}
 
 impl PreconEvScreen {
     pub fn show(ctx: &egui::Context, app_state: &mut AppState, state: &mut PreconEvState) {

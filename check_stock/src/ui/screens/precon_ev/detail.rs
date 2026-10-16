@@ -100,13 +100,19 @@ pub(super) fn show(ui: &mut egui::Ui, state: &PreconEvState, id: u64) {
 }
 
 fn kpi(ui: &mut egui::Ui, label: &str, value: String, color: egui::Color32) {
+    kpi_with(ui, label, |ui| {
+        ui.label(egui::RichText::new(value).size(16.0).strong().color(color));
+    });
+}
+
+fn kpi_with(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::Ui)) {
     ui.vertical(|ui| {
         ui.label(
             egui::RichText::new(label)
                 .size(11.0)
                 .color(style::TEXT_MUTED),
         );
-        ui.label(egui::RichText::new(value).size(16.0).strong().color(color));
+        value(ui);
     });
     ui.add_space(18.0);
 }
@@ -115,7 +121,13 @@ fn show_kpis(ui: &mut egui::Ui, row: &PreconRow, cutoff: f64) {
     let Some(ev) = &row.ev else { return };
     style::section_frame().show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
-            kpi(ui, "Sealed", euro(row.sealed_price), SEALED_COLOR);
+            kpi_with(ui, "Sealed", |ui| {
+                let text = egui::RichText::new(euro(row.sealed_price))
+                    .size(16.0)
+                    .strong()
+                    .color(SEALED_COLOR);
+                super::cardmarket_link(ui, text, row.id_product);
+            });
             kpi(
                 ui,
                 &format!("EV (≥ €{cutoff:.2})"),
@@ -238,7 +250,15 @@ fn card_table(
                 let marker = if top.contains(&i) { " ★" } else { "" };
                 cell(ui, format!("{}{marker}", rank + 1));
                 let foil = if v.card.is_foil { " ✦" } else { "" };
-                cell(ui, format!("{}{foil}", v.card.name));
+                let name = format!("{}{foil}", v.card.name);
+                match v.card.mcm_id {
+                    Some(id) => {
+                        let text = egui::RichText::new(name);
+                        let text = if counted { text } else { text.color(color) };
+                        super::cardmarket_link(ui, text, id);
+                    }
+                    None => cell(ui, name),
+                }
                 cell(ui, format!("{} #{}", v.card.set_code, v.card.number));
                 cell(ui, board_label(v.card.board).to_string());
                 cell(ui, format!("×{}", v.card.count));
