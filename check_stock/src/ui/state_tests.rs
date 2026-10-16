@@ -53,6 +53,7 @@ fn mark_db_changed_bumps_the_generation() {
 fn precon_ev_state_defaults() {
     let state = PreconEvState::default();
     assert_eq!(state.field, InventoryPriceSource::Trend);
+    assert_eq!(state.sealed_field, InventoryPriceSource::Trend);
     assert_eq!(state.cutoff, crate::precon_ev::DEFAULT_CUTOFF_EUR);
     assert_eq!(state.sort, crate::precon_ev::PreconSort::Ratio);
     assert!(state.sort_desc);

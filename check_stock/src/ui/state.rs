@@ -1242,7 +1242,10 @@ pub struct PreconEvState {
     pub data: Option<crate::precon_ev::PreconData>,
     /// Ranking rows for the current parameters, sorted.
     pub rows: Vec<crate::precon_ev::PreconRow>,
+    /// Price column for the cards.
     pub field: InventoryPriceSource,
+    /// Price column for the sealed product (one of `precon_ev::SEALED_FIELDS`).
+    pub sealed_field: InventoryPriceSource,
     /// Card copies below this unit price (€) are excluded from EV.
     pub cutoff: f64,
     pub filter: String,
@@ -1273,6 +1276,7 @@ impl Default for PreconEvState {
             data: None,
             rows: Vec::new(),
             field: InventoryPriceSource::Trend,
+            sealed_field: InventoryPriceSource::Trend,
             cutoff: crate::precon_ev::DEFAULT_CUTOFF_EUR,
             filter: String::new(),
             hide_no_decklist: false,

@@ -19,25 +19,32 @@ fn euro(v: Option<f64>) -> String {
     v.map_or_else(|| "—".to_string(), |v| format!("€{v:.2}"))
 }
 
-fn ratio_label(ui: &mut egui::Ui, ratio: Option<f64>) {
-    match ratio {
-        Some(r) => {
-            let color = if r >= 1.0 {
-                style::COLOR_SUCCESS
-            } else if r < 0.8 {
-                style::COLOR_ERROR
-            } else {
-                style::TEXT_PRIMARY
-            };
-            ui.label(
-                egui::RichText::new(format!("{r:.2}×"))
-                    .color(color)
-                    .strong(),
-            );
-        }
-        None => {
-            ui.label("—");
-        }
+/// EV/Sealed cell: green ≥ 1, red < 0.8; muted with ⚠ when the sealed
+/// price is stale (the ratio is then overstated).
+pub(super) fn ratio_text(row: &PreconRow) -> (String, egui::Color32) {
+    let Some(r) = row.ratio else {
+        return ("—".to_string(), style::TEXT_MUTED);
+    };
+    if row.stale_sealed().is_some() {
+        return (format!("{r:.2}× ⚠"), style::TEXT_MUTED);
+    }
+    let color = if r >= 1.0 {
+        style::COLOR_SUCCESS
+    } else if r < 0.8 {
+        style::COLOR_ERROR
+    } else {
+        style::TEXT_PRIMARY
+    };
+    (format!("{r:.2}×"), color)
+}
+
+fn ratio_label(ui: &mut egui::Ui, row: &PreconRow) {
+    let (text, color) = ratio_text(row);
+    let label = ui.label(egui::RichText::new(text).color(color).strong());
+    if let (Some(low), Some(price)) = (row.stale_sealed(), row.sealed_price) {
+        label.on_hover_text(format!(
+            "Sealed €{price:.2} but the cheapest offer is €{low:.2} — ratio overstated"
+        ));
     }
 }
 
@@ -110,7 +117,7 @@ pub(super) fn show_table(ui: &mut egui::Ui, state: &mut PreconEvState) -> Rankin
                 ui.label(row.release_date.as_deref().unwrap_or("—"));
                 super::cardmarket_link(ui, euro(row.sealed_price), row.id_product);
                 ui.label(euro(row.ev.as_ref().map(|e| e.ev)));
-                ratio_label(ui, row.ratio);
+                ratio_label(ui, row);
                 ui.label(euro(row.ev.as_ref().map(|e| e.top5)));
                 match &row.ev {
                     Some(ev) => {

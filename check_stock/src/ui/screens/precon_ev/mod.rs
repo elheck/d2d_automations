@@ -15,7 +15,7 @@ use crate::{
     cache::DeckCache,
     precon_ev::{
         build_rows, ev_history, history_start, sort_rows, trim_leading_gaps, weekly_dates,
-        EvParams, PreconData,
+        EvParams, PreconData, SEALED_FIELDS, STALE_SEALED_FACTOR,
     },
     precon_loader::{load_history, load_precons, LoadEvent, LoadOptions},
     ui::{
@@ -243,8 +243,8 @@ impl PreconEvScreen {
     fn show_controls(ui: &mut egui::Ui, state: &mut PreconEvState) {
         style::section_frame().show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label("Price field:");
-                let before_field = state.field;
+                ui.label("Card price:");
+                let before = (state.field, state.sealed_field);
                 egui::ComboBox::from_id_salt("precon_ev_field")
                     .selected_text(state.field.as_str())
                     .show_ui(ui, |ui| {
@@ -252,6 +252,21 @@ impl PreconEvScreen {
                             ui.selectable_value(&mut state.field, *src, src.as_str());
                         }
                     });
+
+                ui.add_space(12.0);
+                ui.label("Sealed price:");
+                egui::ComboBox::from_id_salt("precon_ev_sealed_field")
+                    .selected_text(state.sealed_field.as_str())
+                    .show_ui(ui, |ui| {
+                        for src in SEALED_FIELDS {
+                            ui.selectable_value(&mut state.sealed_field, src, src.as_str());
+                        }
+                    })
+                    .response
+                    .on_hover_text(
+                        "Cardmarket publishes only Trend, Low (cheapest offer) and Average for \
+                         sealed products — no 1/7/30-day averages.",
+                    );
 
                 ui.add_space(12.0);
                 ui.label("Bulk cutoff:");
@@ -281,7 +296,7 @@ impl PreconEvScreen {
                     "Hide products without decklist",
                 );
 
-                if before_field != state.field || cutoff.changed() {
+                if before != (state.field, state.sealed_field) || cutoff.changed() {
                     Self::rebuild(state);
                 }
             });
@@ -318,11 +333,14 @@ impl PreconEvScreen {
         }
         ui.label(
             egui::RichText::new(format!(
-                "EV = card copies priced at or above €{:.2} ({}). Excludes tokens, display \
-                 commanders, sample packs and extras. Top 5 = five most expensive copies, \
-                 regardless of the cutoff.",
+                "EV = card copies priced at or above €{:.2} (card price: {}), vs. the sealed {}. \
+                 Excludes tokens, display commanders, sample packs and extras. Top 5 = five most \
+                 expensive copies, regardless of the cutoff. ⚠ = sealed price more than {:.0}% \
+                 below the cheapest offer (thin market, ratio overstated).",
                 state.cutoff,
-                state.field.as_str()
+                state.field.as_str(),
+                state.sealed_field.as_str(),
+                (STALE_SEALED_FACTOR - 1.0) * 100.0,
             ))
             .size(11.0)
             .color(style::TEXT_MUTED),
@@ -413,6 +431,7 @@ impl PreconEvScreen {
     fn params(state: &PreconEvState) -> EvParams {
         EvParams {
             field: state.field,
+            sealed_field: state.sealed_field,
             cutoff: state.cutoff,
         }
     }

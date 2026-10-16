@@ -134,12 +134,13 @@ fn show_kpis(ui: &mut egui::Ui, row: &PreconRow, cutoff: f64) {
                 euro(Some(ev.ev)),
                 style::ACCENT,
             );
-            let (ratio, color) = match row.ratio {
-                Some(r) if r >= 1.0 => (format!("{r:.2}×"), style::COLOR_SUCCESS),
-                Some(r) if r < 0.8 => (format!("{r:.2}×"), style::COLOR_ERROR),
-                Some(r) => (format!("{r:.2}×"), style::TEXT_PRIMARY),
-                None => ("—".to_string(), style::TEXT_MUTED),
+            let offer_color = if row.stale_sealed().is_some() {
+                style::COLOR_ERROR
+            } else {
+                style::TEXT_PRIMARY
             };
+            kpi(ui, "Cheapest offer", euro(row.sealed_low), offer_color);
+            let (ratio, color) = super::ranking::ratio_text(row);
             kpi(ui, "EV/Sealed", ratio, color);
             kpi(ui, "Top 5", euro(Some(ev.top5)), TOP5_COLOR);
             kpi(

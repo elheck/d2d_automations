@@ -174,6 +174,7 @@ async fn load_end_to_end_then_served_from_cache() {
         &data,
         EvParams {
             field: PriceField::Trend,
+            sealed_field: PriceField::Trend,
             cutoff: 0.5,
         },
     );
@@ -251,6 +252,7 @@ async fn forced_refresh_and_new_products_rebuild_the_index() {
         &data,
         EvParams {
             field: PriceField::Trend,
+            sealed_field: PriceField::Trend,
             cutoff: 0.5,
         },
     );
@@ -290,6 +292,7 @@ async fn incomplete_decks_are_refetched_and_failures_isolated() {
             &data,
             EvParams {
                 field: PriceField::Trend,
+                sealed_field: PriceField::Trend,
                 cutoff: 0.5,
             },
         );

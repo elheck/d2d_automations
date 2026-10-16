@@ -85,6 +85,7 @@ fn values<'a>(decks: &[&'a PreconDeck], map: &HashMap<u64, LatestPrice>) -> Vec<
 
 const TREND: EvParams = EvParams {
     field: PriceField::Trend,
+    sealed_field: PriceField::Trend,
     cutoff: 0.50,
 };
 
@@ -394,8 +395,8 @@ fn rows_recompute_locally_for_new_params() {
     let loose = build_rows(
         &data,
         EvParams {
-            field: PriceField::Trend,
             cutoff: 0.0,
+            ..TREND
         },
     );
     let strict_ev = strict[0].ev.as_ref().unwrap();
@@ -412,6 +413,7 @@ fn row(name: &str, ratio: Option<f64>, release: Option<&str>) -> PreconRow {
         release_date: release.map(str::to_string),
         status: PreconStatus::NotOnMtgjson,
         sealed_price: None,
+        sealed_low: None,
         ev: None,
         ratio,
     }
@@ -578,4 +580,77 @@ fn row_notes_describe_status() {
         bundle.notes().0,
         "bundle of 4 decks · 2 foil→non-foil · 1 unpriced"
     );
+}
+
+// ── Sealed price basis ───────────────────────────────────────────────────────
+
+#[test]
+fn sealed_fields_are_those_cardmarket_publishes() {
+    assert_eq!(
+        SEALED_FIELDS,
+        [PriceField::Trend, PriceField::Low, PriceField::Avg]
+    );
+}
+
+#[test]
+fn sealed_price_uses_its_own_field() {
+    let mut data = sample_data();
+    // Cards priced by their 7-day average; sealed products have no such column.
+    for p in data.prices.values_mut() {
+        p.avg7 = p.trend;
+    }
+    data.prices.get_mut(&10).unwrap().avg7 = None;
+    let split = EvParams {
+        field: PriceField::Avg7,
+        ..TREND
+    };
+    let rows = build_rows(&data, split);
+    assert_eq!(rows[0].sealed_price, Some(30.0));
+    assert!(rows[0].ratio.is_some());
+
+    // Pricing sealed by the card column leaves it blank (the old behaviour).
+    let same = build_rows(
+        &data,
+        EvParams {
+            sealed_field: PriceField::Avg7,
+            ..split
+        },
+    );
+    assert_eq!(same[0].sealed_price, None);
+    assert_eq!(same[0].ratio, None);
+}
+
+#[test]
+fn stale_below_offer_rules() {
+    assert_eq!(stale_below_offer(Some(43.18), Some(88.0)), Some(88.0));
+    // Exactly the factor is not flagged.
+    assert_eq!(stale_below_offer(Some(40.0), Some(50.0)), None);
+    assert_eq!(stale_below_offer(Some(80.0), Some(60.0)), None);
+    assert_eq!(stale_below_offer(None, Some(88.0)), None);
+    assert_eq!(stale_below_offer(Some(43.0), None), None);
+}
+
+#[test]
+fn stale_sealed_price_is_flagged_in_notes() {
+    let mut data = sample_data();
+    let sealed = data.prices.get_mut(&10).unwrap();
+    sealed.trend = Some(43.18);
+    sealed.low = Some(88.0);
+    let rows = build_rows(&data, TREND);
+    assert_eq!(rows[0].sealed_low, Some(88.0));
+    assert_eq!(rows[0].stale_sealed(), Some(88.0));
+    let (note, hover) = rows[0].notes();
+    assert!(note.contains("cheapest offer €88.00"), "{note}");
+    assert!(hover.unwrap().contains("€43.18"));
+
+    // Pricing sealed at the cheapest offer removes the flag.
+    let at_low = build_rows(
+        &data,
+        EvParams {
+            sealed_field: PriceField::Low,
+            ..TREND
+        },
+    );
+    assert_eq!(at_low[0].sealed_price, Some(88.0));
+    assert_eq!(at_low[0].stale_sealed(), None);
 }

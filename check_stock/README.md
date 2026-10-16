@@ -102,7 +102,12 @@ showing exactly what would change before anything is written.
   weekly EV vs. sealed price vs. Top 5 chart (last 52 weeks). Bundles ("Deck
   Set") are valued as the sum of their decks. Foil cards use the foil price and
   fall back to non-foil (flagged); tokens, display commanders and sample packs
-  are excluded. Changing the cutoff or price field recomputes locally.
+  are excluded. Cards and the sealed product have separate price selectors:
+  cards can use any Cardmarket column, sealed only Trend, Low (cheapest offer)
+  or Average — Cardmarket publishes no 1/7/30-day averages for sealed products.
+  A ⚠ marks precons whose sealed price is more than 25% below the cheapest
+  offer (thin market, stale trend), where EV/Sealed is overstated. Changing the
+  cutoff or a price selector recomputes locally.
   Clicking a sealed price (ranking or detail) or a card name in the breakdown
   opens that exact product/printing on Cardmarket in the browser.
 

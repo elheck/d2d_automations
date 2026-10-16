@@ -38,6 +38,13 @@ pub const DEFAULT_CUTOFF_EUR: f64 = 0.50;
 pub const MIN_HISTORY_COVERAGE: f64 = 0.90;
 /// How far back the EV history chart reaches.
 pub const HISTORY_WEEKS: i64 = 52;
+/// Price columns Cardmarket publishes for sealed products. Its price guide
+/// has no 1/7/30-day averages for them, so those can only price cards.
+pub const SEALED_FIELDS: [PriceField; 3] = [PriceField::Trend, PriceField::Low, PriceField::Avg];
+/// A sealed price more than this factor below the cheapest current offer is
+/// stale (thin market) — the deck cannot be bought anywhere near it, so the
+/// EV/Sealed ratio is overstated.
+pub const STALE_SEALED_FACTOR: f64 = 1.25;
 
 // ── Catalog ──────────────────────────────────────────────────────────────────
 
@@ -106,6 +113,15 @@ pub fn unit_price<P: PriceFields>(
 /// Price of the sealed product (non-foil columns only).
 pub fn sealed_price<P: PriceFields>(row: Option<&P>, field: PriceField) -> Option<f64> {
     positive(row?.price_for(field, false))
+}
+
+/// The cheapest offer when it is more than [`STALE_SEALED_FACTOR`] above the
+/// sealed price used — i.e. that price is stale and nobody sells at it.
+pub fn stale_below_offer(sealed: Option<f64>, cheapest_offer: Option<f64>) -> Option<f64> {
+    match (sealed, cheapest_offer) {
+        (Some(price), Some(low)) if low > price * STALE_SEALED_FACTOR => Some(low),
+        _ => None,
+    }
 }
 
 // ── EV ───────────────────────────────────────────────────────────────────────
@@ -311,7 +327,10 @@ pub enum PreconStatus {
 /// Pricing parameters chosen in the UI.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EvParams {
+    /// Price column for the cards (any of the six).
     pub field: PriceField,
+    /// Price column for the sealed product (one of [`SEALED_FIELDS`]).
+    pub sealed_field: PriceField,
     pub cutoff: f64,
 }
 
@@ -324,7 +343,10 @@ pub struct PreconRow {
     pub set_label: String,
     pub release_date: Option<String>,
     pub status: PreconStatus,
+    /// Sealed price at [`EvParams::sealed_field`].
     pub sealed_price: Option<f64>,
+    /// Cheapest current offer for the sealed product (Cardmarket `low`).
+    pub sealed_low: Option<f64>,
     pub ev: Option<DeckEv>,
     pub ratio: Option<f64>,
 }
@@ -334,11 +356,24 @@ impl PreconRow {
         matches!(self.status, PreconStatus::Ready { .. })
     }
 
+    /// The cheapest offer, when the sealed price used is stale below it.
+    pub fn stale_sealed(&self) -> Option<f64> {
+        stale_below_offer(self.sealed_price, self.sealed_low)
+    }
+
     /// Short note for the ranking table plus optional hover detail.
     pub fn notes(&self) -> (String, Option<String>) {
         match &self.status {
             PreconStatus::Ready { decks } => {
                 let mut parts = Vec::new();
+                let mut hover = None;
+                if let (Some(low), Some(price)) = (self.stale_sealed(), self.sealed_price) {
+                    parts.push(format!("⚠ cheapest offer €{low:.2}"));
+                    hover = Some(format!(
+                        "Nobody sells near the sealed price used (€{price:.2}) — the cheapest \
+                         offer is €{low:.2}. Thin market: EV/Sealed is overstated."
+                    ));
+                }
                 if *decks > 1 {
                     parts.push(format!("bundle of {decks} decks"));
                 }
@@ -350,7 +385,7 @@ impl PreconRow {
                         parts.push(format!("{} unpriced", ev.unpriced_copies));
                     }
                 }
-                (parts.join(" · "), None)
+                (parts.join(" · "), hover)
             }
             PreconStatus::NotOnMtgjson => ("not on MTGJSON yet".to_string(), None),
             PreconStatus::DecklistPending(names) => (
@@ -398,7 +433,8 @@ pub fn build_rows(data: &PreconData, params: EvParams) -> Vec<PreconRow> {
                 .clone()
                 .or_else(|| data.index.products.get(&id).map(|s| s.set_code.clone()))
                 .unwrap_or_default();
-            let sealed = sealed_price(data.prices.get(&id), params.field);
+            let sealed = sealed_price(data.prices.get(&id), params.sealed_field);
+            let sealed_low = sealed_price(data.prices.get(&id), PriceField::Low);
             let ev = data.decks_for(id).map(|decks| {
                 let values = value_cards(&decks, |i| data.prices.get(&i), params.field);
                 summarize(&values, params.cutoff)
@@ -411,6 +447,7 @@ pub fn build_rows(data: &PreconData, params: EvParams) -> Vec<PreconRow> {
                 release_date,
                 status,
                 sealed_price: sealed,
+                sealed_low,
                 ev,
                 ratio,
             }
@@ -581,7 +618,7 @@ pub fn ev_history(
                 date: date.clone(),
                 ev: enough.then_some(summary.ev),
                 top5: enough.then_some(summary.top5),
-                sealed: sealed_price(lookup(sealed_id), params.field),
+                sealed: sealed_price(lookup(sealed_id), params.sealed_field),
                 coverage,
             }
         })
