@@ -1,7 +1,8 @@
-//! API clients for external services (Scryfall, Cardmarket, inventory_sync)
+//! API clients for external services (Scryfall, Cardmarket, inventory_sync, MTGJSON)
 
 pub mod cardmarket;
 pub mod inventory_sync;
+pub mod mtgjson;
 pub mod scryfall;
 
 #[cfg(test)]

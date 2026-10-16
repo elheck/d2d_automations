@@ -93,6 +93,16 @@ showing exactly what would change before anything is written.
   listing age (old stock that is also losing value is the first liquidation
   candidate). All deltas are computed locally from raw snapshot rows — the
   server only runs indexed lookups. Strictly read-only.
+- **Precon EV** — Expected singles value of every Commander precon, independent
+  of your inventory. Ranks all precons on the inventory_sync tracker by EV vs.
+  sealed price, with a configurable **bulk cutoff** (card copies below it, e.g.
+  €0.50, are left out of EV because they rarely sell) and a **Top 5** column —
+  the five most expensive copies, regardless of the cutoff, a strong signal that
+  a deck sells well as singles. Click a precon for the card breakdown and a
+  weekly EV vs. sealed price vs. Top 5 chart (last 52 weeks). Bundles ("Deck
+  Set") are valued as the sum of their decks. Foil cards use the foil price and
+  fall back to non-foil (flagged); tokens, display commanders and sample packs
+  are excluded. Changing the cutoff or price field recomputes locally.
 
 ## Data Sources
 
@@ -112,9 +122,13 @@ showing exactly what would change before anything is written.
 - **Scryfall API**: Card data, images
 - **Cardmarket CDN**: Price guide (~50MB, all MTG products)
 - **inventory_sync server**: Latest collected prices, raw price snapshots for
-  7/30-day movement, and per-card price history (see `inventory_sync/`; the
-  server URL is configured once in the shared connection bar and used by the
-  Pricing, Mispricing, Price Movers and Search screens)
+  7/30-day movement, per-card price history, and the Commander precon catalog
+  (via `/api/search`) (see `inventory_sync/`; the server URL is configured once
+  in the shared connection bar and used by the Pricing, Mispricing, Price
+  Movers, Precon EV and Search screens)
+- **MTGJSON** (`https://mtgjson.com/api/v5`, HTTPS, no auth): official precon
+  decklists with Cardmarket product ids per card, and the sealed-product index
+  that links a precon's Cardmarket id to its decks (Precon EV screen)
 
 ## Product Categories
 
@@ -168,6 +182,18 @@ categories:
 ## Caching
 
 Card data and images are cached locally in the platform cache directory (Linux: `~/.cache/d2d_automations/`). Local SQLite database for inventory sync.
+
+Precon EV caches MTGJSON data under `~/.cache/d2d_automations/mtgjson_v1/`:
+
+- `decks/<fileName>.json` — compact decklists (~10 KB each), kept permanently
+  once every card has a Cardmarket id (incomplete lists are re-fetched on each
+  load).
+- `sealed_index.json` — sealed product → decks index built from MTGJSON's
+  ~12 MB `SetList.json`; rebuilt weekly, when the tracker lists a precon the
+  index has not seen, or via **Refresh MTGJSON data**.
+
+The precon catalog, MTGJSON's list of published decks and all prices are
+fetched live on every load. Delete the directory to force a full refresh.
 
 ## Running
 

@@ -4,7 +4,7 @@ use eframe::egui;
 
 pub struct WelcomeScreen;
 
-const TILES: [(&str, &str); 10] = [
+const TILES: [(&str, &str); 11] = [
     ("Stock Checker", "Verify card stock\nagainst order lists"),
     ("Stock Analysis", "Analyse inventory\ntrends and signals"),
     ("Bin Analysis", "Bin capacity and\nfree-slot analysis"),
@@ -18,6 +18,7 @@ const TILES: [(&str, &str); 10] = [
         "Sold-out fast sellers\nworth buying again",
     ),
     ("Price Movers", "7/30-day market moves\nacross your stock"),
+    ("Precon EV", "Commander precon value\nvs. sealed price"),
 ];
 
 impl WelcomeScreen {
@@ -83,7 +84,8 @@ impl WelcomeScreen {
                     6 => Screen::BuyHelper,
                     7 => Screen::Mispricing,
                     8 => Screen::Restock,
-                    _ => Screen::Movers,
+                    9 => Screen::Movers,
+                    _ => Screen::PreconEv,
                 };
             }
         });

@@ -20,6 +20,14 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 pub const MAX_BULK_IDS: usize = 10_000;
 /// Maximum snapshot dates per bulk price-snapshot request.
 pub const MAX_SNAPSHOT_DATES: usize = 8;
+/// Upper bound the client applies to `GET /api/search` result limits. The
+/// server does not cap `limit` itself, so the client keeps requests bounded.
+pub const MAX_SEARCH_LIMIT: usize = 10_000;
+
+/// Clamps a requested search limit into `1..=MAX_SEARCH_LIMIT`.
+pub fn clamp_search_limit(limit: usize) -> usize {
+    limit.clamp(1, MAX_SEARCH_LIMIT)
+}
 
 // ── Wire types ───────────────────────────────────────────────────────────────
 
@@ -382,7 +390,9 @@ impl InventorySyncClient {
     }
 
     /// `POST /api/price-snapshots` — the price row in effect on each requested
-    /// date, per product. Chunked to [`MAX_BULK_IDS`] internally.
+    /// date, per product. Chunked internally to [`MAX_BULK_IDS`] ids and
+    /// [`MAX_SNAPSHOT_DATES`] dates per request, so callers may pass any
+    /// number of either.
     ///
     /// Missing (id, date) combinations (no data on or before the date) are
     /// simply absent from the result.
@@ -393,23 +403,44 @@ impl InventorySyncClient {
     ) -> MtgResult<Vec<PriceSnapshot>> {
         let client = reqwest::Client::builder().timeout(HTTP_TIMEOUT).build()?;
         let mut out = Vec::new();
-        for chunk in ids.chunks(MAX_BULK_IDS) {
-            let response = client
-                .post(self.url("/api/price-snapshots"))
-                .header("User-Agent", crate::USER_AGENT)
-                .json(&PriceSnapshotRequest {
-                    ids: chunk.to_vec(),
-                    dates: dates.to_vec(),
-                })
-                .send()
-                .await?;
-            if !response.status().is_success() {
-                return Err(MtgError::HttpStatus(response.status()));
+        for date_chunk in dates.chunks(MAX_SNAPSHOT_DATES) {
+            for chunk in ids.chunks(MAX_BULK_IDS) {
+                let response = client
+                    .post(self.url("/api/price-snapshots"))
+                    .header("User-Agent", crate::USER_AGENT)
+                    .json(&PriceSnapshotRequest {
+                        ids: chunk.to_vec(),
+                        dates: date_chunk.to_vec(),
+                    })
+                    .send()
+                    .await?;
+                if !response.status().is_success() {
+                    return Err(MtgError::HttpStatus(response.status()));
+                }
+                let body: ApiResponse<Vec<PriceSnapshot>> = response.json().await?;
+                out.extend(body.into_result()?);
             }
-            let body: ApiResponse<Vec<PriceSnapshot>> = response.json().await?;
-            out.extend(body.into_result()?);
         }
         Ok(out)
+    }
+
+    /// `GET /api/search?q=..&limit=..` — products whose name contains `query`
+    /// (case-insensitive). `limit` is clamped via [`clamp_search_limit`].
+    pub async fn search(&self, query: &str, limit: usize) -> MtgResult<Vec<ProductSearchResult>> {
+        let limit = clamp_search_limit(limit).to_string();
+        let response = reqwest::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .build()?
+            .get(self.url("/api/search"))
+            .query(&[("q", query), ("limit", limit.as_str())])
+            .header("User-Agent", crate::USER_AGENT)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(MtgError::HttpStatus(response.status()));
+        }
+        let body: ApiResponse<Vec<ProductSearchResult>> = response.json().await?;
+        body.into_result()
     }
 
     // ── Blocking API (GUI background threads) ────────────────────────────────
@@ -487,22 +518,46 @@ impl InventorySyncClient {
             .timeout(HTTP_TIMEOUT)
             .build()?;
         let mut out = Vec::new();
-        for chunk in ids.chunks(MAX_BULK_IDS) {
-            let response = client
-                .post(self.url("/api/price-snapshots"))
-                .header("User-Agent", crate::USER_AGENT)
-                .json(&PriceSnapshotRequest {
-                    ids: chunk.to_vec(),
-                    dates: dates.to_vec(),
-                })
-                .send()?;
-            if !response.status().is_success() {
-                return Err(MtgError::HttpStatus(response.status()));
+        for date_chunk in dates.chunks(MAX_SNAPSHOT_DATES) {
+            for chunk in ids.chunks(MAX_BULK_IDS) {
+                let response = client
+                    .post(self.url("/api/price-snapshots"))
+                    .header("User-Agent", crate::USER_AGENT)
+                    .json(&PriceSnapshotRequest {
+                        ids: chunk.to_vec(),
+                        dates: date_chunk.to_vec(),
+                    })
+                    .send()?;
+                if !response.status().is_success() {
+                    return Err(MtgError::HttpStatus(response.status()));
+                }
+                let body: ApiResponse<Vec<PriceSnapshot>> = response.json()?;
+                out.extend(body.into_result()?);
             }
-            let body: ApiResponse<Vec<PriceSnapshot>> = response.json()?;
-            out.extend(body.into_result()?);
         }
         Ok(out)
+    }
+
+    /// Blocking variant of [`Self::search`].
+    #[cfg(feature = "blocking")]
+    pub fn search_blocking(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> MtgResult<Vec<ProductSearchResult>> {
+        let limit = clamp_search_limit(limit).to_string();
+        let response = reqwest::blocking::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .build()?
+            .get(self.url("/api/search"))
+            .query(&[("q", query), ("limit", limit.as_str())])
+            .header("User-Agent", crate::USER_AGENT)
+            .send()?;
+        if !response.status().is_success() {
+            return Err(MtgError::HttpStatus(response.status()));
+        }
+        let body: ApiResponse<Vec<ProductSearchResult>> = response.json()?;
+        body.into_result()
     }
 }
 

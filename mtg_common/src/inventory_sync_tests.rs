@@ -155,3 +155,109 @@ fn price_fields_picks_foil_and_nonfoil_columns() {
     assert_eq!(price.price_for(PriceField::Low, true), None);
     assert_eq!(price.price_for(PriceField::Avg30, false), Some(1.3));
 }
+
+#[test]
+fn clamp_search_limit_bounds() {
+    assert_eq!(clamp_search_limit(0), 1);
+    assert_eq!(clamp_search_limit(5_000), 5_000);
+    assert_eq!(clamp_search_limit(50_000), MAX_SEARCH_LIMIT);
+}
+
+// ── HTTP (wiremock) ─────────────────────────────────────────────────────────
+
+use wiremock::matchers::{method, path, query_param};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[tokio::test]
+async fn search_encodes_query_and_clamps_limit() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/search"))
+        .and(query_param("q", "Commander: \"A&B\""))
+        .and(query_param("limit", "10000"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [{ "id_product": 774134, "name": "Deck", "category_name": "Magic Intropack",
+                       "id_expansion": 5660, "expansion_name": null }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let rows = InventorySyncClient::new(&server.uri())
+        .search("Commander: \"A&B\"", 1_000_000)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id_product, 774134);
+    assert_eq!(rows[0].expansion_name, None);
+}
+
+#[tokio::test]
+async fn search_maps_envelope_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/search"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "success": false, "error": "boom" })),
+        )
+        .mount(&server)
+        .await;
+    let err = InventorySyncClient::new(&server.uri())
+        .search("x", 10)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, MtgError::Api { details, .. } if details == "boom"));
+}
+
+#[tokio::test]
+async fn price_snapshots_chunks_dates() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/price-snapshots"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [{ "id_product": 1, "requested_date": "2026-01-01", "price_date": "2026-01-01",
+                       "avg": null, "low": null, "trend": 1.0, "avg1": null, "avg7": null,
+                       "avg30": null, "avg_foil": null, "low_foil": null, "trend_foil": null,
+                       "avg1_foil": null, "avg7_foil": null, "avg30_foil": null }]
+        })))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let dates: Vec<String> = (1..=20).map(|d| format!("2026-01-{d:02}")).collect();
+    let snaps = InventorySyncClient::new(&server.uri())
+        .price_snapshots(&[1], &dates)
+        .await
+        .unwrap();
+    // One row per mocked response, three requests (8 + 8 + 4 dates).
+    assert_eq!(snaps.len(), 3);
+    for req in server.received_requests().await.unwrap() {
+        let body: PriceSnapshotRequest = serde_json::from_slice(&req.body).unwrap();
+        assert!(body.dates.len() <= MAX_SNAPSHOT_DATES);
+    }
+}
+
+#[cfg(feature = "blocking")]
+#[tokio::test]
+async fn search_blocking_works() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/search"))
+        .and(query_param("q", "Commander"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "success": true, "data": [] })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let uri = server.uri();
+    let rows = tokio::task::spawn_blocking(move || {
+        InventorySyncClient::new(&uri).search_blocking("Commander", 5_000)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(rows.is_empty());
+}

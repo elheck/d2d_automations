@@ -23,6 +23,7 @@ pub enum Screen {
     Movers,
     Consolidation,
     Restock,
+    PreconEv,
 }
 
 #[derive(PartialEq)]
@@ -1221,6 +1222,72 @@ impl Default for RestockState {
             generation: 0,
             sort: RestockSort::default(),
             sort_desc: true,
+        }
+    }
+}
+
+// ── Precon EV screen ──────────────────────────────────────────────────────────
+
+/// Message from the background precon load: progress events while it runs,
+/// then exactly one final result.
+pub enum PreconLoadMsg {
+    Event(crate::precon_loader::LoadEvent),
+    /// Boxed: the payload is large compared with progress events.
+    Done(Result<Box<crate::precon_ev::PreconData>, String>),
+}
+
+/// State for the Precon EV screen (sealed precon value vs. singles).
+pub struct PreconEvState {
+    /// Raw data of the last successful load; rows are rebuilt from it.
+    pub data: Option<crate::precon_ev::PreconData>,
+    /// Ranking rows for the current parameters, sorted.
+    pub rows: Vec<crate::precon_ev::PreconRow>,
+    pub field: InventoryPriceSource,
+    /// Card copies below this unit price (€) are excluded from EV.
+    pub cutoff: f64,
+    pub filter: String,
+    pub hide_no_decklist: bool,
+    pub sort: crate::precon_ev::PreconSort,
+    pub sort_desc: bool,
+    pub loading: bool,
+    /// Current load stage (shown next to the spinner).
+    pub stage: String,
+    /// Decklists loaded so far, while the decklist stage runs.
+    pub deck_progress: Option<(usize, usize)>,
+    pub error: Option<String>,
+    pub rx: Option<std::sync::mpsc::Receiver<PreconLoadMsg>>,
+    /// Product shown in the detail view.
+    pub selected: Option<u64>,
+    /// Snapshot history per product id (fetched live per load).
+    pub histories: std::collections::HashMap<u64, crate::precon_loader::HistoryData>,
+    /// EV chart points for the selected product and current parameters.
+    pub history_points: Vec<crate::precon_ev::EvPoint>,
+    pub history_rx:
+        Option<std::sync::mpsc::Receiver<Result<crate::precon_loader::HistoryData, String>>>,
+    pub history_error: Option<String>,
+}
+
+impl Default for PreconEvState {
+    fn default() -> Self {
+        Self {
+            data: None,
+            rows: Vec::new(),
+            field: InventoryPriceSource::Trend,
+            cutoff: crate::precon_ev::DEFAULT_CUTOFF_EUR,
+            filter: String::new(),
+            hide_no_decklist: false,
+            sort: crate::precon_ev::PreconSort::default(),
+            sort_desc: true,
+            loading: false,
+            stage: String::new(),
+            deck_progress: None,
+            error: None,
+            rx: None,
+            selected: None,
+            histories: std::collections::HashMap::new(),
+            history_points: Vec::new(),
+            history_rx: None,
+            history_error: None,
         }
     }
 }
