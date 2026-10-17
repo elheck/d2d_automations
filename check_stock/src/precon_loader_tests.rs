@@ -1,9 +1,10 @@
 use super::*;
 use crate::api::inventory_sync::PriceField;
 use crate::cache::deck_cache::INDEX_SCHEMA;
-use crate::precon_ev::{build_rows, EvParams, PreconStatus};
+use crate::precon_ev::{build_rows, liquidity_weight, EvParams, PreconStatus, SalesStats};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -110,6 +111,29 @@ async fn mount_tracker(s: &Servers, times: Option<u64>) {
     mount(&s.tracker, "POST", "/api/latest-prices", prices, times).await;
 }
 
+fn snapshot_row(id: u64, date: &str, avg1: f64) -> Value {
+    json!({ "id_product": id, "requested_date": date, "price_date": date, "avg": null,
+            "low": null, "trend": 1.0, "avg1": avg1, "avg7": null, "avg30": null,
+            "avg_foil": null, "low_foil": null, "trend_foil": null, "avg1_foil": null,
+            "avg7_foil": null, "avg30_foil": null })
+}
+
+/// Daily snapshots for the sales window: card 101's 1-day average changes
+/// every other day (7 sale days of 14), card 201's never changes.
+async fn mount_sales(s: &Servers, times: Option<u64>) {
+    let window = crate::precon_ev::SalesWindow::ending(local_date(NOW));
+    let mut rows = vec![
+        snapshot_row(101, &window.lookback, 9.0),
+        snapshot_row(201, &window.lookback, 5.0),
+    ];
+    for (i, d) in window.daily.iter().enumerate() {
+        rows.push(snapshot_row(101, d, 10.0 + (i / 2) as f64));
+        rows.push(snapshot_row(201, d, 5.0));
+    }
+    let body = json!({ "success": true, "data": rows });
+    mount(&s.tracker, "POST", "/api/price-snapshots", body, times).await;
+}
+
 type LoadResult = (Result<PreconData, String>, Vec<LoadEvent>);
 
 async fn load(s: &Servers, cache_dir: PathBuf, force: bool, now: i64) -> LoadResult {
@@ -132,7 +156,7 @@ async fn load(s: &Servers, cache_dir: PathBuf, force: bool, now: i64) -> LoadRes
 fn last_decks_event(events: &[LoadEvent]) -> Option<(usize, usize)> {
     events.iter().rev().find_map(|e| match e {
         LoadEvent::Decks { done, total } => Some((*done, *total)),
-        LoadEvent::Stage(_) => None,
+        LoadEvent::Stage(_) | LoadEvent::Sales { .. } => None,
     })
 }
 
@@ -141,6 +165,8 @@ async fn load_end_to_end_then_served_from_cache() {
     let s = servers().await;
     let tmp = tempfile::tempdir().unwrap();
     mount_tracker(&s, Some(2)).await;
+    // The ranking phase never asks for sales history.
+    mount_sales(&s, Some(0)).await;
     mount(&s.mtgjson, "GET", "/SetList.json", set_list(), Some(1)).await;
     mount(&s.mtgjson, "GET", "/DeckList.json", deck_list(), Some(2)).await;
     mount(
@@ -176,6 +202,7 @@ async fn load_end_to_end_then_served_from_cache() {
             field: PriceField::Trend,
             sealed_field: PriceField::Trend,
             cutoff: 0.5,
+            foil_needs_sales: true,
         },
     );
     let army = rows.iter().find(|r| r.id_product == ARMY).unwrap();
@@ -183,6 +210,8 @@ async fn load_end_to_end_then_served_from_cache() {
     assert!((army.ev.as_ref().unwrap().ev - 10.0).abs() < 1e-9);
     assert!((army.ev.as_ref().unwrap().top5 - 10.2).abs() < 1e-9);
     assert_eq!(army.sealed_price, Some(40.0));
+    assert!(data.sales.is_none(), "sales are a separate phase");
+    assert_eq!(army.ev.as_ref().unwrap().liquid, None);
 
     // Second load: decks and SetList come from the cache; catalog, DeckList
     // and prices are fetched live again (enforced by the `expect` counts).
@@ -254,6 +283,7 @@ async fn forced_refresh_and_new_products_rebuild_the_index() {
             field: PriceField::Trend,
             sealed_field: PriceField::Trend,
             cutoff: 0.5,
+            foil_needs_sales: true,
         },
     );
     let marvel = rows.iter().find(|r| r.id_product == 916721).unwrap();
@@ -294,6 +324,7 @@ async fn incomplete_decks_are_refetched_and_failures_isolated() {
                 field: PriceField::Trend,
                 sealed_field: PriceField::Trend,
                 cutoff: 0.5,
+                foil_needs_sales: true,
             },
         );
         let family = rows.iter().find(|r| r.id_product == FAMILY).unwrap();
@@ -400,4 +431,127 @@ async fn load_history_requests_cards_and_sealed_on_all_dates() {
     let requests = tracker.received_requests().await.unwrap();
     let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
     assert_eq!(body["ids"], json!([101, 102, ARMY]));
+}
+
+type SalesResult = (Result<crate::precon_ev::SalesMap, String>, Vec<LoadEvent>);
+
+async fn run_sales(s: &Servers, dir: PathBuf, ids: Vec<u64>, cancelled: bool) -> SalesResult {
+    let tracker = InventorySyncClient::new(&s.tracker.uri());
+    tokio::task::spawn_blocking(move || {
+        let events = Mutex::new(Vec::new());
+        let cancel = AtomicBool::new(cancelled);
+        let result = load_sales(
+            &tracker,
+            &SalesCache::with_dir(dir),
+            &ids,
+            local_date(NOW),
+            &|e| events.lock().unwrap().push(e),
+            &cancel,
+        );
+        (result, events.into_inner().unwrap())
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn sales_phase_counts_days_and_caches_them_for_the_day() {
+    let s = servers().await;
+    let tmp = tempfile::tempdir().unwrap();
+    mount_tracker(&s, None).await;
+    // One batch = 2 requests (16 dates), across both runs.
+    mount_sales(&s, Some(2)).await;
+    mount(&s.mtgjson, "GET", "/SetList.json", set_list(), None).await;
+    mount(&s.mtgjson, "GET", "/DeckList.json", deck_list(), None).await;
+    mount(
+        &s.mtgjson,
+        "GET",
+        "/decks/AnimatedArmy_BLC.json",
+        deck_file("Animated Army", &[Some("101"), Some("102")]),
+        None,
+    )
+    .await;
+    mount(
+        &s.mtgjson,
+        "GET",
+        "/decks/FamilyMatters_BLC.json",
+        deck_file("Family Matters", &[Some("201")]),
+        None,
+    )
+    .await;
+    let mut data = load(&s, tmp.path().join("decks"), false, NOW)
+        .await
+        .0
+        .unwrap();
+
+    // Only cards >= the price floor are checked (102 costs €0.20).
+    let ids = crate::precon_ev::sales_candidates(&data.decks, &data.prices);
+    assert_eq!(ids, vec![101, 201]);
+    let (result, events) = run_sales(&s, tmp.path().join("sales"), ids.clone(), false).await;
+    let sales = result.unwrap();
+    assert_eq!(sales[&101].nonfoil_days, 7);
+    assert_eq!(sales[&101].observed_days, 14);
+    assert!(sales[&101].nonfoil_recent);
+    assert_eq!(
+        sales[&201],
+        SalesStats {
+            observed_days: 14,
+            ..SalesStats::default()
+        }
+    );
+    assert!(events.contains(&LoadEvent::Sales { done: 2, total: 2 }));
+
+    // Same day again: served from the cache (the mock allows 2 requests).
+    let (again, events) = run_sales(&s, tmp.path().join("sales"), ids, false).await;
+    assert_eq!(again.unwrap(), sales);
+    assert!(events.is_empty());
+
+    data.sales = Some(sales);
+    let rows = build_rows(
+        &data,
+        EvParams {
+            field: PriceField::Trend,
+            sealed_field: PriceField::Trend,
+            cutoff: 0.5,
+            foil_needs_sales: true,
+        },
+    );
+    let army = rows.iter().find(|r| r.id_product == ARMY).unwrap();
+    let liquid = army.ev.as_ref().unwrap().liquid.unwrap();
+    assert!((liquid - 10.0 * liquidity_weight(7, 14)).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn sales_batch_is_retried_once() {
+    let s = servers().await;
+    let tmp = tempfile::tempdir().unwrap();
+    // First attempt fails, the retry succeeds (both of its requests).
+    Mock::given(method("POST"))
+        .and(path("/api/price-snapshots"))
+        .respond_with(ResponseTemplate::new(500))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&s.tracker)
+        .await;
+    mount_sales(&s, Some(2)).await;
+    let (result, _) = run_sales(&s, tmp.path().to_path_buf(), vec![101], false).await;
+    assert_eq!(result.unwrap()[&101].nonfoil_days, 7);
+}
+
+#[tokio::test]
+async fn sales_failure_and_cancel_return_errors() {
+    let s = servers().await;
+    let tmp = tempfile::tempdir().unwrap();
+    Mock::given(method("POST"))
+        .and(path("/api/price-snapshots"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(2) // first try + one retry, cancelled run sends nothing
+        .mount(&s.tracker)
+        .await;
+    let (result, _) = run_sales(&s, tmp.path().to_path_buf(), vec![101], false).await;
+    assert!(result
+        .unwrap_err()
+        .starts_with("Sales history fetch failed"));
+    let (result, _) = run_sales(&s, tmp.path().to_path_buf(), vec![101], true).await;
+    assert_eq!(result.unwrap_err(), "Sales history fetch cancelled");
 }

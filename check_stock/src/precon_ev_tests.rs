@@ -80,13 +80,14 @@ fn prices(rows: Vec<LatestPrice>) -> HashMap<u64, LatestPrice> {
 }
 
 fn values<'a>(decks: &[&'a PreconDeck], map: &HashMap<u64, LatestPrice>) -> Vec<CardValue<'a>> {
-    value_cards(decks, |id| map.get(&id), PriceField::Trend)
+    value_cards(decks, |id| map.get(&id), None, TREND)
 }
 
 const TREND: EvParams = EvParams {
     field: PriceField::Trend,
     sealed_field: PriceField::Trend,
     cutoff: 0.50,
+    foil_needs_sales: true,
 };
 
 // ── Catalog ──────────────────────────────────────────────────────────────────
@@ -519,7 +520,7 @@ fn ev_history_groups_by_requested_date() {
         // Unknown date is ignored.
         snap(1, "2030-01-01", 1000.0),
     ];
-    let points = ev_history(&[&d], 99, &snaps, &dates, TREND);
+    let points = ev_history(&[&d], 99, &snaps, &dates, None, TREND);
     assert_eq!(points.len(), 3);
     assert_eq!(points[0].ev, None);
     assert_eq!(points[0].sealed, Some(40.0));
@@ -653,4 +654,279 @@ fn stale_sealed_price_is_flagged_in_notes() {
     );
     assert_eq!(at_low[0].sealed_price, Some(88.0));
     assert_eq!(at_low[0].stale_sealed(), None);
+}
+
+// ── Sales signal ─────────────────────────────────────────────────────────────
+
+fn day_row(
+    id: u64,
+    requested: &str,
+    price_date: &str,
+    avg1: Option<f64>,
+    avg1_foil: Option<f64>,
+) -> PriceSnapshot {
+    PriceSnapshot {
+        price_date: price_date.to_string(),
+        avg1,
+        avg1_foil,
+        ..snap(id, requested, 1.0)
+    }
+}
+
+fn test_window(days: usize) -> SalesWindow {
+    SalesWindow {
+        lookback: "L".to_string(),
+        daily: (0..days).map(|d| format!("d{d}")).collect(),
+    }
+}
+
+/// Non-foil sales on `days` of `observed` days; foil never sold.
+fn sold(days: u8, observed: u8) -> SalesStats {
+    SalesStats {
+        nonfoil_days: days,
+        foil_days: 0,
+        observed_days: observed,
+        nonfoil_recent: days > 0,
+        foil_recent: false,
+    }
+}
+
+#[test]
+fn sales_window_covers_lookback_and_daily_days() {
+    let w = SalesWindow::ending(date("2026-10-17"));
+    assert_eq!(w.lookback, "2026-08-29");
+    assert_eq!(w.daily.len(), SALES_DAYS as usize + 1);
+    assert_eq!(w.daily.first().unwrap(), "2026-10-03");
+    assert_eq!(w.daily.last().unwrap(), "2026-10-17");
+    let dates = w.dates();
+    assert_eq!(dates.len(), 16, "fits two 8-date tracker requests");
+    assert_eq!(dates[0], "2026-08-29");
+}
+
+#[test]
+fn sales_stats_count_days_where_the_daily_average_moved() {
+    let w = test_window(5);
+    let mut snaps = Vec::new();
+    for (d, v) in w.daily.iter().zip([5.0, 5.0, 6.0, 6.0, 7.0]) {
+        snaps.push(day_row(1, d, d, Some(v), None));
+    }
+    // First sale mid-window (None → value counts); 0.0 means no sale.
+    for (d, v) in w
+        .daily
+        .iter()
+        .zip([None, Some(0.0), Some(3.0), Some(3.0), Some(4.0)])
+    {
+        snaps.push(day_row(2, d, d, v, None));
+    }
+    // Tracker gap: d2 repeats d1's row, so d1 → d2 is not observed.
+    for (d, (pd, v)) in w.daily.iter().zip([
+        ("d0", 1.0),
+        ("d1", 2.0),
+        ("d1", 2.0),
+        ("d3", 3.0),
+        ("d4", 3.0),
+    ]) {
+        snaps.push(day_row(3, d, pd, Some(v), None));
+    }
+    snaps.push(day_row(1, "other", "other", Some(99.0), None));
+    let stats = sales_stats(&snaps, &w);
+    assert_eq!(stats[&1], sold(2, 4));
+    assert_eq!(stats[&2], sold(2, 4));
+    assert_eq!(stats[&3], sold(2, 3));
+}
+
+#[test]
+fn foil_recent_looks_back_beyond_the_daily_window() {
+    let w = test_window(3);
+    let mut snaps = Vec::new();
+    // (id, lookback foil avg1, daily foil avg1)
+    for (id, back, now) in [
+        (1, Some(10.0), 12.0),
+        (2, Some(12.0), 12.0),
+        (3, None, 12.0),
+    ] {
+        snaps.push(day_row(id, "L", "L", None, back));
+        for d in &w.daily {
+            snaps.push(day_row(id, d, d, None, Some(now)));
+        }
+    }
+    let stats = sales_stats(&snaps, &w);
+    assert_eq!(stats[&1].foil_days, 0);
+    assert!(stats[&1].foil_recent, "sold between lookback and window");
+    assert!(!stats[&2].foil_recent, "unchanged for the whole lookback");
+    assert!(stats[&3].foil_recent, "first foil sale since the lookback");
+}
+
+#[test]
+fn sales_stats_skip_days_where_the_whole_market_froze() {
+    let w = test_window(4);
+    // 30 cards whose averages move every day except d1 → d2 (a freeze).
+    let mut snaps = Vec::new();
+    for id in 1..=30u64 {
+        for (k, d) in w.daily.iter().enumerate() {
+            let v = id as f64 + [1.0, 2.0, 2.0, 3.0][k];
+            snaps.push(PriceSnapshot {
+                avg30: Some(v),
+                ..day_row(id, d, d, Some(v), None)
+            });
+        }
+    }
+    assert_eq!(sales_stats(&snaps, &w)[&1], sold(2, 2));
+}
+
+#[test]
+fn sales_candidates_use_the_finish_in_the_deck() {
+    let d = deck(
+        "D",
+        vec![
+            main("Non-foil, only the foil is pricey", 1, 1),
+            card("Foil, pricey foil", 1, true, Some(2), DeckBoard::Main),
+            main("At the floor", 1, 3),
+            card("Oversized", 1, true, Some(4), DeckBoard::Display),
+            card("No id", 1, false, None, DeckBoard::Main),
+            main("At the floor again", 1, 3),
+        ],
+    );
+    let decks = HashMap::from([("D".to_string(), d)]);
+    let map = prices(vec![
+        price(1, Some(0.10), Some(3.0)),
+        price(2, Some(0.10), Some(3.0)),
+        price(3, Some(SALES_MIN_PRICE_EUR), None),
+        price(4, Some(50.0), Some(80.0)),
+    ]);
+    assert_eq!(sales_candidates(&decks, &map), vec![2, 3]);
+}
+
+#[test]
+fn liquidity_weight_is_full_from_the_threshold_share() {
+    assert_eq!(liquidity_weight(0, 10), 0.0);
+    assert_eq!(liquidity_weight(5, 10), 1.0);
+    assert!((liquidity_weight(2, 10) - 0.4).abs() < 1e-12);
+    assert_eq!(liquidity_weight(10, 10), 1.0);
+    // Nothing observed (unchecked card), or out-of-range counts.
+    assert_eq!(liquidity_weight(1, 0), 0.0);
+    assert_eq!(liquidity_weight(200, 10), 1.0);
+}
+
+#[test]
+fn card_unit_gates_unsold_foil_premiums() {
+    let row = price(1, Some(2.0), Some(9.0));
+    let foil = Some(UnitPrice {
+        eur: 9.0,
+        foil_fallback: false,
+    });
+    let nonfoil = Some(UnitPrice {
+        eur: 2.0,
+        foil_fallback: true,
+    });
+    let foil_sold = SalesStats {
+        foil_recent: true,
+        ..sold(0, 10)
+    };
+    // Foil sold recently → foil price; never sold → non-foil price, flagged.
+    assert_eq!(card_unit(Some(&row), Some(foil_sold), TREND, true), foil);
+    assert_eq!(
+        card_unit(Some(&row), Some(sold(5, 10)), TREND, true),
+        nonfoil
+    );
+    // Gate off, or no sales history loaded → foil price.
+    let off = EvParams {
+        foil_needs_sales: false,
+        ..TREND
+    };
+    assert_eq!(card_unit(Some(&row), Some(sold(5, 10)), off, true), foil);
+    assert_eq!(card_unit(Some(&row), None, TREND, true), foil);
+    // Non-foil cards are unaffected.
+    assert_eq!(
+        card_unit(Some(&row), Some(sold(0, 10)), TREND, false),
+        Some(UnitPrice {
+            eur: 2.0,
+            foil_fallback: false
+        })
+    );
+    // Foil-only printing keeps its foil price.
+    let foil_only = price(1, None, Some(9.0));
+    assert_eq!(
+        card_unit(Some(&foil_only), Some(sold(0, 10)), TREND, true),
+        foil
+    );
+}
+
+#[test]
+fn value_cards_attach_sales_of_the_finish_used() {
+    let d = deck(
+        "D",
+        vec![
+            card("Sold foil", 1, true, Some(1), DeckBoard::Main),
+            card("Unsold foil", 1, true, Some(2), DeckBoard::Main),
+            main("Cheap", 1, 3),
+        ],
+    );
+    let map = prices(vec![
+        price(1, Some(1.0), Some(10.0)),
+        price(2, Some(2.0), Some(20.0)),
+        price(3, Some(0.10), None),
+    ]);
+    let sold_foil = SalesStats {
+        foil_days: 3,
+        foil_recent: true,
+        ..sold(10, 10)
+    };
+    let sales = SalesMap::from([(1, sold_foil), (2, sold(4, 10))]);
+    let v = value_cards(&[&d], |id| map.get(&id), Some(&sales), TREND);
+    assert_eq!(v[0].unit.unwrap().eur, 10.0);
+    assert_eq!(v[0].sale_days, Some(3));
+    assert_eq!(v[1].unit.unwrap().eur, 2.0);
+    assert_eq!(v[1].sale_days, Some(4), "fallback uses non-foil sales");
+    assert_eq!(v[1].liquidity, Some(liquidity_weight(4, 10)));
+    assert_eq!(v[2].sale_days, Some(0), "unchecked cards count as unsold");
+    assert_eq!(v[2].observed_days, Some(0));
+    assert_eq!(v[2].liquidity, Some(0.0));
+
+    let none = value_cards(&[&d], |id| map.get(&id), None, TREND);
+    assert_eq!(none[0].sale_days, None);
+    assert_eq!(none[0].liquidity, None);
+}
+
+#[test]
+fn liquid_ev_weights_counted_copies_by_sales_frequency() {
+    let d = deck(
+        "D",
+        vec![
+            main("A", 2, 1),
+            main("B", 1, 2),
+            main("C", 1, 3),
+            main("Bulk", 1, 4),
+        ],
+    );
+    let map = prices(vec![
+        price(1, Some(5.0), None),
+        price(2, Some(3.0), None),
+        price(3, Some(4.0), None),
+        price(4, Some(0.20), None),
+    ]);
+    let sales = SalesMap::from([
+        (1, sold(10, 10)),
+        (2, sold(0, 10)),
+        (3, sold(1, 10)),
+        (4, sold(10, 10)),
+    ]);
+    let v = value_cards(&[&d], |id| map.get(&id), Some(&sales), TREND);
+    let ev = summarize(&v, 0.50);
+    assert!((ev.ev - 17.0).abs() < 1e-9);
+    // A counts fully, B not at all, C at 20%, Bulk is below the cutoff.
+    assert!((ev.liquid.unwrap() - (10.0 + 0.8)).abs() < 1e-9);
+
+    let without = summarize(&values(&[&d], &map), 0.50);
+    assert_eq!(without.liquid, None);
+}
+
+#[test]
+fn rows_carry_liquid_ev_and_sort_by_it() {
+    let mut data = sample_data();
+    data.sales = Some(SalesMap::from([(1, sold(10, 10))]));
+    let mut rows = build_rows(&data, TREND);
+    assert_eq!(rows[0].ev.as_ref().unwrap().liquid, Some(3.0));
+    sort_rows(&mut rows, PreconSort::Liquid, true);
+    assert_eq!(rows[0].id_product, 10, "rows without Liquid EV sort last");
 }

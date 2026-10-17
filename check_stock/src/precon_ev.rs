@@ -13,12 +13,18 @@
 //! - Foil cards use the foil price; if the tracker has no foil price the
 //!   non-foil price is used and flagged. Never the other way round, which
 //!   would inflate EV. Prices ≤ 0 count as missing.
+//! - With `foil_needs_sales`, a foil that has not sold in the last
+//!   [`FOIL_LOOKBACK_DAYS`] days is also valued at the non-foil price: a
+//!   foil premium nobody pays (typical for Collector's Editions) is not value.
+//! - **Liquid EV** weights each counted copy by how often it sells: full
+//!   weight from a sale on [`LIQUID_FULL_SHARE`] of recent days, less below.
 
 use crate::api::inventory_sync::{
     LatestPrice, PriceField, PriceFields, PriceSnapshot, ProductSearchResult,
 };
 use crate::api::mtgjson::{DeckBoard, DeckCard, DeckResolution, PreconDeck, SealedIndex};
 use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
@@ -45,6 +51,29 @@ pub const SEALED_FIELDS: [PriceField; 3] = [PriceField::Trend, PriceField::Low, 
 /// stale (thin market) — the deck cannot be bought anywhere near it, so the
 /// EV/Sealed ratio is overstated.
 pub const STALE_SEALED_FACTOR: f64 = 1.25;
+/// Days of daily sales history behind the liquidity signal.
+pub const SALES_DAYS: u32 = 14;
+/// How far back "did this foil sell at all" looks (foil premium gate). One
+/// extra snapshot date, so the window costs 16 dates = 2 tracker requests.
+pub const FOIL_LOOKBACK_DAYS: u32 = 49;
+/// A card that sold on at least this share of observed days counts fully in
+/// Liquid EV; slower cards count proportionally less, unsold ones not at all.
+pub const LIQUID_FULL_SHARE: f64 = 0.5;
+/// Cards below this price (trend, in the finish the deck contains) get no
+/// sales history: Liquid EV treats them as unsellable. Equal to the default
+/// bulk cutoff, so nothing counted in EV by default goes unchecked; halves
+/// the load on the tracker compared with checking every card.
+pub const SALES_MIN_PRICE_EUR: f64 = 0.50;
+/// A day on which fewer than this share of a batch's cards had their sales
+/// averages move is a Cardmarket data freeze, not a quiet market, and is not
+/// observed. Cardmarket skips averages updates for newer products on some
+/// days (and froze them ~24 Sep–3 Oct 2026) while older ones keep updating;
+/// batches are grouped by product id, so they follow that split. A batch
+/// straddling it may miss a freeze, costing its frozen cards a sale day.
+const FROZEN_MAX_SHARE: f64 = 0.05;
+/// Fewer cards than this cannot tell a freeze from a quiet market; then
+/// every day counts.
+const FROZEN_MIN_CARDS: usize = 20;
 
 // ── Catalog ──────────────────────────────────────────────────────────────────
 
@@ -124,6 +153,226 @@ pub fn stale_below_offer(sealed: Option<f64>, cheapest_offer: Option<f64>) -> Op
     }
 }
 
+// ── Sales ────────────────────────────────────────────────────────────────────
+
+/// Recent sales activity of a card, per finish. Market-wide: all sellers,
+/// countries and languages.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SalesStats {
+    /// Observed days (of the last [`SALES_DAYS`]) with at least one sale.
+    pub nonfoil_days: u8,
+    pub foil_days: u8,
+    /// Days with fresh, unfrozen data (tracker gaps and freezes excluded).
+    pub observed_days: u8,
+    /// Sold at all in the last [`FOIL_LOOKBACK_DAYS`].
+    pub nonfoil_recent: bool,
+    pub foil_recent: bool,
+}
+
+/// Card id → sales stats. A card missing from a loaded map had no sales, or
+/// was below [`SALES_MIN_PRICE_EUR`] and not checked.
+pub type SalesMap = HashMap<u64, SalesStats>;
+
+/// The snapshot dates behind [`SalesStats`]: one lookback date plus every
+/// day of the last [`SALES_DAYS`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SalesWindow {
+    pub lookback: String,
+    /// `SALES_DAYS + 1` consecutive days ending on the window's last day.
+    pub daily: Vec<String>,
+}
+
+impl SalesWindow {
+    /// The window ending on `today`.
+    pub fn ending(today: NaiveDate) -> Self {
+        let day = |back: u32| (today - chrono::Duration::days(i64::from(back))).format("%Y-%m-%d");
+        Self {
+            lookback: day(FOIL_LOOKBACK_DAYS).to_string(),
+            daily: (0..=SALES_DAYS).rev().map(|d| day(d).to_string()).collect(),
+        }
+    }
+
+    /// All dates to request, ascending.
+    pub fn dates(&self) -> Vec<String> {
+        std::iter::once(self.lookback.clone())
+            .chain(self.daily.iter().cloned())
+            .collect()
+    }
+}
+
+/// A card's snapshot rows: id, lookback row, daily rows.
+type CardRows<'a> = (
+    u64,
+    Option<&'a PriceSnapshot>,
+    Vec<Option<&'a PriceSnapshot>>,
+);
+
+/// The sales averages of a snapshot row, non-foil then foil.
+fn sales_averages(s: &PriceSnapshot) -> [Option<f64>; 6] {
+    [
+        s.avg1,
+        s.avg7,
+        s.avg30,
+        s.avg1_foil,
+        s.avg7_foil,
+        s.avg30_foil,
+    ]
+}
+
+/// Whether day `k` of a card's daily rows has fresh data: both rows exist
+/// and come from different tracker days (a tracker gap repeats the row).
+fn fresh_day(rows: &[Option<&PriceSnapshot>], k: usize) -> bool {
+    matches!((rows[k - 1], rows[k]), (Some(a), Some(b)) if a.price_date != b.price_date)
+}
+
+/// Counts sale days from daily snapshots (grouped by `requested_date`).
+///
+/// Cardmarket's 1-day average is carried forward on days without a sale, so
+/// a day on which `avg1` moved had at least one sale; sales at exactly the
+/// previous average are missed, so this is a lower bound. Days on which
+/// (almost) no card's averages moved are a data freeze and not observed.
+/// "Recent" also compares today's `avg1` with the lookback date's.
+pub fn sales_stats(snapshots: &[PriceSnapshot], window: &SalesWindow) -> SalesMap {
+    let mut rows: HashMap<u64, HashMap<&str, &PriceSnapshot>> = HashMap::new();
+    for s in snapshots {
+        rows.entry(s.id_product)
+            .or_default()
+            .insert(s.requested_date.as_str(), s);
+    }
+    let cards: Vec<CardRows> = rows
+        .into_iter()
+        .map(|(id, by_date)| {
+            let daily = window
+                .daily
+                .iter()
+                .map(|d| by_date.get(d.as_str()).copied())
+                .collect();
+            (id, by_date.get(window.lookback.as_str()).copied(), daily)
+        })
+        .collect();
+
+    // Day k (from daily[k-1] to daily[k]) is frozen when the batch is big
+    // enough to judge and almost no card's sales averages moved.
+    let days = window.daily.len().saturating_sub(1);
+    let frozen: Vec<bool> = (1..=days)
+        .map(|k| {
+            let (mut with_data, mut moved) = (0usize, 0usize);
+            for (_, _, daily) in &cards {
+                if !fresh_day(daily, k) {
+                    continue;
+                }
+                let (a, b) = (
+                    sales_averages(daily[k - 1].unwrap()),
+                    sales_averages(daily[k].unwrap()),
+                );
+                if b.iter().any(Option::is_some) {
+                    with_data += 1;
+                    moved += usize::from(a != b);
+                }
+            }
+            with_data >= FROZEN_MIN_CARDS && (moved as f64) < FROZEN_MAX_SHARE * with_data as f64
+        })
+        .collect();
+
+    cards
+        .into_iter()
+        .map(|(id, lookback, daily)| {
+            let observed: Vec<usize> = (1..=days)
+                .filter(|&k| !frozen[k - 1] && fresh_day(&daily, k))
+                .collect();
+            let finish = |pick: fn(&PriceSnapshot) -> Option<f64>| -> (u8, bool) {
+                let value = |row: Option<&PriceSnapshot>| row.and_then(|s| positive(pick(s)));
+                let sale_days = observed
+                    .iter()
+                    .filter(|&&k| {
+                        let now = value(daily[k]);
+                        now.is_some() && now != value(daily[k - 1])
+                    })
+                    .count();
+                let latest = value(daily.last().copied().flatten());
+                let recent = sale_days > 0 || (latest.is_some() && latest != value(lookback));
+                (u8::try_from(sale_days).unwrap_or(u8::MAX), recent)
+            };
+            let (nonfoil_days, nonfoil_recent) = finish(|s| s.avg1);
+            let (foil_days, foil_recent) = finish(|s| s.avg1_foil);
+            let stats = SalesStats {
+                nonfoil_days,
+                foil_days,
+                observed_days: u8::try_from(observed.len()).unwrap_or(u8::MAX),
+                nonfoil_recent,
+                foil_recent,
+            };
+            (id, stats)
+        })
+        .collect()
+}
+
+/// Card ids worth fetching sales history for: deck cards priced at least
+/// [`SALES_MIN_PRICE_EUR`] in the finish the deck contains (foils also by
+/// their non-foil price, which the foil gate may fall back to). Display
+/// cards are skipped. Sorted, deduplicated.
+pub fn sales_candidates(
+    decks: &HashMap<String, PreconDeck>,
+    prices: &HashMap<u64, LatestPrice>,
+) -> Vec<u64> {
+    let mut out: Vec<u64> = decks
+        .values()
+        .flat_map(|d| d.cards.iter())
+        .filter(|c| c.board != DeckBoard::Display)
+        .filter_map(|c| {
+            let p = prices.get(&c.mcm_id?)?;
+            let finishes = if c.is_foil {
+                [p.trend, p.trend_foil]
+            } else {
+                [p.trend, None]
+            };
+            finishes
+                .into_iter()
+                .flatten()
+                .any(|v| v >= SALES_MIN_PRICE_EUR)
+                .then_some(c.mcm_id?)
+        })
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Liquid EV weight of a card: its share of observed days with a sale,
+/// scaled so that [`LIQUID_FULL_SHARE`] or more counts fully (0 when
+/// nothing was observed).
+pub fn liquidity_weight(sale_days: u8, observed_days: u8) -> f64 {
+    if observed_days == 0 {
+        return 0.0;
+    }
+    let share = f64::from(sale_days) / f64::from(observed_days);
+    (share / LIQUID_FULL_SHARE).clamp(0.0, 1.0)
+}
+
+/// Unit price under the EV rules: [`unit_price`], except that with
+/// `foil_needs_sales` a foil that did not sell in the last
+/// [`FOIL_LOOKBACK_DAYS`] is valued at its non-foil price (flagged as a foil
+/// fallback). Foil-only printings without a non-foil price keep their foil
+/// price. `sales` is `None` when no sales history is loaded — then nothing
+/// is gated.
+pub fn card_unit<P: PriceFields>(
+    row: Option<&P>,
+    sales: Option<SalesStats>,
+    params: EvParams,
+    is_foil: bool,
+) -> Option<UnitPrice> {
+    let unsold_foil = is_foil && params.foil_needs_sales && sales.is_some_and(|s| !s.foil_recent);
+    if unsold_foil {
+        if let Some(eur) = positive(row?.price_for(params.field, false)) {
+            return Some(UnitPrice {
+                eur,
+                foil_fallback: true,
+            });
+        }
+    }
+    unit_price(row, params.field, is_foil)
+}
+
 // ── EV ───────────────────────────────────────────────────────────────────────
 
 /// One decklist line with its unit price (if known).
@@ -133,6 +382,13 @@ pub struct CardValue<'a> {
     /// Index into the decks passed to [`value_cards`] (bundles have several).
     pub deck_idx: usize,
     pub unit: Option<UnitPrice>,
+    /// Sale days of the finish the unit price is based on; `None` without
+    /// sales history or price.
+    pub sale_days: Option<u8>,
+    /// Days observed for `sale_days` (0 = card not checked).
+    pub observed_days: Option<u8>,
+    /// Liquid EV weight from `sale_days` ([`liquidity_weight`]).
+    pub liquidity: Option<f64>,
 }
 
 impl CardValue<'_> {
@@ -143,11 +399,13 @@ impl CardValue<'_> {
 }
 
 /// Prices every non-display card of `decks` via `lookup` (Cardmarket id →
-/// price row).
+/// price row). `sales` (if loaded) gates foil premiums and drives the sell
+/// probability.
 pub fn value_cards<'a, 'p, P, F>(
     decks: &[&'a PreconDeck],
     lookup: F,
-    field: PriceField,
+    sales: Option<&SalesMap>,
+    params: EvParams,
 ) -> Vec<CardValue<'a>>
 where
     P: PriceFields + 'p,
@@ -156,12 +414,27 @@ where
     let mut out = Vec::new();
     for (deck_idx, deck) in decks.iter().enumerate() {
         for card in deck.cards.iter().filter(|c| c.board != DeckBoard::Display) {
+            let stats = sales
+                .zip(card.mcm_id)
+                .map(|(map, id)| map.get(&id).copied().unwrap_or_default());
+            let unit = card_unit(card.mcm_id.and_then(&lookup), stats, params, card.is_foil);
+            let sale_days = stats.zip(unit).map(|(s, u)| {
+                if card.is_foil && !u.foil_fallback {
+                    s.foil_days
+                } else {
+                    s.nonfoil_days
+                }
+            });
+            let observed_days = sale_days.and(stats.map(|s| s.observed_days));
             out.push(CardValue {
                 card,
                 deck_idx,
-                unit: card
-                    .mcm_id
-                    .and_then(|id| unit_price(lookup(id), field, card.is_foil)),
+                unit,
+                sale_days,
+                observed_days,
+                liquidity: sale_days
+                    .zip(observed_days)
+                    .map(|(d, o)| liquidity_weight(d, o)),
             });
         }
     }
@@ -227,6 +500,9 @@ pub struct DeckEv {
     pub below_cutoff_copies: u32,
     pub unpriced_copies: u32,
     pub foil_fallback_copies: u32,
+    /// Σ line × liquidity weight over the copies counted in `ev`; `None`
+    /// without sales history.
+    pub liquid: Option<f64>,
 }
 
 impl DeckEv {
@@ -246,6 +522,7 @@ pub fn summarize(values: &[CardValue], cutoff: f64) -> DeckEv {
         top5: top_n_copies(values, TOP_N),
         ..DeckEv::default()
     };
+    let mut liquid = 0.0;
     for v in values {
         let count = v.card.count;
         ev.total_copies += count;
@@ -262,10 +539,15 @@ pub fn summarize(values: &[CardValue], cutoff: f64) -> DeckEv {
         if unit.eur >= cutoff {
             ev.ev += line;
             ev.counted_copies += count;
+            liquid += line * v.liquidity.unwrap_or(0.0);
         } else {
             ev.below_cutoff_copies += count;
         }
     }
+    ev.liquid = values
+        .iter()
+        .any(|v| v.sale_days.is_some())
+        .then_some(liquid);
     ev
 }
 
@@ -297,6 +579,10 @@ pub struct PreconData {
     pub deck_errors: HashMap<String, String>,
     /// Latest tracker price per product id (cards and sealed products).
     pub prices: HashMap<u64, LatestPrice>,
+    /// Sales stats of the deck cards (cached per day); `None` if the sales
+    /// history could not be fetched.
+    pub sales: Option<SalesMap>,
+    pub sales_error: Option<String>,
 }
 
 impl PreconData {
@@ -332,6 +618,8 @@ pub struct EvParams {
     /// Price column for the sealed product (one of [`SEALED_FIELDS`]).
     pub sealed_field: PriceField,
     pub cutoff: f64,
+    /// Value a foil at its non-foil price unless the foil sold recently.
+    pub foil_needs_sales: bool,
 }
 
 /// One row of the ranking table.
@@ -436,7 +724,8 @@ pub fn build_rows(data: &PreconData, params: EvParams) -> Vec<PreconRow> {
             let sealed = sealed_price(data.prices.get(&id), params.sealed_field);
             let sealed_low = sealed_price(data.prices.get(&id), PriceField::Low);
             let ev = data.decks_for(id).map(|decks| {
-                let values = value_cards(&decks, |i| data.prices.get(&i), params.field);
+                let values =
+                    value_cards(&decks, |i| data.prices.get(&i), data.sales.as_ref(), params);
                 summarize(&values, params.cutoff)
             });
             let ratio = ev.as_ref().and_then(|e| ev_ratio(e.ev, sealed));
@@ -462,6 +751,8 @@ pub enum PreconSort {
     #[default]
     Ratio,
     Ev,
+    /// Liquid EV (sales-frequency weighted).
+    Liquid,
     Top5,
     Sealed,
     Coverage,
@@ -498,6 +789,7 @@ pub fn sort_rows(rows: &mut [PreconRow], sort: PreconSort, desc: bool) {
         match sort {
             PreconSort::Ratio => r.ratio,
             PreconSort::Ev => r.ev.as_ref().map(|e| e.ev),
+            PreconSort::Liquid => r.ev.as_ref().and_then(|e| e.liquid),
             PreconSort::Top5 => r.ev.as_ref().map(|e| e.top5),
             PreconSort::Sealed => r.sealed_price,
             PreconSort::Coverage => r.ev.as_ref().map(DeckEv::coverage),
@@ -590,12 +882,13 @@ pub struct EvPoint {
 }
 
 /// EV, Top 5 and sealed price per requested date, from snapshot rows
-/// (grouped by their `requested_date`).
+/// (grouped by their `requested_date`). Foil gating uses today's `sales`.
 pub fn ev_history(
     decks: &[&PreconDeck],
     sealed_id: u64,
     snapshots: &[PriceSnapshot],
     dates: &[String],
+    sales: Option<&SalesMap>,
     params: EvParams,
 ) -> Vec<EvPoint> {
     let mut by_date: HashMap<&str, HashMap<u64, &PriceSnapshot>> = HashMap::new();
@@ -610,7 +903,7 @@ pub fn ev_history(
         .map(|date| {
             let rows = by_date.get(date.as_str());
             let lookup = |id: u64| rows.and_then(|m| m.get(&id).copied());
-            let values = value_cards(decks, lookup, params.field);
+            let values = value_cards(decks, lookup, sales, params);
             let summary = summarize(&values, params.cutoff);
             let coverage = summary.coverage();
             let enough = coverage >= MIN_HISTORY_COVERAGE;

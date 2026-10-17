@@ -1232,8 +1232,10 @@ impl Default for RestockState {
 /// then exactly one final result.
 pub enum PreconLoadMsg {
     Event(crate::precon_loader::LoadEvent),
-    /// Boxed: the payload is large compared with progress events.
+    /// The ranking data. Boxed: the payload is large compared with events.
     Done(Result<Box<crate::precon_ev::PreconData>, String>),
+    /// The sales stats, fetched after `Done` (the slow, background phase).
+    Sales(Result<crate::precon_ev::SalesMap, String>),
 }
 
 /// State for the Precon EV screen (sealed precon value vs. singles).
@@ -1246,6 +1248,8 @@ pub struct PreconEvState {
     pub field: InventoryPriceSource,
     /// Price column for the sealed product (one of `precon_ev::SEALED_FIELDS`).
     pub sealed_field: InventoryPriceSource,
+    /// Value foils at the non-foil price unless the foil sold recently.
+    pub foil_needs_sales: bool,
     /// Card copies below this unit price (€) are excluded from EV.
     pub cutoff: f64,
     pub filter: String,
@@ -1253,10 +1257,14 @@ pub struct PreconEvState {
     pub sort: crate::precon_ev::PreconSort,
     pub sort_desc: bool,
     pub loading: bool,
+    /// The background sales-history phase (after the ranking is shown).
+    pub sales_loading: bool,
+    /// Cancels a running sales-history fetch (set when a new load starts).
+    pub sales_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Current load stage (shown next to the spinner).
     pub stage: String,
-    /// Decklists loaded so far, while the decklist stage runs.
-    pub deck_progress: Option<(usize, usize)>,
+    /// Counted progress of the current stage: (label, done, total).
+    pub progress: Option<(&'static str, usize, usize)>,
     pub error: Option<String>,
     pub rx: Option<std::sync::mpsc::Receiver<PreconLoadMsg>>,
     /// Product shown in the detail view.
@@ -1277,14 +1285,17 @@ impl Default for PreconEvState {
             rows: Vec::new(),
             field: InventoryPriceSource::Trend,
             sealed_field: InventoryPriceSource::Trend,
+            foil_needs_sales: true,
             cutoff: crate::precon_ev::DEFAULT_CUTOFF_EUR,
             filter: String::new(),
             hide_no_decklist: false,
             sort: crate::precon_ev::PreconSort::default(),
             sort_desc: true,
             loading: false,
+            sales_loading: false,
+            sales_cancel: None,
             stage: String::new(),
-            deck_progress: None,
+            progress: None,
             error: None,
             rx: None,
             selected: None,

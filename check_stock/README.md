@@ -106,8 +106,21 @@ showing exactly what would change before anything is written.
   cards can use any Cardmarket column, sealed only Trend, Low (cheapest offer)
   or Average — Cardmarket publishes no 1/7/30-day averages for sealed products.
   A ⚠ marks precons whose sealed price is more than 25% below the cheapest
-  offer (thin market, stale trend), where EV/Sealed is overstated. Changing the
-  cutoff or a price selector recomputes locally.
+  offer (thin market, stale trend), where EV/Sealed is overstated.
+  **Foil premium only if sold** (default on): a foil card that has not sold in
+  the last 49 days is valued at its non-foil price, which removes Collector's
+  Edition foil premiums nobody pays. **Liquid EV** weights each counted card by
+  how often it sold over the last 14 days: full weight from a sale on half the
+  days, proportionally less below, nothing if unsold. Both use a sales signal
+  from the tracker's daily snapshots: Cardmarket's 1-day average only changes on
+  a day with a sale, so a day where it moved had a sale. The signal is
+  market-wide; Cardmarket's price guide has no per-country or per-language data.
+  Tracker gaps and days on which Cardmarket did not update its averages are
+  skipped. Only cards worth €0.50+ in the finish the deck contains are checked
+  (cheaper ones count as unsellable in Liquid EV). The ranking appears as soon
+  as prices are loaded; sales history follows in the background, and the foil
+  check and Liquid EV apply when it finishes. Changing the cutoff, a price
+  selector or the foil option recomputes locally.
   Clicking a sealed price (ranking or detail) or a card name in the breakdown
   opens that exact product/printing on Cardmarket in the browser.
 
@@ -199,8 +212,15 @@ Precon EV caches MTGJSON data under `~/.cache/d2d_automations/mtgjson_v1/`:
   ~12 MB `SetList.json`; rebuilt weekly, when the tracker lists a precon the
   index has not seen, or via **Refresh MTGJSON data**.
 
+Card sales stats are cached for the calendar day in
+`~/.cache/d2d_automations/precon_sales/sales_stats.json` (the tracker updates
+daily). The first load of a day fetches them in the background, 100 cards per
+batch with short pauses so the tracker stays responsive for other clients;
+this takes several minutes on a cold tracker. Later loads that day only fetch
+cards not seen yet, and a reload cancels a running fetch.
+
 The precon catalog, MTGJSON's list of published decks and all prices are
-fetched live on every load. Delete the directory to force a full refresh.
+fetched live on every load. Delete the directories to force a full refresh.
 
 ## Running
 

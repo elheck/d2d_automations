@@ -86,7 +86,7 @@ pub(super) fn show_table(ui: &mut egui::Ui, state: &mut PreconEvState) -> Rankin
     let sort = &mut state.sort;
     let desc = &mut state.sort_desc;
     egui::Grid::new("precon_ranking")
-        .num_columns(9)
+        .num_columns(10)
         .striped(true)
         .spacing([14.0, 3.0])
         .show(ui, |ui| {
@@ -96,6 +96,7 @@ pub(super) fn show_table(ui: &mut egui::Ui, state: &mut PreconEvState) -> Rankin
             header(ui, "Sealed", PreconSort::Sealed, sort, desc);
             header(ui, "EV", PreconSort::Ev, sort, desc);
             header(ui, "EV/Sealed", PreconSort::Ratio, sort, desc);
+            header(ui, "Liquid EV", PreconSort::Liquid, sort, desc);
             header(ui, "Top 5", PreconSort::Top5, sort, desc);
             header(ui, "Priced", PreconSort::Coverage, sort, desc);
             ui.label(egui::RichText::new("Notes").strong());
@@ -118,6 +119,7 @@ pub(super) fn show_table(ui: &mut egui::Ui, state: &mut PreconEvState) -> Rankin
                 super::cardmarket_link(ui, euro(row.sealed_price), row.id_product);
                 ui.label(euro(row.ev.as_ref().map(|e| e.ev)));
                 ratio_label(ui, row);
+                ui.label(euro(row.ev.as_ref().and_then(|e| e.liquid)));
                 ui.label(euro(row.ev.as_ref().map(|e| e.top5)));
                 match &row.ev {
                     Some(ev) => {

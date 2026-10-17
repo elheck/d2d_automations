@@ -1,8 +1,14 @@
 //! Detail view of one precon product: KPIs, EV history chart, card table.
 
 use crate::{
-    api::mtgjson::DeckBoard,
-    precon_ev::{ranked_by_unit, summarize, top_n_lines, value_cards, CardValue, PreconRow, TOP_N},
+    api::{
+        inventory_sync::{LatestPrice, PriceField, PriceFields},
+        mtgjson::DeckBoard,
+    },
+    precon_ev::{
+        ranked_by_unit, summarize, top_n_lines, value_cards, CardValue, PreconRow, SALES_DAYS,
+        SALES_MIN_PRICE_EUR, TOP_N,
+    },
     ui::{
         components::{line_chart, Series},
         state::PreconEvState,
@@ -10,7 +16,15 @@ use crate::{
     },
 };
 use eframe::egui;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+/// What the card table needs besides the rows themselves.
+struct TableCtx<'a> {
+    cutoff: f64,
+    field: PriceField,
+    prices: &'a HashMap<u64, LatestPrice>,
+    top: &'a HashSet<usize>,
+}
 
 const SEALED_COLOR: egui::Color32 = egui::Color32::from_rgb(230, 160, 60);
 const TOP5_COLOR: egui::Color32 = egui::Color32::from_rgb(150, 110, 210);
@@ -67,11 +81,22 @@ pub(super) fn show(ui: &mut egui::Ui, state: &PreconEvState, id: u64) {
     show_history(ui, state);
     ui.add_space(10.0);
 
-    let values = value_cards(&decks, |i| data.prices.get(&i), state.field);
+    let values = value_cards(
+        &decks,
+        |i| data.prices.get(&i),
+        data.sales.as_ref(),
+        super::params(state),
+    );
     let top = top_n_lines(&values, TOP_N);
     let order = ranked_by_unit(&values);
+    let ctx = TableCtx {
+        cutoff: state.cutoff,
+        field: state.field,
+        prices: &data.prices,
+        top: &top,
+    };
     if decks.len() == 1 {
-        card_table(ui, "precon_cards_0", &values, &order, &top, state.cutoff);
+        card_table(ui, "precon_cards_0", &values, &order, &ctx);
     } else {
         for (deck_idx, deck) in decks.iter().enumerate() {
             let deck_order: Vec<usize> = order
@@ -91,8 +116,7 @@ pub(super) fn show(ui: &mut egui::Ui, state: &PreconEvState, id: u64) {
                         &format!("precon_cards_{deck_idx}"),
                         &values,
                         &deck_order,
-                        &top,
-                        state.cutoff,
+                        &ctx,
                     );
                 });
         }
@@ -142,6 +166,7 @@ fn show_kpis(ui: &mut egui::Ui, row: &PreconRow, cutoff: f64) {
             kpi(ui, "Cheapest offer", euro(row.sealed_low), offer_color);
             let (ratio, color) = super::ranking::ratio_text(row);
             kpi(ui, "EV/Sealed", ratio, color);
+            kpi(ui, "Liquid EV", euro(ev.liquid), style::COLOR_SUCCESS);
             kpi(ui, "Top 5", euro(Some(ev.top5)), TOP5_COLOR);
             kpi(
                 ui,
@@ -224,31 +249,32 @@ fn card_table(
     id_salt: &str,
     values: &[CardValue],
     order: &[usize],
-    top: &HashSet<usize>,
-    cutoff: f64,
+    ctx: &TableCtx,
 ) {
     egui::Grid::new(id_salt)
-        .num_columns(8)
+        .num_columns(9)
         .striped(true)
         .spacing([12.0, 2.0])
         .show(ui, |ui| {
-            for title in ["#", "Card", "Set #", "Board", "Qty", "Unit", "Line", "Note"] {
+            for title in [
+                "#", "Card", "Set #", "Board", "Qty", "Unit", "Line", "Sold", "Note",
+            ] {
                 ui.label(egui::RichText::new(title).strong());
             }
             ui.end_row();
 
             for (rank, &i) in order.iter().enumerate() {
                 let v = &values[i];
-                let counted = v.unit.is_some_and(|u| u.eur >= cutoff);
+                let counted = v.unit.is_some_and(|u| u.eur >= ctx.cutoff);
                 let color = if counted {
                     style::TEXT_PRIMARY
                 } else {
                     style::TEXT_MUTED
                 };
                 let cell = |ui: &mut egui::Ui, text: String| {
-                    ui.label(egui::RichText::new(text).color(color));
+                    ui.label(egui::RichText::new(text).color(color))
                 };
-                let marker = if top.contains(&i) { " ★" } else { "" };
+                let marker = if ctx.top.contains(&i) { " ★" } else { "" };
                 cell(ui, format!("{}{marker}", rank + 1));
                 let foil = if v.card.is_foil { " ✦" } else { "" };
                 let name = format!("{}{foil}", v.card.name);
@@ -258,17 +284,50 @@ fn card_table(
                         let text = if counted { text } else { text.color(color) };
                         super::cardmarket_link(ui, text, id);
                     }
-                    None => cell(ui, name),
+                    None => {
+                        cell(ui, name);
+                    }
                 }
                 cell(ui, format!("{} #{}", v.card.set_code, v.card.number));
                 cell(ui, board_label(v.card.board).to_string());
                 cell(ui, format!("×{}", v.card.count));
                 cell(ui, euro(v.unit.map(|u| u.eur)));
                 cell(ui, euro(v.line_total()));
+                match (v.sale_days, v.observed_days, v.liquidity) {
+                    (Some(days), Some(observed), Some(weight)) if observed > 0 => {
+                        let label = ui.label(
+                            egui::RichText::new(format!("{days}/{observed} d")).color(color),
+                        );
+                        label.on_hover_text(format!(
+                            "Sold on {days} of {observed} observed days (last {SALES_DAYS}, any \
+                             seller) · counts {:.0}% in Liquid EV",
+                            weight * 100.0
+                        ));
+                    }
+                    (Some(_), Some(_), _) => {
+                        cell(ui, "—".to_string()).on_hover_text(format!(
+                            "Not checked: under €{SALES_MIN_PRICE_EUR:.2}, counted as unsellable"
+                        ));
+                    }
+                    _ => {
+                        cell(ui, "—".to_string());
+                    }
+                }
                 let note = match (v.unit, v.card.mcm_id) {
                     (None, None) => "no Cardmarket id in MTGJSON",
                     (None, Some(_)) => "no tracker price",
-                    (Some(u), _) if u.foil_fallback => "no foil price — non-foil used",
+                    (Some(u), Some(id)) if u.foil_fallback => {
+                        let has_foil_price = ctx
+                            .prices
+                            .get(&id)
+                            .and_then(|p| p.price_for(ctx.field, true))
+                            .is_some_and(|p| p > 0.0);
+                        if has_foil_price {
+                            "foil unsold — non-foil price used"
+                        } else {
+                            "no foil price — non-foil used"
+                        }
+                    }
                     (Some(_), _) if !counted => "below cutoff",
                     _ => "",
                 };

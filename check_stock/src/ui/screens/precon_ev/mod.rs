@@ -12,12 +12,13 @@ mod ranking;
 
 use crate::{
     api::{cardmarket::product_url, inventory_sync::InventorySyncClient, mtgjson::MtgjsonClient},
-    cache::DeckCache,
+    cache::{DeckCache, SalesCache},
     precon_ev::{
-        build_rows, ev_history, history_start, sort_rows, trim_leading_gaps, weekly_dates,
-        EvParams, PreconData, SEALED_FIELDS, STALE_SEALED_FACTOR,
+        build_rows, ev_history, history_start, sales_candidates, sort_rows, trim_leading_gaps,
+        weekly_dates, EvParams, PreconData, FOIL_LOOKBACK_DAYS, LIQUID_FULL_SHARE, SALES_DAYS,
+        SALES_MIN_PRICE_EUR, SEALED_FIELDS, STALE_SEALED_FACTOR,
     },
-    precon_loader::{load_history, load_precons, LoadEvent, LoadOptions},
+    precon_loader::{load_history, load_precons, load_sales, local_date, LoadEvent, LoadOptions},
     ui::{
         components::InventorySyncBar,
         state::{
@@ -30,6 +31,16 @@ use eframe::egui;
 use log::info;
 
 pub struct PreconEvScreen;
+
+/// Pricing parameters for the current UI settings.
+fn params(state: &PreconEvState) -> EvParams {
+    EvParams {
+        field: state.field,
+        sealed_field: state.sealed_field,
+        cutoff: state.cutoff,
+        foil_needs_sales: state.foil_needs_sales,
+    }
+}
 
 /// Link that opens a product's Cardmarket page in the system browser
 /// (hovering shows the URL).
@@ -48,7 +59,7 @@ impl PreconEvScreen {
         let connected = matches!(app_state.inventory_sync_status, ConnectionStatus::Connected);
         // Also re-fetches after a reload cleared the histories.
         Self::ensure_history(state, connected, &app_state.inventory_sync_url);
-        if state.loading || state.history_rx.is_some() {
+        if state.loading || state.sales_loading || state.history_rx.is_some() {
             ctx.request_repaint();
         }
 
@@ -131,39 +142,72 @@ impl PreconEvScreen {
                 PreconLoadMsg::Event(LoadEvent::Stage(stage)) => state.stage = stage,
                 PreconLoadMsg::Event(LoadEvent::Decks { done, total }) => {
                     state.stage = "Loading decklists…".to_string();
-                    state.deck_progress = Some((done, total));
+                    state.progress = Some(("Decklists", done, total));
                 }
-                PreconLoadMsg::Done(result) => {
+                PreconLoadMsg::Event(LoadEvent::Sales { done, total }) => {
+                    state.stage = "Fetching sales history (cached for today)…".to_string();
+                    state.progress = Some(("Sales history", done, total));
+                }
+                PreconLoadMsg::Done(Ok(data)) => {
+                    info!(
+                        "Precon EV: loaded {} products, {} decklists",
+                        data.catalog.len(),
+                        data.decks.len()
+                    );
+                    // The ranking shows now; the sales phase keeps the channel.
+                    state.loading = false;
+                    state.sales_loading = true;
+                    state.progress = None;
+                    state.stage = "Fetching sales history…".to_string();
+                    state.data = Some(*data);
+                    // Prices were just refreshed; old histories are stale.
+                    state.histories.clear();
+                    state.error = None;
+                    Self::rebuild(state);
+                }
+                PreconLoadMsg::Done(Err(e)) => {
                     Self::finish_load(state);
-                    match result {
-                        Ok(data) => {
-                            info!(
-                                "Precon EV: loaded {} products, {} decklists",
-                                data.catalog.len(),
-                                data.decks.len()
-                            );
-                            state.data = Some(*data);
-                            // Prices were just refreshed; old histories are stale.
-                            state.histories.clear();
-                            state.error = None;
-                            Self::rebuild(state);
+                    state.error = Some(e);
+                    return;
+                }
+                PreconLoadMsg::Sales(result) => {
+                    Self::finish_load(state);
+                    if let Some(data) = &mut state.data {
+                        match result {
+                            Ok(map) => {
+                                info!("Precon EV: sales stats for {} cards", map.len());
+                                data.sales = Some(map);
+                                data.sales_error = None;
+                            }
+                            Err(e) => {
+                                data.sales = None;
+                                data.sales_error = Some(e);
+                            }
                         }
-                        Err(e) => state.error = Some(e),
                     }
+                    Self::rebuild(state);
                     return;
                 }
             }
         }
         if disconnected {
+            let in_sales = state.sales_loading;
             Self::finish_load(state);
-            state.error = Some("Precon load stopped unexpectedly.".to_string());
+            match (&mut state.data, in_sales) {
+                (Some(data), true) => {
+                    data.sales_error = Some("Sales history fetch stopped unexpectedly.".to_string())
+                }
+                _ => state.error = Some("Precon load stopped unexpectedly.".to_string()),
+            }
         }
     }
 
     fn finish_load(state: &mut PreconEvState) {
         state.loading = false;
+        state.sales_loading = false;
+        state.sales_cancel = None;
         state.rx = None;
-        state.deck_progress = None;
+        state.progress = None;
         state.stage.clear();
     }
 
@@ -221,7 +265,7 @@ impl PreconEvScreen {
                     Self::spawn_load(state, &url, true);
                 }
             }
-            if state.loading {
+            if state.loading || state.sales_loading {
                 ui.spinner();
                 ui.label(
                     egui::RichText::new(&state.stage)
@@ -230,11 +274,12 @@ impl PreconEvScreen {
                 );
             }
         });
-        if let (true, Some((done, total))) = (state.loading, state.deck_progress) {
+        let busy = state.loading || state.sales_loading;
+        if let (true, Some((label, done, total))) = (busy, state.progress) {
             ui.add_space(4.0);
             ui.add(
                 egui::ProgressBar::new(done as f32 / total.max(1) as f32)
-                    .text(format!("Decklists {done}/{total}"))
+                    .text(format!("{label} {done}/{total}"))
                     .desired_width(ui.available_width().min(500.0)),
             );
         }
@@ -284,6 +329,15 @@ impl PreconEvScreen {
                     );
 
                 ui.add_space(12.0);
+                let gate = ui
+                    .checkbox(&mut state.foil_needs_sales, "Foil premium only if sold")
+                    .on_hover_text(format!(
+                        "Value a foil at its non-foil price unless the foil sold in the last \
+                         {FOIL_LOOKBACK_DAYS} days. Removes foil premiums nobody pays \
+                         (Collector's Editions)."
+                    ));
+
+                ui.add_space(12.0);
                 ui.label("Filter:");
                 ui.add(
                     egui::TextEdit::singleline(&mut state.filter)
@@ -296,7 +350,8 @@ impl PreconEvScreen {
                     "Hide products without decklist",
                 );
 
-                if before != (state.field, state.sealed_field) || cutoff.changed() {
+                if before != (state.field, state.sealed_field) || cutoff.changed() || gate.changed()
+                {
                     Self::rebuild(state);
                 }
             });
@@ -325,6 +380,22 @@ impl PreconEvScreen {
                  show as missing.",
             );
         }
+        if state.sales_loading {
+            ui.label(
+                egui::RichText::new(
+                    "Loading sales history in the background — the foil check and Liquid EV \
+                     apply when it finishes (first load of the day only).",
+                )
+                .size(11.0)
+                .color(style::TEXT_MUTED),
+            );
+        }
+        if let Some(err) = &data.sales_error {
+            style::status_error(
+                ui,
+                &format!("{err} — foil sales check and Liquid EV are unavailable."),
+            );
+        }
         if data.catalog_truncated {
             style::status_error(
                 ui,
@@ -334,12 +405,17 @@ impl PreconEvScreen {
         ui.label(
             egui::RichText::new(format!(
                 "EV = card copies priced at or above €{:.2} (card price: {}), vs. the sealed {}. \
-                 Excludes tokens, display commanders, sample packs and extras. Top 5 = five most \
-                 expensive copies, regardless of the cutoff. ⚠ = sealed price more than {:.0}% \
-                 below the cheapest offer (thin market, ratio overstated).",
+                 Excludes tokens, display commanders, sample packs and extras. Liquid EV = EV with \
+                 each card weighted by how often it sold over the last {SALES_DAYS} days: full \
+                 weight from a sale on {:.0}% of days, less below, nothing if unsold \
+                 (market-wide, all countries and languages; cards under \
+                 €{SALES_MIN_PRICE_EUR:.2} count as unsellable). Top 5 = five most expensive \
+                 copies, regardless of the cutoff. ⚠ = sealed price more than {:.0}% below the \
+                 cheapest offer (thin market, ratio overstated).",
                 state.cutoff,
                 state.field.as_str(),
                 state.sealed_field.as_str(),
+                LIQUID_FULL_SHARE * 100.0,
                 (STALE_SEALED_FACTOR - 1.0) * 100.0,
             ))
             .size(11.0)
@@ -351,11 +427,19 @@ impl PreconEvScreen {
 
     fn spawn_load(state: &mut PreconEvState, url: &str, force_index_refresh: bool) {
         info!("Precon EV: loading from {url} (force index refresh: {force_index_refresh})");
+        // A still-running sales fetch from the previous load stops at its
+        // next batch instead of loading the tracker for nothing.
+        if let Some(cancel) = state.sales_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        state.sales_cancel = Some(cancel.clone());
+        state.sales_loading = false;
         let (tx, rx) = std::sync::mpsc::channel();
         state.rx = Some(rx);
         state.loading = true;
         state.error = None;
-        state.deck_progress = None;
+        state.progress = None;
         state.stage = "Starting…".to_string();
         let opts = LoadOptions {
             tracker: InventorySyncClient::new(url),
@@ -364,12 +448,30 @@ impl PreconEvScreen {
             now_unix: chrono::Utc::now().timestamp(),
         };
         std::thread::spawn(move || {
-            let cache = DeckCache::new();
             let progress_tx = tx.clone();
-            let result = load_precons(&opts, &cache, &|event| {
+            let progress = |event| {
                 let _ = progress_tx.send(PreconLoadMsg::Event(event));
-            });
-            let _ = tx.send(PreconLoadMsg::Done(result.map(Box::new)));
+            };
+            let data = match load_precons(&opts, &DeckCache::new(), &progress) {
+                Ok(data) => data,
+                Err(e) => {
+                    let _ = tx.send(PreconLoadMsg::Done(Err(e)));
+                    return;
+                }
+            };
+            let candidates = sales_candidates(&data.decks, &data.prices);
+            if tx.send(PreconLoadMsg::Done(Ok(Box::new(data)))).is_err() {
+                return; // Superseded by a newer load.
+            }
+            let result = load_sales(
+                &opts.tracker,
+                &SalesCache::new(),
+                &candidates,
+                local_date(opts.now_unix),
+                &progress,
+                &cancel,
+            );
+            let _ = tx.send(PreconLoadMsg::Sales(result));
         });
     }
 
@@ -428,17 +530,9 @@ impl PreconEvScreen {
         Some((card_ids, dates))
     }
 
-    fn params(state: &PreconEvState) -> EvParams {
-        EvParams {
-            field: state.field,
-            sealed_field: state.sealed_field,
-            cutoff: state.cutoff,
-        }
-    }
-
     /// Recomputes rows (and the open chart) from the loaded data.
     fn rebuild(state: &mut PreconEvState) {
-        let params = Self::params(state);
+        let params = params(state);
         let mut rows = state
             .data
             .as_ref()
@@ -450,7 +544,7 @@ impl PreconEvScreen {
     }
 
     fn rebuild_history(state: &mut PreconEvState) {
-        let params = Self::params(state);
+        let params = params(state);
         state.history_points = match (&state.data, state.selected) {
             (Some(data), Some(id)) => Self::history_points(data, state, id, params),
             _ => Vec::new(),
@@ -469,6 +563,7 @@ impl PreconEvScreen {
                 id,
                 &history.snapshots,
                 &history.dates,
+                data.sales.as_ref(),
                 params,
             )),
             _ => Vec::new(),
