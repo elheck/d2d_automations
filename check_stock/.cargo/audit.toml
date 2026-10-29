@@ -21,4 +21,11 @@ ignore = [
     # ttf-parser 0.25.1: unmaintained (warning only, no vulnerability).
     # Pulled in by egui's font stack.
     "RUSTSEC-2026-0192",
+    # zvariant / zbus_names / zvariant_derive: unmaintained (warning only, no
+    # vulnerability). Merged into zbus 6; no patched 5.x release exists.
+    # Via zbus 5 (accesskit_unix/atspi from eframe, ashpd from rfd). Even the
+    # newest accesskit_unix and ashpd still require zbus 5 (checked 2026-10-29).
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]
