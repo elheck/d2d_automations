@@ -9,11 +9,15 @@ use std::time::{Duration, Instant};
 
 use crate::models::InvoiceCreationResult;
 
+use super::decision::{CountryDecision, DecisionRequest, InvoiceDecision};
+
 /// What the worker is currently doing for the item in flight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgressStep {
     CreatingInvoice,
     RunningWorkflow,
+    /// The worker is paused until the user answers a question.
+    WaitingForDecision,
 }
 
 impl ProgressStep {
@@ -25,6 +29,7 @@ impl ProgressStep {
                 "Running workflow (finalize / enshrine / book)"
             }
             (ProgressStep::RunningWorkflow, true) => "Simulating workflow",
+            (ProgressStep::WaitingForDecision, _) => "Waiting for your decision",
         }
     }
 }
@@ -36,6 +41,8 @@ pub enum ProgressEvent {
     ItemStarted { label: String },
     /// The invoice exists; post-creation workflow steps are running.
     WorkflowStarted,
+    /// The worker paused and needs the user to answer a question.
+    DecisionNeeded(DecisionRequest),
     /// An item finished (successfully or not).
     ItemFinished(Box<InvoiceCreationResult>),
 }
@@ -60,6 +67,14 @@ pub struct ProgressTracker {
     pub current_item: Option<String>,
     pub step: ProgressStep,
     pub dry_run: bool,
+    /// Question the worker is waiting on, if any.
+    pending: Option<DecisionRequest>,
+    /// Step to show again once the pending question is answered.
+    step_before_pause: ProgressStep,
+    /// When the current pause began.
+    paused_since: Option<Instant>,
+    /// Time spent waiting for answers, excluded from the ETA.
+    paused_total: Duration,
 }
 
 impl ProgressTracker {
@@ -74,6 +89,10 @@ impl ProgressTracker {
             current_item: None,
             step: ProgressStep::CreatingInvoice,
             dry_run,
+            pending: None,
+            step_before_pause: ProgressStep::CreatingInvoice,
+            paused_since: None,
+            paused_total: Duration::ZERO,
         }
     }
 
@@ -87,6 +106,15 @@ impl ProgressTracker {
             }
             ProgressEvent::WorkflowStarted => {
                 self.step = ProgressStep::RunningWorkflow;
+                None
+            }
+            ProgressEvent::DecisionNeeded(request) => {
+                if self.step != ProgressStep::WaitingForDecision {
+                    self.step_before_pause = self.step;
+                }
+                self.step = ProgressStep::WaitingForDecision;
+                self.paused_since.get_or_insert_with(Instant::now);
+                self.pending = Some(request);
                 None
             }
             ProgressEvent::ItemFinished(result) => {
@@ -130,9 +158,64 @@ impl ProgressTracker {
         self.started_at.elapsed()
     }
 
+    /// Elapsed time minus the time spent waiting for the user.
+    pub fn active_elapsed(&self) -> Duration {
+        let paused_now = self
+            .paused_since
+            .map_or(Duration::ZERO, |since| since.elapsed());
+        self.elapsed()
+            .saturating_sub(self.paused_total + paused_now)
+    }
+
     /// Estimated remaining time, extrapolated from the average time per finished item.
+    ///
+    /// Time spent waiting for the user does not count.
     pub fn eta(&self) -> Option<Duration> {
-        estimate_remaining(self.elapsed(), self.completed, self.total)
+        estimate_remaining(self.active_elapsed(), self.completed, self.total)
+    }
+
+    /// The question the worker is waiting on, if any.
+    pub fn pending_decision(&self) -> Option<&DecisionRequest> {
+        self.pending.as_ref()
+    }
+
+    /// Answers a pending country question. Returns false if none is pending.
+    pub fn answer_country(&mut self, decision: CountryDecision) -> bool {
+        match self.pending.take() {
+            Some(DecisionRequest::Country(_, reply)) => {
+                // A send error only means the worker is gone; nothing to do.
+                let _ = reply.send(decision);
+                self.resume();
+                true
+            }
+            other => {
+                self.pending = other;
+                false
+            }
+        }
+    }
+
+    /// Answers a pending invoice question. Returns false if none is pending.
+    pub fn answer_invoice(&mut self, decision: InvoiceDecision) -> bool {
+        match self.pending.take() {
+            Some(DecisionRequest::Invoice(_, reply)) => {
+                let _ = reply.send(decision);
+                self.resume();
+                true
+            }
+            other => {
+                self.pending = other;
+                false
+            }
+        }
+    }
+
+    /// Ends a pause after a question was answered.
+    fn resume(&mut self) {
+        if let Some(since) = self.paused_since.take() {
+            self.paused_total += since.elapsed();
+        }
+        self.step = self.step_before_pause;
     }
 }
 

@@ -33,6 +33,16 @@ done
 
 echo ""
 echo "======================================"
+echo " Release targets (macOS / Windows)"
+echo "======================================"
+if "$SCRIPT_DIR/check_release_targets.sh"; then
+    passed+=("release targets")
+else
+    failed+=("release targets")
+fi
+
+echo ""
+echo "======================================"
 echo " Overall Summary"
 echo "======================================"
 for p in "${passed[@]}"; do

@@ -4,6 +4,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::models::{ConsolidatedInvoice, ConsolidatedPosition, InvoiceRecipient};
+use crate::sevdesk_api::consolidated_invoice::plan_consolidated_positions;
 use crate::sevdesk_api::SevDeskApi;
 
 fn api_with_mock(mock_uri: &str) -> SevDeskApi {
@@ -106,23 +107,33 @@ async fn creates_invoice_with_one_position_per_group() {
         .await;
 
     let api = api_with_mock(&mock_server.uri());
-    let result = api
-        .create_consolidated_invoice(&test_invoice())
+    let draft = api
+        .create_consolidated_draft(&test_invoice())
         .await
-        .expect("should return a result");
+        .expect("should create a draft");
 
-    assert!(
-        result.error.is_none(),
-        "unexpected error: {:?}",
-        result.error
-    );
-    assert_eq!(result.invoice_id, Some(555));
-    assert_eq!(result.invoice_number.as_deref(), Some("RE-1001"));
-    assert_eq!(result.customer_name, "GRAY FOX SRL");
+    assert!(draft.failed.is_empty());
+    assert_eq!(draft.invoice_id, 555);
+    assert_eq!(draft.invoice_number, "RE-1001");
+    assert_eq!(draft.expected_cents, 348);
+    assert_eq!(draft.planned_cents, 348);
+}
+
+#[test]
+fn plan_has_one_position_per_group() {
+    let positions = plan_consolidated_positions(&test_invoice());
+    assert_eq!(positions.len(), 2);
+    assert_eq!(positions[0].number, 1);
+    assert_eq!(positions[0].name, "Plains (Murders at Karlov Manor)");
+    assert_eq!(positions[0].text, "Moderately Played - DE");
+    assert_eq!(positions[0].quantity, 3.0);
+    assert_eq!(positions[0].total_cents(), 6);
+    assert_eq!(positions[1].number, 2);
+    assert_eq!(positions[1].total_cents(), 342);
 }
 
 #[tokio::test]
-async fn position_failure_aborts_instead_of_understating_the_invoice() {
+async fn position_failure_is_recorded_instead_of_understating_the_invoice() {
     let mock_server = MockServer::start().await;
     mock_dependencies(&mock_server, "GRAY FOX SRL").await;
 
@@ -133,19 +144,15 @@ async fn position_failure_aborts_instead_of_understating_the_invoice() {
         .await;
 
     let api = api_with_mock(&mock_server.uri());
-    let result = api
-        .create_consolidated_invoice(&test_invoice())
+    let draft = api
+        .create_consolidated_draft(&test_invoice())
         .await
-        .expect("should return a result");
+        .expect("the draft exists even though positions failed");
 
-    let error = result
-        .error
-        .expect("position failure must surface as an error");
-    assert!(
-        error.contains("Failed to add position"),
-        "unexpected error: {error}"
-    );
-    assert!(result.invoice_id.is_none());
+    // Both positions were attempted and both failures are kept for retrying.
+    assert_eq!(draft.failed.len(), 2);
+    assert!(draft.failed[0].error.contains("bad position"));
+    assert_eq!(draft.invoice_id, 555);
 }
 
 #[tokio::test]
@@ -177,7 +184,10 @@ async fn invoice_creation_failure_is_reported() {
     Mock::given(method("GET"))
         .and(path("/StaticCountry"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "objects": []
+            "objects": [{
+                "id": "15", "name": "Italien", "nameEn": "Italy",
+                "translationCode": "IT", "locale": null, "priority": null
+            }]
         })))
         .mount(&mock_server)
         .await;
@@ -189,13 +199,23 @@ async fn invoice_creation_failure_is_reported() {
         .await;
 
     let api = api_with_mock(&mock_server.uri());
-    let result = api
-        .create_consolidated_invoice(&test_invoice())
+    let error = api
+        .create_consolidated_draft(&test_invoice())
         .await
-        .expect("should return a result");
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Failed to create invoice"), "{error}");
+}
 
-    assert!(result.error.is_some());
-    assert!(result.invoice_id.is_none());
+#[tokio::test]
+async fn draft_without_positions_writes_nothing() {
+    let mock_server = MockServer::start().await;
+    let mut invoice = test_invoice();
+    invoice.positions.clear();
+
+    let api = api_with_mock(&mock_server.uri());
+    assert!(api.create_consolidated_draft(&invoice).await.is_err());
+    assert!(mock_server.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -355,7 +375,10 @@ async fn dry_run_rejects_invoice_without_positions() {
     Mock::given(method("GET"))
         .and(path("/StaticCountry"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "objects": []
+            "objects": [{
+                "id": "15", "name": "Italien", "nameEn": "Italy",
+                "translationCode": "IT", "locale": null, "priority": null
+            }]
         })))
         .mount(&mock_server)
         .await;
@@ -369,6 +392,35 @@ async fn dry_run_rejects_invoice_without_positions() {
         .await
         .expect("should return a result");
 
-    assert!(result.error.is_some());
+    let error = result.error.expect("must be an error");
+    assert!(error.contains("no positions"), "{error}");
     assert!(result.invoice_id.is_none());
+}
+
+#[tokio::test]
+async fn dry_run_reports_unknown_recipient_country() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/StaticCountry"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "objects": [{
+                "id": "15", "name": "Italien", "nameEn": "Italy",
+                "translationCode": "IT", "locale": null, "priority": null
+            }]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let mut invoice = test_invoice();
+    invoice.recipient.country = "Itallien".to_string();
+
+    let api = api_with_mock(&mock_server.uri());
+    let result = api
+        .simulate_consolidated_invoice(&invoice)
+        .await
+        .expect("should return a result");
+
+    let error = result.error.expect("unknown country must be an error");
+    assert!(error.contains("Unknown country 'Itallien'"), "{error}");
 }

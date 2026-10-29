@@ -14,6 +14,40 @@ and CardTrader sales reports.
 - Invoices are created in the background with a live progress bar (current order and step, success/error counts, elapsed time and ETA)
 - Kleingewerbe tax rules (0% VAT, section 19 UStG)
 
+## Checks Before Finalizing
+
+Every invoice is created as a SevDesk **draft** first. Finalize, enshrine and
+book only run once the draft is verified:
+
+- **Line items**: if SevDesk rejects a line item, the app keeps going with the
+  others and remembers the rejected ones (it no longer ignores them).
+- **Total**: SevDesk's invoice total is read back and must equal the expected
+  total exactly: the CSV `TotalValue` for Cardmarket orders, the report total
+  for CardTrader.
+
+If either check fails, the run **pauses** and a dialog shows the expected
+total, SevDesk's total and any rejected line items. Nothing is finalized,
+enshrined or booked until you pick one of:
+
+| Option | What happens |
+|--------|--------------|
+| Retry failed line items | Adds the rejected items again, then checks the total again (only shown if items were rejected) |
+| Check again | Re-reads the total, e.g. after you fixed the draft in SevDesk; continues if it matches |
+| Keep as draft, continue | Leaves the unfinished draft in SevDesk, goes on with the next invoice |
+| Delete draft, continue | Deletes the draft; the order is not invoiced |
+| Stop | Keeps the draft; the remaining orders are listed as "not processed" |
+
+The run continues with the remaining invoices after your choice (unless you
+stop). A dry run reports orders whose line items don't add up to their total
+as errors instead of asking.
+
+**Countries** are matched exactly (case-insensitive) against SevDesk's German
+and English country names plus a few aliases (`DE`, `UK`, `Great Britain`).
+There is no partial matching and no default country. For an unknown country
+the run pauses before anything is created for that order: pick the right
+SevDesk country (used for every order with that name in this run), skip the
+order, or stop. A dry run lists unknown countries as errors.
+
 ## CSV Formats
 
 The format is detected automatically from the header row.

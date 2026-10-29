@@ -1,12 +1,21 @@
 //! Dry-run simulation of invoice creation.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use log::{debug, error, info};
 
-use crate::csv_processor::field_parsers::parse_price;
 use crate::models::{InvoiceCreationResult, OrderRecord};
 
+use super::draft::{format_cents, planned_total_cents};
+use super::invoices::{order_expected_cents, plan_order_positions};
 use super::SevDeskApi;
+
+/// Dry-run error for a country SevDesk does not know.
+pub(crate) fn unknown_country_hint(country: &str) -> String {
+    format!(
+        "Unknown country '{country}': SevDesk has no country with this name. \
+         A real run will ask you to pick the right one."
+    )
+}
 
 impl SevDeskApi {
     /// Simulates invoice creation without making actual API calls.
@@ -58,39 +67,36 @@ impl SevDeskApi {
         );
 
         // Validate country mapping
-        let country_id = self.get_country_id(&order.country).await?;
+        let country_id = self
+            .lookup_country_id(&order.country)
+            .await?
+            .with_context(|| unknown_country_hint(&order.country))?;
         debug!(
             "Country '{}' would map to ID: {}",
             order.country, country_id
         );
 
-        // Validate price parsing
-        let merchandise_value = parse_price(&order.merchandise_value)?;
-        let shipment_costs = parse_price(&order.shipment_costs)?;
-        let total_value = parse_price(&order.total_value)?;
-        debug!("Prices would be - merchandise: {merchandise_value:.2}, shipping: {shipment_costs:.2}, total: {total_value:.2}");
-
-        // Validate items and quantities
-        if !order.items.is_empty() {
-            debug!("Would create {} invoice positions:", order.items.len());
-            for (i, item) in order.items.iter().enumerate() {
-                debug!(
-                    "  Position {}: {} x {} @ {:.2} EUR",
-                    i + 1,
-                    item.quantity,
-                    item.localized_product_name,
-                    item.price
-                );
-            }
-        } else {
+        // Validate price parsing and the line items a real run would add
+        let positions = plan_order_positions(order)?;
+        let expected_cents = order_expected_cents(order)?;
+        debug!("Would create {} invoice positions:", positions.len());
+        for position in &positions {
             debug!(
-                "Would create fallback position: {} x {} @ {:.2} EUR",
-                order.article_count, order.localized_product_name, merchandise_value
+                "  Position {}: {} x {} @ {:.2} EUR",
+                position.number, position.quantity, position.name, position.unit_price
             );
         }
 
-        if shipment_costs > 0.0 {
-            debug!("Would add shipping position: {shipment_costs:.2} EUR");
+        // A real run would stop at this invoice and ask, so report it now.
+        let planned_cents = planned_total_cents(&positions);
+        if planned_cents != expected_cents {
+            anyhow::bail!(
+                "Line items add up to {} {} but the order total is {} {}",
+                format_cents(planned_cents),
+                order.currency,
+                format_cents(expected_cents),
+                order.currency
+            );
         }
 
         // Generate a simulated invoice number

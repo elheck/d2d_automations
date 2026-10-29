@@ -9,19 +9,39 @@ use log::{debug, error, info};
 
 use crate::models::{
     AddressCategory, ConsolidatedInvoice, ContactCategory, ContactResponse, InvoiceCreationResult,
-    InvoiceRecipient, InvoiceResponse, SevDeskAddress, SevDeskContact, SevDeskContactRef,
-    SevDeskCountry, SevDeskInvoice, SevDeskResponse, SevDeskSingleObjectResponse, SevDeskTaxRule,
-    SevDeskUser,
+    InvoiceRecipient, SevDeskAddress, SevDeskContact, SevDeskContactRef, SevDeskCountry,
+    SevDeskInvoice, SevDeskResponse, SevDeskSingleObjectResponse, SevDeskTaxRule, SevDeskUser,
 };
 
+use super::draft::{planned_total_cents, InvoiceDraft, PlannedPosition};
 use super::SevDeskApi;
 
+/// Plans one line item per grouped card of a CardTrader report.
+pub(crate) fn plan_consolidated_positions(invoice: &ConsolidatedInvoice) -> Vec<PlannedPosition> {
+    invoice
+        .positions
+        .iter()
+        .zip(1..)
+        .map(|(position, number)| PlannedPosition {
+            number,
+            name: position.display_name(),
+            text: position.display_text(),
+            quantity: f64::from(position.quantity),
+            unit_price: position.unit_price(),
+        })
+        .collect()
+}
+
 impl SevDeskApi {
-    /// Creates a single invoice covering every position of a CardTrader report.
-    pub async fn create_consolidated_invoice(
+    /// Creates one draft invoice covering every position of a CardTrader report.
+    ///
+    /// Rejected line items are recorded on the returned draft instead of
+    /// failing the call, so they can be retried. An error means no usable
+    /// draft exists.
+    pub(crate) async fn create_consolidated_draft(
         &self,
         invoice: &ConsolidatedInvoice,
-    ) -> Result<InvoiceCreationResult> {
+    ) -> Result<InvoiceDraft> {
         info!(
             "Creating consolidated invoice for {} ({} positions, {:.2} {})",
             invoice.recipient.name,
@@ -30,40 +50,11 @@ impl SevDeskApi {
             invoice.currency
         );
 
-        let customer_name = invoice.recipient.name.clone();
-        let order_id = format!("CardTrader {}", invoice.period_label);
-
-        match self.create_consolidated_invoice_internal(invoice).await {
-            Ok((invoice_id, invoice_number)) => {
-                info!("Successfully created consolidated invoice: {invoice_number}");
-                Ok(InvoiceCreationResult {
-                    order_id,
-                    customer_name,
-                    invoice_id: Some(invoice_id.parse().unwrap_or(0)),
-                    invoice_number: Some(invoice_number),
-                    error: None,
-                    workflow_status: None,
-                })
-            }
-            Err(e) => {
-                error!("Failed to create consolidated invoice: {e}");
-                Ok(InvoiceCreationResult {
-                    order_id,
-                    customer_name,
-                    invoice_id: None,
-                    invoice_number: None,
-                    error: Some(e.to_string()),
-                    workflow_status: None,
-                })
-            }
+        let positions = plan_consolidated_positions(invoice);
+        if positions.is_empty() {
+            anyhow::bail!("Consolidated invoice has no positions");
         }
-    }
 
-    /// Internal implementation of consolidated invoice creation.
-    pub(crate) async fn create_consolidated_invoice_internal(
-        &self,
-        invoice: &ConsolidatedInvoice,
-    ) -> Result<(String, String)> {
         let contact_id = self
             .get_or_create_recipient_contact(&invoice.recipient)
             .await?;
@@ -103,86 +94,21 @@ impl SevDeskApi {
             currency: invoice.currency.clone(),
         };
 
-        let create_invoice_url = format!("{}/Invoice", self.base_url);
-        debug!("Creating consolidated invoice at: {create_invoice_url}");
+        let (invoice_id, invoice_number) = self.post_invoice(&sev_invoice).await?;
 
-        let response = self
-            .client
-            .post(&create_invoice_url)
-            .header("Authorization", &self.api_token)
-            .header("Content-Type", "application/json")
-            .json(&sev_invoice)
-            .send()
-            .await
-            .context("Failed to create consolidated invoice")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .context("Failed to read error response")?;
-            error!("Consolidated invoice creation failed with status {status}: {error_text}");
-            return Err(anyhow::anyhow!(
-                "Failed to create invoice: {} - {}",
-                status,
-                error_text
-            ));
-        }
-
-        let response_text = response
-            .text()
-            .await
-            .context("Failed to read response text")?;
-
-        let created_invoice: SevDeskSingleObjectResponse<InvoiceResponse> =
-            serde_json::from_str(&response_text)
-                .context("Failed to parse create invoice response")?;
-
-        let invoice_id = created_invoice.objects.id.clone();
-        let invoice_number = created_invoice.objects.invoice_number;
-        info!("Created consolidated invoice ID {invoice_id} (#{invoice_number})");
-
-        // Add each grouped card as its own position. Unlike the per-order path,
-        // a failed position here would silently understate a large invoice, so
-        // failures abort instead of being logged and skipped.
-        for (index, position) in invoice.positions.iter().enumerate() {
-            let position_number = index as u32 + 1;
-            debug!(
-                "Adding position {}/{}: {} x {} @ {:.2}",
-                position_number,
-                invoice.positions.len(),
-                position.quantity,
-                position.display_name(),
-                position.unit_price()
-            );
-
-            self.add_invoice_position_strict(
-                &invoice_id,
-                position_number,
-                &position.display_name(),
-                &position.display_text(),
-                position.quantity as f64,
-                position.unit_price(),
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to add position {} ('{}') to invoice #{}",
-                    position_number,
-                    position.display_name(),
-                    invoice_number
-                )
-            })?;
-        }
-
-        info!(
-            "Added {} positions to invoice #{}",
-            invoice.positions.len(),
-            invoice_number
+        debug!(
+            "Adding {} positions to invoice #{invoice_number}",
+            positions.len()
         );
+        let failed = self.add_positions(invoice_id, &positions).await;
 
-        Ok((invoice_id, invoice_number))
+        Ok(InvoiceDraft {
+            invoice_id,
+            invoice_number,
+            expected_cents: invoice.total_cents(),
+            planned_cents: planned_total_cents(&positions),
+            failed,
+        })
     }
 
     /// Finds or creates the contact for a consolidated invoice recipient.
@@ -347,7 +273,10 @@ impl SevDeskApi {
         &self,
         invoice: &ConsolidatedInvoice,
     ) -> Result<String> {
-        let country_id = self.get_country_id(&invoice.recipient.country).await?;
+        let country_id = self
+            .lookup_country_id(&invoice.recipient.country)
+            .await?
+            .with_context(|| super::simulation::unknown_country_hint(&invoice.recipient.country))?;
         debug!(
             "[DRY RUN] Country '{}' would map to ID: {}",
             invoice.recipient.country, country_id

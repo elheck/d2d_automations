@@ -337,53 +337,13 @@ impl SevDeskApi {
     /// Gets the total amount of an invoice for booking.
     async fn get_invoice_amount(&self, invoice_id: u32) -> Result<f64> {
         debug!("Getting invoice amount for ID {}", invoice_id);
-
-        let url = format!("{}/Invoice/{}", self.base_url, invoice_id);
-
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", &self.api_token)
-            .send()
-            .await
-            .context("Failed to get invoice")?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to get invoice: {} - {}", status, error_text);
-        }
-
-        let response_text = response.text().await.unwrap_or_default();
-        debug!("Invoice response: {}", response_text);
-
-        // Parse the response to get the sumGross field
-        // The API can return either {"objects": {...}} or {"objects": [{...}]}
-        let json: serde_json::Value =
-            serde_json::from_str(&response_text).context("Failed to parse invoice response")?;
-
-        // Try different paths to find sumGross
-        let invoice_obj = if json["objects"].is_array() {
-            json["objects"].get(0)
-        } else {
-            Some(&json["objects"])
-        };
-
-        let amount = if let Some(obj) = invoice_obj {
-            // Try to get sumGross as string first, then as number
-            if let Some(s) = obj["sumGross"].as_str() {
-                s.parse::<f64>().unwrap_or(0.0)
-            } else if let Some(n) = obj["sumGross"].as_f64() {
-                n
-            } else {
+        let amount = self
+            .fetch_invoice_sum_gross(invoice_id)
+            .await?
+            .unwrap_or_else(|| {
                 warn!("Could not find sumGross in invoice response, using 0.0");
                 0.0
-            }
-        } else {
-            warn!("Could not find invoice object in response");
-            0.0
-        };
-
+            });
         debug!("Invoice sum gross: {}", amount);
         Ok(amount)
     }

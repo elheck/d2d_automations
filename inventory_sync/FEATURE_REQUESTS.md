@@ -4,7 +4,7 @@ This document tracks feature requests for the inventory_sync service.
 
 ## Overview
 
-inventory_sync is a standalone server application that runs continuously on a separate server in a Docker container. It provides an API for syncing card inventory to a SQLite database and automatically collects prices on a schedule.
+inventory_sync is a standalone server application that runs continuously on a separate server in a Docker container. It collects the Cardmarket price guide and product catalog on a schedule, stores them in SQLite, and serves them to `check_stock` and the web UI. Inventory itself is not synced here: `check_stock` keeps it in its own local database.
 
 
 ## Requirements
@@ -29,14 +29,10 @@ inventory_sync is a standalone server application that runs continuously on a se
 
 ## Features
 
-### 1. REST API for Card Sync
-**Description**: Expose an HTTP API that check_stock can call to sync cards.
-- `POST /sync` - Accept CSV data or card list, store in SQLite
-- `GET /cards` - Query stored cards
-- `GET /prices/{card_id}` - Get price history for a card
-- Upsert logic (insert new, update existing)
-
-**Status**: Planned
+No open feature requests. (The planned `POST /sync` / `GET /cards` inventory
+API was dropped: `check_stock` keeps inventory locally, and the server only
+tracks prices.) The security requirements above are not all met yet — see the
+review table in the root README.
 
 ## How to Request Features
 

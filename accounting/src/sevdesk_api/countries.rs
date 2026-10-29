@@ -1,21 +1,103 @@
 //! Country ID resolution with caching.
+//!
+//! Country names are matched **exactly** (case-insensitive, trimmed) against
+//! SevDesk's German and English names plus a few fixed aliases. There is no
+//! partial matching and no default country: "Niger" must never become
+//! "Nigeria", and an unknown country must never silently become Germany.
+//! An unknown name is an error; the invoice run asks the user to pick the
+//! right SevDesk country instead (see [`SevDeskApi::remember_country`]).
 
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 
 use crate::models::{SevDeskResponse, StaticCountryResponse};
 
 use super::SevDeskApi;
 
-/// Cached country data with both name variants mapped to ID.
+/// A SevDesk country the user can choose when an order's country is unknown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CountryOption {
+    pub id: u32,
+    /// English name with the German name in brackets when they differ,
+    /// e.g. `Germany (Deutschland)`.
+    pub display_name: String,
+}
+
+/// Cached country data with every accepted name mapped to its SevDesk ID.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CountryCache {
-    /// Maps lowercase country name (both local and English) to SevDesk ID.
+    /// Maps normalized country names (German, English, aliases) to SevDesk ID.
     pub(crate) name_to_id: HashMap<String, u32>,
+    /// All countries, sorted by display name, for the country picker.
+    pub(crate) options: Vec<CountryOption>,
     /// Whether the cache has been populated.
     pub(crate) loaded: bool,
+}
+
+/// Normalizes a country name for lookup: trimmed and lowercase.
+pub(crate) fn normalize_country_name(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+impl CountryCache {
+    /// Builds a loaded cache from SevDesk's `/StaticCountry` list.
+    pub(crate) fn from_countries(countries: &[StaticCountryResponse]) -> Result<Self> {
+        let mut cache = CountryCache {
+            loaded: true,
+            ..Default::default()
+        };
+
+        for country in countries {
+            let id: u32 = country
+                .id
+                .parse()
+                .with_context(|| format!("Failed to parse country ID '{}'", country.id))?;
+
+            cache.remember(&country.name, id);
+            if let Some(name_en) = &country.name_en {
+                cache.remember(name_en, id);
+            }
+
+            // Fixed aliases for frequently used countries.
+            match id {
+                1 => cache.remember("de", id),
+                9 => {
+                    for alias in ["uk", "great britain", "großbritannien"] {
+                        cache.remember(alias, id);
+                    }
+                }
+                _ => {}
+            }
+
+            let display_name = match &country.name_en {
+                Some(en) if !en.trim().is_empty() && en.trim() != country.name.trim() => {
+                    format!("{} ({})", en.trim(), country.name.trim())
+                }
+                _ => country.name.trim().to_string(),
+            };
+            cache.options.push(CountryOption { id, display_name });
+        }
+
+        cache
+            .options
+            .sort_by_key(|option| option.display_name.to_lowercase());
+        Ok(cache)
+    }
+
+    /// Exact, case-insensitive lookup. Returns `None` for unknown names.
+    pub(crate) fn lookup(&self, name: &str) -> Option<u32> {
+        self.name_to_id.get(&normalize_country_name(name)).copied()
+    }
+
+    /// Accepts `name` as a name for country `id` from now on.
+    pub(crate) fn remember(&mut self, name: &str, id: u32) {
+        let key = normalize_country_name(name);
+        if !key.is_empty() {
+            self.name_to_id.insert(key, id);
+        }
+    }
 }
 
 impl SevDeskApi {
@@ -72,87 +154,63 @@ impl SevDeskApi {
 
         let countries: SevDeskResponse<StaticCountryResponse> =
             serde_json::from_str(&response_text).context("Failed to parse countries response")?;
+        let country_list = countries.objects.unwrap_or_default();
+        info!("Loaded {} countries from SevDesk API", country_list.len());
+
+        // Build the whole cache first so a parse error never leaves it half-filled.
+        let loaded = CountryCache::from_countries(&country_list)?;
+        info!(
+            "Country cache populated with {} name mappings",
+            loaded.name_to_id.len()
+        );
 
         let mut cache = self.country_cache.write().await;
-
-        if let Some(country_list) = countries.objects {
-            info!("Loaded {} countries from SevDesk API", country_list.len());
-
-            for country in country_list {
-                let country_id: u32 = country.id.parse().context("Failed to parse country ID")?;
-
-                // Add the local name (lowercase for case-insensitive matching)
-                let name_lower = country.name.to_lowercase();
-                cache.name_to_id.insert(name_lower.clone(), country_id);
-                debug!("Cached country: {} -> {}", country.name, country_id);
-
-                // Add the English name if available and different
-                if let Some(name_en) = &country.name_en {
-                    let name_en_lower = name_en.to_lowercase();
-                    if name_en_lower != name_lower {
-                        cache.name_to_id.insert(name_en_lower, country_id);
-                        debug!("Cached country (EN): {} -> {}", name_en, country_id);
-                    }
-                }
-
-                // Add common aliases for frequently used countries
-                match country_id {
-                    1 => {
-                        cache.name_to_id.insert("de".to_string(), country_id);
-                    }
-                    9 => {
-                        cache.name_to_id.insert("uk".to_string(), country_id);
-                        cache
-                            .name_to_id
-                            .insert("great britain".to_string(), country_id);
-                        cache
-                            .name_to_id
-                            .insert("großbritannien".to_string(), country_id);
-                    }
-                    _ => {}
-                }
-            }
-
-            cache.loaded = true;
-            info!(
-                "Country cache populated with {} name mappings",
-                cache.name_to_id.len()
-            );
-        } else {
-            warn!("No countries returned from SevDesk API");
+        // Keep names the user already mapped in this run.
+        let remembered = std::mem::take(&mut cache.name_to_id);
+        *cache = loaded;
+        for (name, id) in remembered {
+            cache.name_to_id.entry(name).or_insert(id);
         }
 
         Ok(())
     }
 
-    /// Gets country ID by name, fetching from API if not cached.
-    pub(crate) async fn get_country_id(&self, country_name: &str) -> Result<u32> {
-        debug!("Getting country ID for: {country_name}");
-
-        // Ensure countries are loaded
+    /// Looks up a country by exact name, fetching the list if not cached.
+    ///
+    /// Returns `Ok(None)` when SevDesk has no country with this name.
+    pub(crate) async fn lookup_country_id(&self, country_name: &str) -> Result<Option<u32>> {
         self.fetch_countries().await?;
-
-        // Look up in cache (case-insensitive)
-        let country_name_lower = country_name.to_lowercase().trim().to_string();
-
-        let cache = self.country_cache.read().await;
-        if let Some(&country_id) = cache.name_to_id.get(&country_name_lower) {
-            debug!("Country '{country_name}' found in cache with ID: {country_id}");
-            return Ok(country_id);
+        let id = self.country_cache.read().await.lookup(country_name);
+        match id {
+            Some(id) => debug!("Country '{country_name}' resolved to ID {id}"),
+            None => debug!("Country '{country_name}' is not a known SevDesk country"),
         }
+        Ok(id)
+    }
 
-        // Try partial matching for common variations
-        for (cached_name, &cached_id) in &cache.name_to_id {
-            if cached_name.contains(&country_name_lower) || country_name_lower.contains(cached_name)
-            {
-                info!("Country '{country_name}' matched to '{cached_name}' with ID: {cached_id}");
-                return Ok(cached_id);
-            }
-        }
+    /// Gets the SevDesk ID of a country by exact name.
+    ///
+    /// Fails for unknown names instead of guessing.
+    pub(crate) async fn get_country_id(&self, country_name: &str) -> Result<u32> {
+        self.lookup_country_id(country_name)
+            .await?
+            .with_context(|| {
+                format!("Unknown country '{country_name}': SevDesk has no country with this name")
+            })
+    }
 
-        // Default to Germany if not found
-        warn!("Unknown country '{country_name}', defaulting to Germany (ID: 1)");
-        Ok(1)
+    /// All SevDesk countries, sorted by display name, for the country picker.
+    pub(crate) async fn country_options(&self) -> Result<Vec<CountryOption>> {
+        self.fetch_countries().await?;
+        Ok(self.country_cache.read().await.options.clone())
+    }
+
+    /// Accepts `country_name` as SevDesk country `id` for the rest of this run.
+    ///
+    /// Used when the user resolves an unknown country by picking it from the list.
+    pub(crate) async fn remember_country(&self, country_name: &str, id: u32) {
+        info!("Using SevDesk country {id} for '{country_name}' in this run");
+        self.country_cache.write().await.remember(country_name, id);
     }
 }
 

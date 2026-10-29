@@ -137,8 +137,11 @@ showing exactly what would change before anything is written.
   collector numbers, foil/etched markers (`*F*`/`*E*`), category `[…]` and tag
   `^…^` annotations, `SB:` sideboard prefixes and section headers are handled;
   `4x`/`4X` quantities are accepted; duplicate card names are merged. The
-  Wantslist field also accepts a pasted **Moxfield or Archidekt deck link**
-  (e.g. `https://moxfield.com/decks/<id>`), which is fetched over the network.
+  Wantslist field also accepts a pasted **Archidekt or Moxfield deck link**
+  (e.g. `https://archidekt.com/decks/<id>`), which is fetched over the network.
+  Moxfield's bot protection often refuses these downloads (HTTP 403); the app
+  then says so and asks you to export the deck from Moxfield as a text file
+  and load that file instead.
 - **Scryfall API**: Card data, images
 - **Cardmarket CDN**: Price guide (~50MB, all MTG products)
 - **inventory_sync server**: Latest collected prices, raw price snapshots for

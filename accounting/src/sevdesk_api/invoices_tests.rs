@@ -4,6 +4,7 @@ use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::models::{OrderItem, OrderRecord};
+use crate::sevdesk_api::invoices::{order_expected_cents, plan_order_positions};
 use crate::sevdesk_api::SevDeskApi;
 
 fn api_with_mock(mock_uri: &str) -> SevDeskApi {
@@ -20,7 +21,7 @@ fn create_test_order() -> OrderRecord {
         street: "Hauptstraße 42".to_string(),
         zip: "10115".to_string(),
         city: "Berlin".to_string(),
-        country: "Deutschland".to_string(),
+        country: "Germany".to_string(),
         is_professional: None,
         vat_number: None,
         date_of_purchase: "2025-01-15 10:30:00".to_string(),
@@ -85,84 +86,18 @@ async fn mock_invoice_dependencies(mock_server: &MockServer) {
         .await;
 }
 
-// ── add_invoice_position ─────────────────────────────────────────────
-
-#[tokio::test]
-async fn add_invoice_position_success() {
-    let mock_server = MockServer::start().await;
-    let api = api_with_mock(&mock_server.uri());
-
-    Mock::given(method("POST"))
-        .and(path("/InvoicePos"))
-        .and(header("Authorization", "test_token"))
-        .respond_with(ResponseTemplate::new(201).set_body_string("{}"))
-        .mount(&mock_server)
-        .await;
-
-    let result = api
-        .add_invoice_position("INV-100", 1, "Lightning Bolt", "Alpha NM", 2.0, 5.50)
-        .await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
-async fn add_invoice_position_500_error() {
-    let mock_server = MockServer::start().await;
-    let api = api_with_mock(&mock_server.uri());
-
-    Mock::given(method("POST"))
-        .and(path("/InvoicePos"))
-        .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
-        .mount(&mock_server)
-        .await;
-
-    // add_invoice_position currently returns Ok(()) even on 500 (only logs error)
-    // This test documents that behavior
-    let result = api
-        .add_invoice_position("INV-100", 1, "Test", "Desc", 1.0, 5.0)
-        .await;
-    assert!(result.is_ok());
-}
-
-// ── create_invoice_internal ──────────────────────────────────────────
-
-#[tokio::test]
-async fn create_invoice_single_item() {
-    let mock_server = MockServer::start().await;
-    let api = api_with_mock(&mock_server.uri());
-    let order = create_test_order();
-
-    mock_invoice_dependencies(&mock_server).await;
-
-    // Invoice creation
+/// Mounts a successful invoice creation returning the given ID and number.
+async fn mock_invoice_created(mock_server: &MockServer, id: &str, number: &str) {
     Mock::given(method("POST"))
         .and(path("/Invoice"))
         .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
-            "objects": {
-                "id": "500",
-                "invoiceNumber": "RE-2025-001"
-            }
+            "objects": { "id": id, "invoiceNumber": number }
         })))
-        .mount(&mock_server)
+        .mount(mock_server)
         .await;
-
-    // Position creation (called once for single item)
-    Mock::given(method("POST"))
-        .and(path("/InvoicePos"))
-        .respond_with(ResponseTemplate::new(201).set_body_string("{}"))
-        .mount(&mock_server)
-        .await;
-
-    let (invoice_id, invoice_number) = api.create_invoice_internal(&order).await.unwrap();
-    assert_eq!(invoice_id, "500");
-    assert_eq!(invoice_number, "RE-2025-001");
 }
 
-#[tokio::test]
-async fn create_invoice_multiple_items() {
-    let mock_server = MockServer::start().await;
-    let api = api_with_mock(&mock_server.uri());
-
+fn two_item_order() -> OrderRecord {
     let mut order = create_test_order();
     order.items = vec![
         OrderItem {
@@ -182,21 +117,101 @@ async fn create_invoice_multiple_items() {
     ];
     order.merchandise_value = "60,00".to_string();
     order.total_value = "60,00".to_string();
+    order
+}
 
+// ── plan_order_positions ─────────────────────────────────────────────
+
+#[test]
+fn plan_has_one_position_per_item() {
+    let positions = plan_order_positions(&two_item_order()).unwrap();
+    assert_eq!(positions.len(), 2);
+    assert_eq!(positions[0].number, 1);
+    assert_eq!(positions[0].name, "Blitzschlag");
+    assert_eq!(positions[1].number, 2);
+    assert_eq!(positions[1].quantity, 2.0);
+    assert_eq!(positions[1].unit_price, 5.0);
+    assert_eq!(positions[1].text, "2x Dark Ritual (Beta) NM");
+}
+
+#[test]
+fn plan_adds_shipping_as_last_position() {
+    let mut order = create_test_order();
+    order.shipment_costs = "3,50".to_string();
+    let positions = plan_order_positions(&order).unwrap();
+    assert_eq!(positions.len(), 2);
+    assert_eq!(positions[1].number, 2);
+    assert_eq!(positions[1].name, "Shipping");
+    assert_eq!(positions[1].unit_price, 3.5);
+}
+
+#[test]
+fn plan_without_shipping_has_no_shipping_position() {
+    let positions = plan_order_positions(&create_test_order()).unwrap();
+    assert_eq!(positions.len(), 1);
+}
+
+#[test]
+fn plan_fallback_bills_merchandise_value_once() {
+    let mut order = create_test_order();
+    order.items.clear();
+    order.article_count = 3;
+    order.merchandise_value = "9,00".to_string();
+    let positions = plan_order_positions(&order).unwrap();
+    assert_eq!(positions.len(), 1);
+    // Not 3 x 9.00: the merchandise value already covers all three articles.
+    assert_eq!(positions[0].quantity, 1.0);
+    assert_eq!(positions[0].unit_price, 9.0);
+}
+
+#[test]
+fn plan_rejects_unparseable_prices() {
+    let mut order = create_test_order();
+    order.shipment_costs = "abc".to_string();
+    assert!(plan_order_positions(&order).is_err());
+}
+
+#[test]
+fn expected_total_comes_from_order_total() {
+    let mut order = create_test_order();
+    order.total_value = "13,50".to_string();
+    assert_eq!(order_expected_cents(&order).unwrap(), 1350);
+    order.total_value = String::new();
+    assert!(order_expected_cents(&order).is_err());
+}
+
+// ── create_order_draft ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn draft_single_item() {
+    let mock_server = MockServer::start().await;
+    let api = api_with_mock(&mock_server.uri());
     mock_invoice_dependencies(&mock_server).await;
+    mock_invoice_created(&mock_server, "500", "RE-2025-001").await;
 
     Mock::given(method("POST"))
-        .and(path("/Invoice"))
-        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
-            "objects": {
-                "id": "501",
-                "invoiceNumber": "RE-2025-002"
-            }
-        })))
+        .and(path("/InvoicePos"))
+        .and(header("Authorization", "test_token"))
+        .respond_with(ResponseTemplate::new(201).set_body_string("{}"))
+        .expect(1)
         .mount(&mock_server)
         .await;
 
-    // Positions (called twice for two items)
+    let draft = api.create_order_draft(&create_test_order()).await.unwrap();
+    assert_eq!(draft.invoice_id, 500);
+    assert_eq!(draft.invoice_number, "RE-2025-001");
+    assert_eq!(draft.expected_cents, 1000);
+    assert_eq!(draft.planned_cents, 1000);
+    assert!(draft.failed.is_empty());
+}
+
+#[tokio::test]
+async fn draft_multiple_items() {
+    let mock_server = MockServer::start().await;
+    let api = api_with_mock(&mock_server.uri());
+    mock_invoice_dependencies(&mock_server).await;
+    mock_invoice_created(&mock_server, "501", "RE-2025-002").await;
+
     Mock::given(method("POST"))
         .and(path("/InvoicePos"))
         .respond_with(ResponseTemplate::new(201).set_body_string("{}"))
@@ -204,31 +219,21 @@ async fn create_invoice_multiple_items() {
         .mount(&mock_server)
         .await;
 
-    let (invoice_id, _) = api.create_invoice_internal(&order).await.unwrap();
-    assert_eq!(invoice_id, "501");
+    let draft = api.create_order_draft(&two_item_order()).await.unwrap();
+    assert_eq!(draft.invoice_id, 501);
+    assert_eq!(draft.planned_cents, 6000);
 }
 
 #[tokio::test]
-async fn create_invoice_with_shipping() {
+async fn draft_with_shipping() {
     let mock_server = MockServer::start().await;
     let api = api_with_mock(&mock_server.uri());
+    mock_invoice_dependencies(&mock_server).await;
+    mock_invoice_created(&mock_server, "502", "RE-2025-003").await;
 
     let mut order = create_test_order();
     order.shipment_costs = "3,50".to_string();
     order.total_value = "13,50".to_string();
-
-    mock_invoice_dependencies(&mock_server).await;
-
-    Mock::given(method("POST"))
-        .and(path("/Invoice"))
-        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
-            "objects": {
-                "id": "502",
-                "invoiceNumber": "RE-2025-003"
-            }
-        })))
-        .mount(&mock_server)
-        .await;
 
     // Positions: 1 item + 1 shipping = 2 calls
     Mock::given(method("POST"))
@@ -238,48 +243,35 @@ async fn create_invoice_with_shipping() {
         .mount(&mock_server)
         .await;
 
-    let result = api.create_invoice_internal(&order).await;
-    assert!(result.is_ok());
+    let draft = api.create_order_draft(&order).await.unwrap();
+    assert_eq!(draft.expected_cents, 1350);
+    assert_eq!(draft.planned_cents, 1350);
 }
 
 #[tokio::test]
-async fn create_invoice_no_shipping() {
+async fn draft_records_rejected_positions_instead_of_hiding_them() {
     let mock_server = MockServer::start().await;
     let api = api_with_mock(&mock_server.uri());
-
-    let order = create_test_order(); // shipment_costs = "0,00"
-
     mock_invoice_dependencies(&mock_server).await;
+    mock_invoice_created(&mock_server, "503", "RE-2025-004").await;
 
-    Mock::given(method("POST"))
-        .and(path("/Invoice"))
-        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
-            "objects": {
-                "id": "503",
-                "invoiceNumber": "RE-2025-004"
-            }
-        })))
-        .mount(&mock_server)
-        .await;
-
-    // Only 1 position (no shipping)
     Mock::given(method("POST"))
         .and(path("/InvoicePos"))
-        .respond_with(ResponseTemplate::new(201).set_body_string("{}"))
-        .expect(1)
+        .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
+        .expect(2) // every position is still attempted
         .mount(&mock_server)
         .await;
 
-    let result = api.create_invoice_internal(&order).await;
-    assert!(result.is_ok());
+    let draft = api.create_order_draft(&two_item_order()).await.unwrap();
+    assert_eq!(draft.failed.len(), 2);
+    assert_eq!(draft.failed[0].position.name, "Blitzschlag");
+    assert!(draft.failed[0].error.contains("500"));
 }
 
 #[tokio::test]
-async fn create_invoice_creation_fails() {
+async fn draft_creation_fails() {
     let mock_server = MockServer::start().await;
     let api = api_with_mock(&mock_server.uri());
-    let order = create_test_order();
-
     mock_invoice_dependencies(&mock_server).await;
 
     Mock::given(method("POST"))
@@ -288,15 +280,13 @@ async fn create_invoice_creation_fails() {
         .mount(&mock_server)
         .await;
 
-    let result = api.create_invoice_internal(&order).await;
-    assert!(result.is_err());
+    assert!(api.create_order_draft(&create_test_order()).await.is_err());
 }
 
 #[tokio::test]
-async fn create_invoice_contact_search_fails() {
+async fn draft_contact_search_fails() {
     let mock_server = MockServer::start().await;
     let api = api_with_mock(&mock_server.uri());
-    let order = create_test_order();
 
     // Contact search returns broken JSON
     Mock::given(method("GET"))
@@ -305,37 +295,33 @@ async fn create_invoice_contact_search_fails() {
         .mount(&mock_server)
         .await;
 
-    let result = api.create_invoice_internal(&order).await;
-    assert!(result.is_err());
+    assert!(api.create_order_draft(&create_test_order()).await.is_err());
 }
 
 #[tokio::test]
-async fn create_invoice_fallback_no_items() {
+async fn draft_with_bad_prices_writes_nothing() {
     let mock_server = MockServer::start().await;
     let api = api_with_mock(&mock_server.uri());
 
     let mut order = create_test_order();
-    order.items = vec![]; // No parsed items — falls back to merchandise_value
+    order.total_value = "not a price".to_string();
 
+    assert!(api.create_order_draft(&order).await.is_err());
+    assert!(
+        mock_server.received_requests().await.unwrap().is_empty(),
+        "bad order data must fail before any API call"
+    );
+}
+
+#[tokio::test]
+async fn draft_with_unknown_country_fails() {
+    let mock_server = MockServer::start().await;
+    let api = api_with_mock(&mock_server.uri());
     mock_invoice_dependencies(&mock_server).await;
 
-    Mock::given(method("POST"))
-        .and(path("/Invoice"))
-        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
-            "objects": {
-                "id": "504",
-                "invoiceNumber": "RE-2025-005"
-            }
-        })))
-        .mount(&mock_server)
-        .await;
+    let mut order = create_test_order();
+    order.country = "Niger".to_string();
 
-    Mock::given(method("POST"))
-        .and(path("/InvoicePos"))
-        .respond_with(ResponseTemplate::new(201).set_body_string("{}"))
-        .mount(&mock_server)
-        .await;
-
-    let result = api.create_invoice_internal(&order).await;
-    assert!(result.is_ok());
+    let error = format!("{:#}", api.create_order_draft(&order).await.unwrap_err());
+    assert!(error.contains("Unknown country 'Niger'"), "{error}");
 }

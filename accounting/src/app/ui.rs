@@ -4,7 +4,11 @@ use eframe::egui;
 use log::info;
 
 use crate::models::SendType;
+use crate::sevdesk_api::format_cents;
 
+use super::decision::{
+    CountryDecision, CountryQuestion, DecisionRequest, InvoiceDecision, InvoiceQuestion,
+};
 use super::progress::format_duration;
 use super::{InvoiceApp, ProcessingState};
 
@@ -21,6 +25,7 @@ impl eframe::App for InvoiceApp {
         }
 
         self.render_order_preview_window(ctx);
+        self.render_decision_modal(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -632,6 +637,42 @@ impl InvoiceApp {
         }
     }
 
+    /// Shows the question the worker is waiting on, if any.
+    ///
+    /// The dialog is modal and has no close button: the run stays paused until
+    /// one of the options is chosen.
+    fn render_decision_modal(&mut self, ctx: &egui::Context) {
+        let Some(request) = self.progress.as_ref().and_then(|t| t.pending_decision()) else {
+            return;
+        };
+
+        let mut country_answer = None;
+        let mut invoice_answer = None;
+        egui::Modal::new(egui::Id::new("invoice_decision")).show(ctx, |ui| {
+            ui.set_max_width(600.0);
+            match request {
+                DecisionRequest::Country(question, _) => {
+                    country_answer = country_question_ui(
+                        ui,
+                        question,
+                        &mut self.country_filter,
+                        &mut self.country_choice,
+                    );
+                }
+                DecisionRequest::Invoice(question, _) => {
+                    invoice_answer = invoice_question_ui(ui, question);
+                }
+            }
+        });
+
+        if let Some(decision) = country_answer {
+            self.answer_country(decision);
+        }
+        if let Some(decision) = invoice_answer {
+            self.answer_invoice(decision);
+        }
+    }
+
     fn render_order_preview_window(&mut self, ctx: &egui::Context) {
         if !self.show_order_preview {
             return;
@@ -755,4 +796,197 @@ impl InvoiceApp {
             });
         self.show_order_preview = open;
     }
+}
+
+/// Unknown-country question: pick the SevDesk country, skip the order, or stop.
+fn country_question_ui(
+    ui: &mut egui::Ui,
+    question: &CountryQuestion,
+    filter: &mut String,
+    choice: &mut Option<u32>,
+) -> Option<CountryDecision> {
+    let mut decision = None;
+
+    ui.heading("⚠ Unknown country");
+    ui.label(format!("Order: {}", question.label));
+    ui.label(format!(
+        "SevDesk has no country called \"{}\". Nothing has been created for this order yet.",
+        question.country
+    ));
+    ui.label(format!(
+        "Pick the matching SevDesk country. It is used for every order with \"{}\" in this run.",
+        question.country
+    ));
+    ui.add_space(8.0);
+
+    ui.horizontal(|ui| {
+        ui.label("Search:");
+        ui.text_edit_singleline(filter);
+    });
+    let needle = filter.trim().to_lowercase();
+    egui::ScrollArea::vertical()
+        .max_height(220.0)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for option in question
+                .options
+                .iter()
+                .filter(|o| needle.is_empty() || o.display_name.to_lowercase().contains(&needle))
+            {
+                ui.selectable_value(choice, Some(option.id), &option.display_name);
+            }
+        });
+    ui.add_space(8.0);
+
+    let chosen = choice.and_then(|id| question.options.iter().find(|o| o.id == id));
+    ui.horizontal(|ui| {
+        let use_label = match chosen {
+            Some(option) => format!("Use {}", option.display_name),
+            None => "Use selected country".to_string(),
+        };
+        if ui
+            .add_enabled(chosen.is_some(), egui::Button::new(use_label))
+            .clicked()
+        {
+            decision = chosen.map(|option| CountryDecision::Use(option.id));
+        }
+        if ui
+            .button("Skip this order")
+            .on_hover_text("Do not invoice this order; continue with the next one")
+            .clicked()
+        {
+            decision = Some(CountryDecision::Skip);
+        }
+        if ui
+            .button("Stop")
+            .on_hover_text("Do not invoice this or any remaining order")
+            .clicked()
+        {
+            decision = Some(CountryDecision::Stop);
+        }
+    });
+
+    decision
+}
+
+/// Incomplete-invoice question: what to do with a draft that does not add up.
+fn invoice_question_ui(ui: &mut egui::Ui, question: &InvoiceQuestion) -> Option<InvoiceDecision> {
+    let problem = &question.problem;
+    let money = |cents: i64| format!("{} {}", format_cents(cents), question.currency);
+    let mut decision = None;
+
+    ui.heading("⚠ Invoice does not add up");
+    ui.label(format!(
+        "Invoice #{} for {}",
+        question.invoice_number, question.label
+    ));
+    ui.colored_label(
+        egui::Color32::YELLOW,
+        "It is still a draft in SevDesk: nothing was finalized, enshrined or booked. \
+         The run is paused until you choose below.",
+    );
+    ui.add_space(8.0);
+
+    egui::Grid::new("invoice_problem_totals")
+        .num_columns(2)
+        .spacing([12.0, 4.0])
+        .show(ui, |ui| {
+            ui.label("Expected total:");
+            ui.strong(money(problem.expected_cents));
+            ui.end_row();
+            ui.label("Total in SevDesk:");
+            match &problem.actual_cents {
+                Ok(actual) => {
+                    ui.strong(money(*actual));
+                    ui.end_row();
+                    ui.label("Difference:");
+                    ui.colored_label(egui::Color32::RED, money(actual - problem.expected_cents));
+                }
+                Err(e) => {
+                    ui.colored_label(egui::Color32::RED, format!("could not be read: {e}"));
+                }
+            }
+            ui.end_row();
+        });
+    ui.add_space(8.0);
+
+    if !problem.failed.is_empty() {
+        ui.label(format!(
+            "SevDesk rejected {} line item(s):",
+            problem.failed.len()
+        ));
+        egui::ScrollArea::vertical()
+            .max_height(150.0)
+            .show(ui, |ui| {
+                for failed in &problem.failed {
+                    let position = &failed.position;
+                    ui.label(format!(
+                        "#{} {} — {} pcs, {}",
+                        position.number,
+                        position.name,
+                        position.quantity,
+                        money(position.total_cents())
+                    ));
+                    ui.colored_label(egui::Color32::RED, format!("    {}", failed.error));
+                }
+            });
+    } else if problem.line_items_disagree_with_total() {
+        ui.label(format!(
+            "SevDesk accepted every line item, but they add up to {} while the order total is {}. \
+             The order data is probably wrong (check the CSV). Fix the draft in SevDesk and \
+             choose \"Check again\", or delete it and invoice this order by hand.",
+            money(problem.planned_cents),
+            money(problem.expected_cents)
+        ));
+    } else if problem.actual_cents.is_ok() {
+        ui.label("SevDesk accepted every line item, but its total is different. Check the draft in SevDesk.");
+    }
+    ui.add_space(8.0);
+    ui.separator();
+
+    let mut option = |ui: &mut egui::Ui, label: &str, help: &str, value: InvoiceDecision| {
+        ui.horizontal(|ui| {
+            if ui
+                .add(egui::Button::new(label).min_size(egui::vec2(180.0, 0.0)))
+                .clicked()
+            {
+                decision = Some(value);
+            }
+            ui.label(help);
+        });
+    };
+    if !problem.failed.is_empty() {
+        option(
+            ui,
+            "Retry failed line items",
+            "Add the rejected line items again, then check the total.",
+            InvoiceDecision::RetryFailed,
+        );
+    }
+    option(
+        ui,
+        "Check again",
+        "Re-read the total from SevDesk (e.g. after fixing the draft there). Continues if it matches.",
+        InvoiceDecision::CheckAgain,
+    );
+    option(
+        ui,
+        "Keep as draft, continue",
+        "Leave the draft unfinished in SevDesk and go on with the next invoice.",
+        InvoiceDecision::KeepDraft,
+    );
+    option(
+        ui,
+        "Delete draft, continue",
+        "Delete the draft from SevDesk. This order will not be invoiced.",
+        InvoiceDecision::DeleteDraft,
+    );
+    option(
+        ui,
+        "Stop",
+        "Keep the draft and do not process the remaining invoices.",
+        InvoiceDecision::Stop,
+    );
+
+    decision
 }

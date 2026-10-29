@@ -8,10 +8,14 @@ mod client;
 mod consolidated_invoice;
 mod contacts;
 mod countries;
+mod draft;
 mod invoice_workflow;
 mod invoices;
 mod simulation;
 mod users;
+
+pub use countries::CountryOption;
+pub use draft::{format_cents, DraftProblem, InvoiceDraft};
 
 use std::sync::Arc;
 use tokio::sync::RwLock;

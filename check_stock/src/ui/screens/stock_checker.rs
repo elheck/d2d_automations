@@ -169,7 +169,8 @@ impl StockCheckerScreen {
                 ui.label(
                     egui::RichText::new(
                         "Accepts a file (plain lists and Arena / MTGO / Moxfield / Archidekt / \
-                         MTGGoldfish exports) or a pasted Moxfield / Archidekt deck link.",
+                         MTGGoldfish exports) or a pasted Archidekt / Moxfield deck link. \
+                         Moxfield often blocks link downloads; export the deck as a file then.",
                     )
                     .size(11.0)
                     .color(style::TEXT_MUTED),

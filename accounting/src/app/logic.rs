@@ -1,19 +1,18 @@
 //! Business logic for the InvoiceApp (API calls, CSV loading, invoice processing).
 
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc;
 
 use log::{debug, error, info, warn};
 
 use crate::{
     csv_processor::{cardtrader_parser, CsvProcessor, LoadedCsv},
-    models::{
-        CheckAccountResponse, ConsolidatedInvoice, InvoiceCreationResult, InvoiceWorkflowOptions,
-        OrderRecord,
-    },
+    models::{CheckAccountResponse, InvoiceWorkflowOptions},
     sevdesk_api::SevDeskApi,
 };
 
-use super::progress::{ProgressEvent, ProgressTracker};
+use super::decision::{CountryDecision, InvoiceDecision};
+use super::progress::ProgressTracker;
+use super::worker::{run_invoice_jobs, InvoiceJob};
 use super::{InvoiceApp, ProcessingState};
 
 impl InvoiceApp {
@@ -272,6 +271,29 @@ impl InvoiceApp {
         }
     }
 
+    /// Sends the user's answer to a pending unknown-country question.
+    pub(super) fn answer_country(&mut self, decision: CountryDecision) {
+        info!("Country decision: {decision:?}");
+        if let Some(tracker) = self.progress.as_mut() {
+            if tracker.answer_country(decision) {
+                self.reset_country_picker();
+            }
+        }
+    }
+
+    /// Sends the user's answer to a pending incomplete-invoice question.
+    pub(super) fn answer_invoice(&mut self, decision: InvoiceDecision) {
+        info!("Invoice decision: {decision:?}");
+        if let Some(tracker) = self.progress.as_mut() {
+            tracker.answer_invoice(decision);
+        }
+    }
+
+    fn reset_country_picker(&mut self) {
+        self.country_filter.clear();
+        self.country_choice = None;
+    }
+
     /// Builds workflow options from current UI state
     fn build_workflow_options(&self) -> InvoiceWorkflowOptions {
         InvoiceWorkflowOptions {
@@ -287,168 +309,4 @@ impl InvoiceApp {
             payment_date: None, // Will be set per-order
         }
     }
-}
-
-/// One unit of background work: a single invoice to create.
-#[derive(Debug, Clone)]
-pub(super) enum InvoiceJob {
-    Order(Box<OrderRecord>),
-    Consolidated(Box<ConsolidatedInvoice>),
-}
-
-impl InvoiceJob {
-    fn order_id(&self) -> String {
-        match self {
-            InvoiceJob::Order(order) => order.order_id.clone(),
-            InvoiceJob::Consolidated(invoice) => format!("CardTrader {}", invoice.period_label),
-        }
-    }
-
-    fn customer_name(&self) -> &str {
-        match self {
-            InvoiceJob::Order(order) => &order.name,
-            InvoiceJob::Consolidated(invoice) => &invoice.recipient.name,
-        }
-    }
-
-    /// Date used as payment date when booking the invoice.
-    fn payment_date(&self) -> &str {
-        match self {
-            InvoiceJob::Order(order) => &order.date_of_purchase,
-            InvoiceJob::Consolidated(invoice) => &invoice.invoice_date,
-        }
-    }
-
-    /// Human-readable identification shown in the progress display.
-    pub(super) fn label(&self) -> String {
-        format!("{} ({})", self.customer_name(), self.order_id())
-    }
-}
-
-/// Processes all jobs sequentially, reporting progress over `tx`.
-///
-/// Send errors are ignored: they only mean the GUI went away.
-pub(super) async fn run_invoice_jobs(
-    api: SevDeskApi,
-    jobs: Vec<InvoiceJob>,
-    dry_run: bool,
-    workflow_options: InvoiceWorkflowOptions,
-    tx: Sender<ProgressEvent>,
-) {
-    let total = jobs.len();
-    let mut success_count = 0;
-
-    for (index, job) in jobs.iter().enumerate() {
-        let label = job.label();
-        debug!(
-            "{} {}/{}: {}",
-            if dry_run { "Simulating" } else { "Processing" },
-            index + 1,
-            total,
-            label
-        );
-        let _ = tx.send(ProgressEvent::ItemStarted {
-            label: label.clone(),
-        });
-
-        let result = match (job, dry_run) {
-            (InvoiceJob::Order(order), true) => api.simulate_invoice_creation(order).await,
-            (InvoiceJob::Order(order), false) => api.create_invoice(order).await,
-            (InvoiceJob::Consolidated(invoice), true) => {
-                api.simulate_consolidated_invoice(invoice).await
-            }
-            (InvoiceJob::Consolidated(invoice), false) => {
-                api.create_consolidated_invoice(invoice).await
-            }
-        };
-
-        let final_result = match result {
-            Ok(mut invoice_result) => {
-                if let Some(ref err) = invoice_result.error {
-                    error!(
-                        "Failed to {} invoice for {}: {}",
-                        if dry_run { "simulate" } else { "create" },
-                        label,
-                        err
-                    );
-                } else {
-                    info!(
-                        "{} invoice for {}: {}",
-                        if dry_run {
-                            "Simulated"
-                        } else {
-                            "Successfully created"
-                        },
-                        label,
-                        invoice_result
-                            .invoice_number
-                            .as_deref()
-                            .unwrap_or("[DRY RUN]")
-                    );
-                }
-
-                // Execute workflow if invoice was created successfully
-                let wants_workflow =
-                    workflow_options.finalize || workflow_options.enshrine || workflow_options.book;
-                if let (Some(invoice_id), None, true) = (
-                    invoice_result.invoice_id,
-                    &invoice_result.error,
-                    wants_workflow,
-                ) {
-                    let _ = tx.send(ProgressEvent::WorkflowStarted);
-
-                    let mut options = workflow_options.clone();
-                    options.payment_date = Some(job.payment_date().to_string());
-                    let invoice_number = invoice_result
-                        .invoice_number
-                        .clone()
-                        .unwrap_or_else(|| "Unknown".to_string());
-
-                    let workflow_status = if dry_run {
-                        api.simulate_invoice_workflow(invoice_id, &invoice_number, &options)
-                            .await
-                    } else {
-                        api.execute_invoice_workflow(invoice_id, &invoice_number, &options)
-                            .await
-                    };
-
-                    if let Some(ref err) = workflow_status.workflow_error {
-                        error!("Workflow error for {label}: {err}");
-                    }
-
-                    invoice_result.workflow_status = Some(workflow_status);
-                }
-
-                invoice_result
-            }
-            Err(e) => {
-                error!(
-                    "Error {} invoice for {}: {}",
-                    if dry_run { "simulating" } else { "processing" },
-                    label,
-                    e
-                );
-                InvoiceCreationResult {
-                    order_id: job.order_id(),
-                    customer_name: job.customer_name().to_string(),
-                    invoice_id: None,
-                    invoice_number: None,
-                    error: Some(e.to_string()),
-                    workflow_status: None,
-                }
-            }
-        };
-
-        if final_result.error.is_none() {
-            success_count += 1;
-        }
-        let _ = tx.send(ProgressEvent::ItemFinished(Box::new(final_result)));
-    }
-
-    info!(
-        "Invoice {} completed: {} successful, {} errors",
-        if dry_run { "simulation" } else { "processing" },
-        success_count,
-        total - success_count
-    );
 }

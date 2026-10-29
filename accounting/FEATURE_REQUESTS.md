@@ -2,27 +2,16 @@
 
 This document contains feature requests for the SevDesk Invoicing Application.
 
-## Medium Priority
+No open feature requests.
 
-### 1. Multi-Currency Support
-**Description**: Handle invoices in different currencies
-- Currency conversion
-- Exchange rate management
-- Multi-currency reporting
+### Not planned
 
-**Priority**: Medium
-**Status**: Future consideration
-
-## Low Priority
-
-### 2. Invoice Preview
-**Description**: Preview invoices before creation
-- Real-time preview as data is entered
-- Print preview functionality
-
-**Priority**: Low
-**Status**: Future consideration
-
+- **Multi-currency support**: Cardmarket and the CardTrader reports are billed
+  in EUR, so there is nothing to convert. Revisit if a non-EUR sales channel
+  is added.
+- **Invoice preview**: the Order Preview window already shows every order's
+  items, shipping and totals before invoicing, and SevDesk renders the actual
+  invoice. A separate print preview adds little.
 
 ---
 

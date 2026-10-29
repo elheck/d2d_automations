@@ -1,6 +1,8 @@
+pub mod decision;
 mod logic;
 pub mod progress;
 mod ui;
+mod worker;
 
 use crate::models::{
     CardTraderSaleRow, CheckAccountResponse, ConsolidatedInvoice, InvoiceCreationResult,
@@ -55,6 +57,11 @@ pub struct InvoiceApp {
     cardtrader_recipient: InvoiceRecipient,
     /// Consolidated invoice recomputed whenever rows or recipient change.
     consolidated_invoice: Option<ConsolidatedInvoice>,
+    // Unknown-country picker (shown while the worker waits for a country)
+    /// Text filter for the country list.
+    country_filter: String,
+    /// SevDesk country ID the user selected.
+    country_choice: Option<u32>,
 }
 
 impl InvoiceApp {
@@ -108,6 +115,8 @@ impl Default for InvoiceApp {
             cardtrader_rows: Vec::new(),
             cardtrader_recipient: InvoiceRecipient::default(),
             consolidated_invoice: None,
+            country_filter: String::new(),
+            country_choice: None,
         }
     }
 }

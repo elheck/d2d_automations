@@ -149,3 +149,119 @@ fn step_labels_differ_for_dry_run() {
         ProgressStep::RunningWorkflow.label(true)
     );
 }
+
+// ── questions to the user ────────────────────────────────────────────
+
+mod decisions {
+    use super::*;
+    use crate::app::decision::{
+        CountryDecision, CountryQuestion, DecisionRequest, InvoiceDecision, InvoiceQuestion,
+    };
+    use crate::sevdesk_api::DraftProblem;
+    use tokio::sync::oneshot;
+
+    fn country_request() -> (DecisionRequest, oneshot::Receiver<CountryDecision>) {
+        let (reply, answer) = oneshot::channel();
+        let question = CountryQuestion {
+            label: "Alice (1)".to_string(),
+            country: "Atlantis".to_string(),
+            options: vec![],
+        };
+        (DecisionRequest::Country(question, reply), answer)
+    }
+
+    fn invoice_request() -> (DecisionRequest, oneshot::Receiver<InvoiceDecision>) {
+        let (reply, answer) = oneshot::channel();
+        let question = InvoiceQuestion {
+            label: "Alice (1)".to_string(),
+            invoice_number: "RE-1".to_string(),
+            currency: "EUR".to_string(),
+            problem: DraftProblem {
+                expected_cents: 1000,
+                planned_cents: 1000,
+                actual_cents: Ok(0),
+                failed: vec![],
+            },
+        };
+        (DecisionRequest::Invoice(question, reply), answer)
+    }
+
+    #[test]
+    fn question_pauses_and_answer_resumes() {
+        let (_tx, rx) = mpsc::channel();
+        let mut tracker = ProgressTracker::new(rx, 1, false);
+        tracker.apply(ProgressEvent::WorkflowStarted);
+
+        let (request, mut answer) = invoice_request();
+        assert!(tracker
+            .apply(ProgressEvent::DecisionNeeded(request))
+            .is_none());
+        assert_eq!(tracker.step, ProgressStep::WaitingForDecision);
+        assert!(matches!(
+            tracker.pending_decision(),
+            Some(DecisionRequest::Invoice(..))
+        ));
+
+        assert!(tracker.answer_invoice(InvoiceDecision::KeepDraft));
+        assert_eq!(answer.try_recv().unwrap(), InvoiceDecision::KeepDraft);
+        assert!(tracker.pending_decision().is_none());
+        // Back to what it was doing before the question.
+        assert_eq!(tracker.step, ProgressStep::RunningWorkflow);
+    }
+
+    #[test]
+    fn country_answer_is_delivered() {
+        let (_tx, rx) = mpsc::channel();
+        let mut tracker = ProgressTracker::new(rx, 1, false);
+        let (request, mut answer) = country_request();
+        tracker.apply(ProgressEvent::DecisionNeeded(request));
+
+        assert!(tracker.answer_country(CountryDecision::Use(7)));
+        assert_eq!(answer.try_recv().unwrap(), CountryDecision::Use(7));
+        assert_eq!(tracker.step, ProgressStep::CreatingInvoice);
+    }
+
+    #[test]
+    fn answer_of_the_wrong_kind_keeps_the_question() {
+        let (_tx, rx) = mpsc::channel();
+        let mut tracker = ProgressTracker::new(rx, 1, false);
+        let (request, mut answer) = country_request();
+        tracker.apply(ProgressEvent::DecisionNeeded(request));
+
+        assert!(!tracker.answer_invoice(InvoiceDecision::Stop));
+        assert!(tracker.pending_decision().is_some());
+        assert!(answer.try_recv().is_err());
+        assert_eq!(tracker.step, ProgressStep::WaitingForDecision);
+    }
+
+    #[test]
+    fn answer_without_question_does_nothing() {
+        let (_tx, rx) = mpsc::channel();
+        let mut tracker = ProgressTracker::new(rx, 1, false);
+        assert!(!tracker.answer_country(CountryDecision::Skip));
+        assert!(!tracker.answer_invoice(InvoiceDecision::Stop));
+    }
+
+    #[test]
+    fn waiting_time_is_not_counted_as_work() {
+        let (_tx, rx) = mpsc::channel();
+        let mut tracker = ProgressTracker::new(rx, 1, false);
+        let (request, _answer) = invoice_request();
+        tracker.apply(ProgressEvent::DecisionNeeded(request));
+
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        assert!(tracker.elapsed() >= std::time::Duration::from_millis(30));
+        assert!(tracker.active_elapsed() < std::time::Duration::from_millis(30));
+
+        tracker.answer_invoice(InvoiceDecision::CheckAgain);
+        assert!(tracker.active_elapsed() < std::time::Duration::from_millis(30));
+    }
+
+    #[test]
+    fn waiting_step_has_a_label() {
+        assert_eq!(
+            ProgressStep::WaitingForDecision.label(false),
+            "Waiting for your decision"
+        );
+    }
+}

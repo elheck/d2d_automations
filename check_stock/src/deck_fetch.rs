@@ -56,6 +56,23 @@ pub fn parse_deck_url(input: &str) -> Option<DeckSource> {
     None
 }
 
+/// Error text for a failed deck download.
+///
+/// Moxfield's bot protection (Cloudflare) often refuses requests that do not
+/// come from a browser, answering 403/429/503. That is not fixable from here,
+/// so the message tells the user how to load the deck another way.
+pub fn http_error_message(source: &DeckSource, status: u16) -> String {
+    match source {
+        DeckSource::Moxfield(_) if matches!(status, 403 | 429 | 503) => format!(
+            "Moxfield blocked the download (HTTP {status}): it only lets browsers fetch decks. \
+             In Moxfield, use Export to save the deck as a text file and load that file \
+             instead (Archidekt links still work)."
+        ),
+        DeckSource::Moxfield(_) => format!("Moxfield returned HTTP {status}"),
+        DeckSource::Archidekt(_) => format!("Archidekt returned HTTP {status}"),
+    }
+}
+
 /// Downloads and parses a deck from its source. Blocking network call.
 pub fn fetch_deck(source: &DeckSource) -> Result<Vec<WantsEntry>, String> {
     let (url, host) = match source {
@@ -82,7 +99,7 @@ pub fn fetch_deck(source: &DeckSource) -> Result<Vec<WantsEntry>, String> {
         .map_err(|e| format!("Could not reach {host}: {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!("{host} returned HTTP {}", resp.status()));
+        return Err(http_error_message(source, resp.status().as_u16()));
     }
 
     let body = resp.text().map_err(|e| e.to_string())?;

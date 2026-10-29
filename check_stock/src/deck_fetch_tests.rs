@@ -50,6 +50,37 @@ fn url_without_id_is_none() {
     assert_eq!(parse_deck_url("https://moxfield.com/decks/"), None);
 }
 
+// ==================== http_error_message ====================
+
+#[test]
+fn moxfield_block_explains_the_workaround() {
+    let source = DeckSource::Moxfield("abc".to_string());
+    for status in [403, 429, 503] {
+        let message = http_error_message(&source, status);
+        assert!(message.contains("Moxfield blocked"), "{message}");
+        assert!(message.contains(&status.to_string()), "{message}");
+        assert!(message.contains("text file"), "{message}");
+    }
+}
+
+#[test]
+fn other_moxfield_errors_stay_plain() {
+    let source = DeckSource::Moxfield("abc".to_string());
+    assert_eq!(
+        http_error_message(&source, 404),
+        "Moxfield returned HTTP 404"
+    );
+}
+
+#[test]
+fn archidekt_errors_stay_plain() {
+    let source = DeckSource::Archidekt("123".to_string());
+    assert_eq!(
+        http_error_message(&source, 403),
+        "Archidekt returned HTTP 403"
+    );
+}
+
 // ==================== parse_moxfield_json ====================
 
 #[test]

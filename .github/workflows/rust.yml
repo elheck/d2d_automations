@@ -260,6 +260,58 @@ jobs:
         echo "✅ Clippy lints: PASSED"
         echo "✅ Security audit: PASSED"
 
+  # Builds and tests on the macOS / Windows release platforms on every change,
+  # so platform-only compile errors show up here instead of in the release run.
+  # Same command as the "Run tests before build" step in release.yml.
+  release_targets:
+    name: Release target (${{ matrix.project }}, ${{ matrix.target }})
+    needs: changes
+    if: needs.changes.outputs.check_stock == 'true' || needs.changes.outputs.accounting == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            project: check_stock
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            project: check_stock
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            project: accounting
+    env:
+      # Only build projects that changed in this push / PR.
+      PROJECT_CHANGED: ${{ needs.changes.outputs[matrix.project] }}
+    steps:
+    - uses: actions/checkout@v4
+      if: env.PROJECT_CHANGED == 'true'
+
+    - name: Install Rust toolchain
+      if: env.PROJECT_CHANGED == 'true'
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+
+    - name: Cache dependencies
+      if: env.PROJECT_CHANGED == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          ${{ matrix.project }}/target
+        key: ${{ runner.os }}-${{ matrix.project }}-release-target-${{ hashFiles(format('{0}/Cargo.lock', matrix.project)) }}
+        restore-keys: |
+          ${{ runner.os }}-${{ matrix.project }}-release-target-
+
+    - name: Build and test (${{ matrix.target }})
+      if: env.PROJECT_CHANGED == 'true'
+      run: cargo test --all-targets --target ${{ matrix.target }}
+      working-directory: ./${{ matrix.project }}
+
   build_and_test_inventory_sync:
     needs: changes
     if: needs.changes.outputs.inventory_sync == 'true'
