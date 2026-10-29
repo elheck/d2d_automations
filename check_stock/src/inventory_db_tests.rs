@@ -1629,6 +1629,8 @@ fn backup_creates_dated_snapshot_and_prunes() {
         .query_row("SELECT COUNT(*) FROM inventory_cards", [], |r| r.get(0))
         .unwrap();
     assert_eq!(n, 1);
+    // Close it before pruning: Windows can't delete a file that is still open.
+    drop(snap);
 
     // Same day again: idempotent, no error, still one file.
     backup_db_at(&conn, dir.path(), "2026-01-01", 2).unwrap();
