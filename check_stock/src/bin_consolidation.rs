@@ -73,7 +73,7 @@ const DISTANCE_WEIGHTS: [i64; 4] = [1000, 100, 10, 1];
 ///
 /// Coordinates come from [`parse_location_code`] (aisle, shelf, row, column).
 /// Two identical bins have distance 0.
-fn bin_distance(a: &str, b: &str) -> i64 {
+pub(crate) fn bin_distance(a: &str, b: &str) -> i64 {
     let ca = parse_location_code(a);
     let cb = parse_location_code(b);
     let n = ca.len().min(cb.len());
@@ -87,7 +87,7 @@ fn bin_distance(a: &str, b: &str) -> i64 {
 
 /// Splits a location into `(bin, lot_side_suffix)`, or `None` if it is not a
 /// recognisable bin location (needs ≥4 segments with a numeric 4th segment).
-fn split_location(loc: &str) -> Option<(String, String)> {
+pub(crate) fn split_location(loc: &str) -> Option<(String, String)> {
     let parts: Vec<&str> = loc.split('-').collect();
     if parts.len() >= 4 && parts[3].parse::<i64>().is_ok() {
         let bin = parts[..4].join("-");

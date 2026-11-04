@@ -36,30 +36,47 @@ impl ImageCache {
         self.files.dir()
     }
 
-    /// Generate a filename from set code and collector number
-    fn filename(set_code: &str, collector_number: &str) -> String {
-        format!("{}_{}.jpg", set_code.to_lowercase(), collector_number)
+    /// Whether a set code and collector number are safe to use in a file
+    /// name and a Scryfall URL path: ASCII letters, digits and `-` only.
+    /// Both come from CSV files, so anything else (`/`, `..`, spaces in token
+    /// numbers like `T 1/2`) is refused rather than escaped.
+    pub fn is_safe_key(set_code: &str, collector_number: &str) -> bool {
+        let ok = |s: &str, max: usize| {
+            !s.is_empty()
+                && s.len() <= max
+                && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        };
+        ok(set_code, 10) && ok(collector_number, 12)
+    }
+
+    /// Generate a filename from set code and collector number, or `None` when
+    /// they are not [safe](Self::is_safe_key).
+    fn filename(set_code: &str, collector_number: &str) -> Option<String> {
+        Self::is_safe_key(set_code, collector_number)
+            .then(|| format!("{}_{}.jpg", set_code.to_lowercase(), collector_number))
     }
 
     /// Check if an image is cached
     pub fn contains(&self, set_code: &str, collector_number: &str) -> bool {
-        self.files
-            .contains(&Self::filename(set_code, collector_number))
+        Self::filename(set_code, collector_number).is_some_and(|f| self.files.contains(&f))
     }
 
     /// Get a cached image
     pub fn get(&self, set_code: &str, collector_number: &str) -> Option<Vec<u8>> {
         let bytes = self
             .files
-            .read(&Self::filename(set_code, collector_number))?;
+            .read(&Self::filename(set_code, collector_number)?)?;
         log::info!("Image cache hit for {}/{}", set_code, collector_number);
         Some(bytes)
     }
 
-    /// Store an image in the cache
+    /// Store an image in the cache (ignored for unsafe keys)
     pub fn insert(&self, set_code: &str, collector_number: &str, bytes: &[u8]) {
-        self.files
-            .write(&Self::filename(set_code, collector_number), bytes);
+        let Some(filename) = Self::filename(set_code, collector_number) else {
+            log::warn!("Not caching image for unsafe key {set_code:?}/{collector_number:?}");
+            return;
+        };
+        self.files.write(&filename, bytes);
         log::debug!("Cached image for {}/{}", set_code, collector_number);
     }
 }

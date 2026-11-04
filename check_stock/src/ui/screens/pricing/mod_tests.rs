@@ -31,6 +31,7 @@ fn make_card(
         condition: condition.into(),
         language: language.into(),
         is_foil: is_foil.into(),
+        finish_type: String::new(),
         is_playset: None,
         is_signed: "false".into(),
         is_first_ed: None,

@@ -228,6 +228,21 @@ impl StockAnalysisScreen {
             if !stats.lot_breakdown.is_empty() {
                 ui.add_space(8.0);
                 needs_refresh |= Self::show_lot_breakdown(ui, &stats.lot_breakdown, state);
+                let bulk = &stats.bulk_totals;
+                if bulk.lots > 0 {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Sold and Revenue include {} cards sold in {} bulk lot{} for €{:.2} \
+                             (each card earns its share of the lot price; hover a lot for its part).",
+                            bulk.copies,
+                            bulk.lots,
+                            if bulk.lots == 1 { "" } else { "s" },
+                            bulk.revenue
+                        ))
+                        .size(11.0)
+                        .color(style::TEXT_MUTED),
+                    );
+                }
             }
         });
 
@@ -279,6 +294,20 @@ impl StockAnalysisScreen {
                     ui.end_row();
                 }
             });
+        if v.bulk_lots.lots > 0 {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Revenue includes €{:.2} from {} bulk lot{} ({} cards); copies count single \
+                     sales only.",
+                    v.bulk_lots.revenue,
+                    v.bulk_lots.lots,
+                    if v.bulk_lots.lots == 1 { "" } else { "s" },
+                    v.bulk_lots.copies
+                ))
+                .size(11.0)
+                .color(style::TEXT_MUTED),
+            );
+        }
     }
 
     fn show_aging(ui: &mut egui::Ui, buckets: &[AgingBucket]) {
@@ -474,8 +503,16 @@ impl StockAnalysisScreen {
                     ui.label(lot.in_stock_listings.to_string());
                     ui.label(format!("×{}", lot.in_stock_copies));
                     ui.label(format!("€{:.2}", lot.in_stock_value));
-                    ui.label(format!("×{}", lot.sold_copies));
-                    ui.label(format!("€{:.2}", lot.sold_revenue));
+                    let sold = ui.label(format!("×{}", lot.sold_copies));
+                    let revenue = ui.label(format!("€{:.2}", lot.sold_revenue));
+                    if lot.bulk_copies > 0 {
+                        let note = format!(
+                            "Includes {} cards sold in bulk lots for €{:.2}",
+                            lot.bulk_copies, lot.bulk_revenue
+                        );
+                        sold.on_hover_text(&note);
+                        revenue.on_hover_text(note);
+                    }
 
                     // ── Cost cell (editable) ─────────────────────────────────
                     let editing = edit.as_ref().is_some_and(|(l, _)| l == &lot.lot);

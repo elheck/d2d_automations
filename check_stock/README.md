@@ -3,8 +3,9 @@
 egui desktop app for Magic: The Gathering card inventory management.
 
 The welcome screen shows a **since-last-visit digest** (copies sold and revenue
-since the previous day the app was opened, new listings, restock candidates,
-and how old the last inventory import is — with a warning when it's stale).
+since the previous day the app was opened, new listings, bulk lots built,
+restock candidates, and how old the last inventory import is — with a warning
+when it's stale).
 
 Every inventory CSV import runs through a **safety net**: a dated backup of the
 local database is taken first (`inventory-YYYY-MM-DD.db.bak` next to the DB,
@@ -25,7 +26,10 @@ showing exactly what would change before anything is written.
   are tracked per lot (`lot_stock` table): a card held in several lots counts in
   each, a sale is credited to the lot the copies left, and revenue keeps the
   price the copies sold at. The Total margin covers only lots with a recorded
-  cost.
+  cost. Copies sold in **bulk lots** count here too, each earning its share of
+  the bulk lot's price (hover a lot's Sold/Revenue cell for the split); sales
+  velocity revenue includes bulk-lot prices, its copy counts are single sales
+  only.
 - **Bin Analysis** — Bin capacity utilization and free-slot analysis, plus two
   consolidation tools:
   - **Consolidation suggestions** — empties sparse bins into fuller ones (preferring
@@ -51,7 +55,10 @@ showing exactly what would change before anything is written.
   This reduces the inventory DB *without* counting them as sold (tracked revenue is
   unaffected) and exports a negative-delta stock-update CSV. Import that CSV into
   Cardmarket before your next inventory sync so the drop is already reflected in
-  both places and no phantom sale is recorded.
+  both places and no phantom sale is recorded. Before the CSV is saved, a
+  warning lists that order step by step: an export downloaded before the
+  import still contains the cards, brings them back as stock, and their later
+  disappearance would count as a sale.
 - **Picking** — Order picking workflow (reached via Stock Checker results)
 - **Pricing** — Node-based visual editor for filtering and pricing stock from CSV inventory
 - **Card Buy Helper** — Value a purchase offer from a card export CSV: split cards into individually-priced singles (by rarity and/or price threshold) versus bulk (flat rate per N cards), see the total offer, and export a breakdown CSV. Strictly read-only — never writes to the inventory database.
@@ -86,7 +93,9 @@ showing exactly what would change before anything is written.
   the CSV export) — fast sellers clustered in one lot tell you which supplier
   or purchase to repeat. Backed by the per-variant **sold-events log**: every
   inventory sync records which variant sold how many copies on what date and at
-  what listed price (discards/write-offs never count as sales). Strictly read-only.
+  what listed price (discards/write-offs and bulk lots never count as sales).
+  Variants that went into a bulk lot are left out — they were dumped, not sold
+  out. Strictly read-only.
 - **Price Movers** — Joins the in-stock inventory with 7/30-day market movement
   from inventory_sync price snapshots: spikes worth selling into and falling
   knives worth liquidating, filterable by direction, minimum price, and minimum
@@ -123,6 +132,44 @@ showing exactly what would change before anything is written.
   selector or the foil option recomputes locally.
   Clicking a sealed price (ranking or detail) or a card name in the breakdown
   opens that exact product/printing on Cardmarket in the browser.
+- **Bulk Lots** — Bundle old, cheap singles into one Cardmarket lot such as
+  "100 commons" or "100 non-basic lands". Three steps:
+  1. **Choose cards** — load the Magic inventory export, start from a preset
+     or set the rules: size, rarity, card type, basic lands, finish, condition,
+     language, max price per card, minimum time in stock, copies per card name
+     (1 = no repeats across printings) and optional **guaranteed hits** ("5
+     cards worth €0.50+", filled with the cheapest qualifying cards). By default
+     the lot is gathered **closest together**: from the most compact run of
+     neighbouring bins that can fill it on its own (shortest walk, then fewest
+     bins), picked in shelf order. Other orders: oldest first, cheapest first,
+     or random. Cards that are equally good under the chosen order are drawn at
+     random — never by name — and **Shuffle again** draws a different mix. A
+     live preview shows the
+     cards, their listed value, the lot price per card, and a filter breakdown
+     that names the rule limiting a lot that comes up short. Time in stock is
+     counted from the first import that contained the card (Cardmarket's
+     export has no listing date). Card types come from Scryfall — looked up in
+     batches of 75 for the cards passing the other rules, with a per-card
+     fallback by Cardmarket id for set codes Scryfall doesn't use, and cached
+     permanently.
+  2. **Pick** — a picture list sorted by shelf location. Click a card when it
+     is in your hand; **Replace** swaps a card you can't find (or don't want)
+     for the next match, in place (with "closest together", from the bin
+     nearest to the rest of the lot).
+  3. **Finish** — saves a TCG Powertools stock-update CSV (negative quantities,
+     the same format as the Stock Checker export) for the picked cards only,
+     then records the lot. The lot price is booked as that day's revenue and
+     split evenly across its cards, each crediting its purchase lot; the cards
+     never count as single sales.
+
+  Recording a lot does not change the stock right away: its cards become
+  **pending removals**, and the first inventory import that sees them gone
+  takes them out without recording a sale. So it does not matter whether the
+  Powertools import or the next inventory import happens first; until then the
+  cards are reserved and never offered for another lot. The **History** tab
+  lists every lot with its status ("awaiting import" turns into a warning
+  after 7 days), lets you correct the price it sold for, mark the removal as
+  done by hand, list its cards, or undo it.
 
 ## Data Sources
 
@@ -131,7 +178,8 @@ showing exactly what would change before anything is written.
   may be either short codes (`NM`, `EX`, `GD`, `LP`, `PL`) or the inventory-report long form
   (`near_mint`, `excellent`, `good`, `light_played`, `played`, `poor`). Columns a
   given export omits (e.g. `isFoil`/`isSigned` in the Generic report) default to
-  empty rather than failing the parse.
+  empty rather than failing the parse. The inventory report marks foils only in
+  `finishType` (`Foil`/`Regular`); both that and the legacy `isFoil` are read.
 - **Wantslists / decklists**: `quantity name` text, plus the common deck-export
   formats — MTG Arena, MTGO, Moxfield, Archidekt and MTGGoldfish. Set codes,
   collector numbers, foil/etched markers (`*F*`/`*E*`), category `[…]` and tag
@@ -142,7 +190,9 @@ showing exactly what would change before anything is written.
   Moxfield's bot protection often refuses these downloads (HTTP 403); the app
   then says so and asks you to export the deck from Moxfield as a text file
   and load that file instead.
-- **Scryfall API**: Card data, images
+- **Scryfall API**: Card data, images, and card types for the Bulk Lots type
+  filter (`/cards/collection` batches; only set codes, collector numbers and
+  Cardmarket ids are sent)
 - **Cardmarket CDN**: Price guide (~50MB, all MTG products)
 - **inventory_sync server**: Latest collected prices, raw price snapshots for
   7/30-day movement, per-card price history, and the Commander precon catalog
@@ -205,6 +255,14 @@ categories:
 ## Caching
 
 Card data and images are cached locally in the platform cache directory (Linux: `~/.cache/d2d_automations/`). Local SQLite database for inventory sync.
+Image files are only read or written for set codes and collector numbers made
+of ASCII letters, digits and `-`; anything else (token numbers such as
+`T 1/2`) shows a "No image" placeholder instead of reaching the file system or
+a Scryfall URL.
+
+Card type lines for Bulk Lots are cached in
+`~/.cache/d2d_automations/card_types/card_types.json`, per printing and
+permanently; printings Scryfall can't resolve are retried after 30 days.
 
 Precon EV caches MTGJSON data under `~/.cache/d2d_automations/mtgjson_v1/`:
 

@@ -6,26 +6,13 @@
 //! moved. Mirrors the interactive picking list.
 
 use crate::bin_consolidation::{to_update_csv, Move};
-use crate::cache::ImageCache;
 use crate::card_matching::get_card_name;
 use crate::models::Language;
+use crate::ui::components::CardImages;
 use crate::ui::state::Screen;
 use crate::ui::style;
 use eframe::egui;
-use log::{debug, error, warn};
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use tokio::runtime::Runtime;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::sync::Semaphore;
-
-/// Message sent from background image-loader tasks.
-struct LoadedImage {
-    image_key: String,
-    set_code: String,
-    collector_number: String,
-    image_data: Vec<u8>,
-}
+use log::error;
 
 /// One suggested move rendered as an interactive tile.
 #[derive(Clone)]
@@ -68,40 +55,14 @@ impl ConsolidationItem {
             source: m.clone(),
         }
     }
-
-    fn image_key(&self) -> String {
-        format!("{}_{}", self.set_code.to_lowercase(), self.collector_number)
-    }
 }
 
 /// State for the interactive consolidation move list.
+#[derive(Default)]
 pub struct ConsolidationState {
     pub items: Vec<ConsolidationItem>,
-    pub images: HashMap<String, egui::TextureHandle>,
-    pub loading_images: HashSet<String>,
-    pub image_cache: ImageCache,
+    pub images: CardImages,
     pub show_done: bool,
-    runtime: Runtime,
-    image_sender: UnboundedSender<LoadedImage>,
-    image_receiver: UnboundedReceiver<LoadedImage>,
-    request_semaphore: Arc<Semaphore>,
-}
-
-impl Default for ConsolidationState {
-    fn default() -> Self {
-        let (tx, rx) = unbounded_channel();
-        Self {
-            items: Vec::new(),
-            images: HashMap::new(),
-            loading_images: HashSet::new(),
-            image_cache: ImageCache::new(),
-            show_done: false,
-            runtime: Runtime::new().expect("Failed to create Tokio runtime for consolidation"),
-            image_sender: tx,
-            image_receiver: rx,
-            request_semaphore: Arc::new(Semaphore::new(5)),
-        }
-    }
 }
 
 impl ConsolidationState {
@@ -147,7 +108,7 @@ impl ConsolidationScreen {
     const CARD_IMAGE_HEIGHT: f32 = 320.0;
 
     pub fn show(ctx: &egui::Context, current_screen: &mut Screen, state: &mut ConsolidationState) {
-        Self::poll_loaded_images(ctx, state);
+        state.images.poll(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -170,7 +131,7 @@ impl ConsolidationScreen {
                         .show_percentage(),
                 );
 
-                let loading = state.loading_images.len();
+                let loading = state.images.loading_count();
                 if loading > 0 {
                     ui.add_space(10.0);
                     ui.spinner();
@@ -219,7 +180,7 @@ impl ConsolidationScreen {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    Self::show_groups(ctx, ui, state);
+                    Self::show_groups(ui, state);
                 });
         });
     }
@@ -238,23 +199,11 @@ impl ConsolidationScreen {
         }
     }
 
-    fn show_groups(ctx: &egui::Context, ui: &mut egui::Ui, state: &mut ConsolidationState) {
+    fn show_groups(ui: &mut egui::Ui, state: &mut ConsolidationState) {
         // Visible items respecting the show-done toggle.
         let visible: Vec<usize> = (0..state.items.len())
             .filter(|&i| !state.items[i].done || state.show_done)
             .collect();
-
-        // Trigger image loading for all visible items.
-        for &i in &visible {
-            let item = &state.items[i];
-            if !state.images.contains_key(&item.image_key())
-                && !state.loading_images.contains(&item.image_key())
-                && !item.set_code.is_empty()
-                && !item.collector_number.is_empty()
-            {
-                Self::load_card_image(ctx, state, i);
-            }
-        }
 
         // Partition visible indices into consecutive groups by source bin.
         let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
@@ -305,30 +254,21 @@ impl ConsolidationScreen {
     }
 
     /// Renders one move tile; returns `Some(new_done)` if its button was clicked.
-    fn show_tile(ui: &mut egui::Ui, state: &ConsolidationState, i: usize) -> Option<bool> {
+    fn show_tile(ui: &mut egui::Ui, state: &mut ConsolidationState, i: usize) -> Option<bool> {
         let item = &state.items[i];
         let done = item.done;
         let gray = egui::Color32::GRAY;
+        let images = &mut state.images;
 
         ui.vertical(|ui| {
             // Image.
-            if let Some(texture) = state.images.get(&item.image_key()) {
-                let aspect = texture.size()[0] as f32 / texture.size()[1] as f32;
-                let size = egui::vec2(Self::CARD_IMAGE_HEIGHT * aspect, Self::CARD_IMAGE_HEIGHT);
-                if done {
-                    ui.add(
-                        egui::Image::new((texture.id(), size))
-                            .tint(egui::Color32::from_rgba_unmultiplied(128, 128, 128, 180)),
-                    );
-                } else {
-                    ui.image((texture.id(), size));
-                }
-            } else {
-                ui.add_sized(
-                    [Self::CARD_TILE_WIDTH, Self::CARD_IMAGE_HEIGHT],
-                    egui::Label::new(egui::RichText::new("Loading...").weak()),
-                );
-            }
+            images.show(
+                ui,
+                &item.set_code,
+                &item.collector_number,
+                egui::vec2(Self::CARD_TILE_WIDTH, Self::CARD_IMAGE_HEIGHT),
+                done,
+            );
 
             // Destination (the key action).
             let dest = egui::RichText::new(format!("→ {}", item.to_location))
@@ -381,131 +321,6 @@ impl ConsolidationScreen {
             None
         })
         .inner
-    }
-
-    // ── Image loading (mirrors the picking list) ──────────────────────────────
-
-    fn poll_loaded_images(ctx: &egui::Context, state: &mut ConsolidationState) {
-        while let Ok(loaded) = state.image_receiver.try_recv() {
-            if let Ok(image) = image::load_from_memory(&loaded.image_data) {
-                let rgba = image.to_rgba8();
-                let size = [rgba.width() as usize, rgba.height() as usize];
-                let pixels = rgba.into_raw();
-                let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
-                let texture = ctx.load_texture(
-                    format!("consol_{}_{}", loaded.set_code, loaded.collector_number),
-                    color_image,
-                    egui::TextureOptions::LINEAR,
-                );
-                state.images.insert(loaded.image_key.clone(), texture);
-            } else {
-                error!(
-                    "Failed to decode image for {}/{}",
-                    loaded.set_code, loaded.collector_number
-                );
-            }
-            state.loading_images.remove(&loaded.image_key);
-        }
-        if !state.loading_images.is_empty() {
-            ctx.request_repaint();
-        }
-    }
-
-    fn load_card_image(ctx: &egui::Context, state: &mut ConsolidationState, item_index: usize) {
-        let item = &state.items[item_index];
-        let set_code = item.set_code.clone();
-        let collector_number = item.collector_number.clone();
-        let image_key = item.image_key();
-
-        state.loading_images.insert(image_key.clone());
-
-        // Disk cache first (fast, synchronous).
-        if let Some(bytes) = state.image_cache.get(&set_code, &collector_number) {
-            if let Ok(image) = image::load_from_memory(&bytes) {
-                let rgba = image.to_rgba8();
-                let size = [rgba.width() as usize, rgba.height() as usize];
-                let pixels = rgba.into_raw();
-                let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
-                let texture = ctx.load_texture(
-                    format!("consol_{set_code}_{collector_number}"),
-                    color_image,
-                    egui::TextureOptions::LINEAR,
-                );
-                state.images.insert(image_key.clone(), texture);
-                state.loading_images.remove(&image_key);
-                return;
-            }
-            warn!("Failed to decode cached image for {set_code}/{collector_number}");
-        }
-
-        let sender = state.image_sender.clone();
-        let cache_dir = state.image_cache.cache_dir().to_path_buf();
-        let ctx_clone = ctx.clone();
-        let semaphore = state.request_semaphore.clone();
-
-        state.runtime.spawn(async move {
-            let _permit = semaphore.acquire().await.unwrap();
-            Self::fetch_image_async(
-                sender,
-                cache_dir,
-                set_code,
-                collector_number,
-                image_key,
-                ctx_clone,
-            )
-            .await;
-        });
-    }
-
-    async fn fetch_image_async(
-        sender: UnboundedSender<LoadedImage>,
-        cache_dir: std::path::PathBuf,
-        set_code: String,
-        collector_number: String,
-        image_key: String,
-        ctx: egui::Context,
-    ) {
-        use crate::api::scryfall::{fetch_card_async, fetch_image_async};
-
-        let card = match fetch_card_async(&set_code, &collector_number).await {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Failed to fetch card data for {set_code}/{collector_number}: {e}");
-                ctx.request_repaint();
-                return;
-            }
-        };
-        let Some(image_url) = card.image_url().map(str::to_string) else {
-            warn!("No image URL for {set_code}/{collector_number}");
-            ctx.request_repaint();
-            return;
-        };
-        let bytes = match fetch_image_async(&image_url).await {
-            Ok(b) => b,
-            Err(e) => {
-                error!("Failed to fetch image for {set_code}/{collector_number}: {e}");
-                ctx.request_repaint();
-                return;
-            }
-        };
-
-        let cache_path = cache_dir.join(format!(
-            "{}_{}.jpg",
-            set_code.to_lowercase(),
-            collector_number
-        ));
-        if let Err(e) = std::fs::write(&cache_path, &bytes) {
-            warn!("Failed to cache image: {e}");
-        }
-        debug!("Fetched image for {set_code}/{collector_number}");
-
-        let _ = sender.send(LoadedImage {
-            image_key,
-            set_code,
-            collector_number,
-            image_data: bytes,
-        });
-        ctx.request_repaint();
     }
 }
 

@@ -106,6 +106,21 @@ impl ScryfallCard {
     pub fn image_url(&self) -> Option<&str> {
         image_url(self.image_uris.as_ref(), self.card_faces.as_deref())
     }
+
+    /// Type line of the front face (`"Instant"` for `"Instant // Land"`).
+    ///
+    /// Falls back to the first face's type line for layouts that carry none
+    /// at the top level (reversible cards).
+    pub fn front_type_line(&self) -> Option<&str> {
+        let full = self.type_line.as_deref().or_else(|| {
+            self.card_faces
+                .as_deref()
+                .and_then(|faces| faces.first())
+                .and_then(|face| face.type_line.as_deref())
+        })?;
+        let front = full.split(" // ").next().unwrap_or(full).trim();
+        (!front.is_empty()).then_some(front)
+    }
 }
 
 /// Scryfall API error response payload.
@@ -195,6 +210,128 @@ async fn fetch_card_at_url(url: &str) -> MtgResult<ScryfallCard> {
     let status = response.status();
     if status.is_success() {
         Ok(response.json::<ScryfallCard>().await?)
+    } else {
+        let body = response.bytes().await?;
+        Err(error_from_body(status, &body))
+    }
+}
+
+/// Most identifiers Scryfall accepts in one `/cards/collection` request.
+pub const COLLECTION_MAX_IDENTIFIERS: usize = 75;
+
+/// Identifies one printing for a `/cards/collection` lookup: set code plus
+/// collector number (the pair every Cardmarket inventory row carries).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct CollectionIdentifier {
+    pub set: String,
+    pub collector_number: String,
+}
+
+impl CollectionIdentifier {
+    /// Scryfall set codes are lowercase; collector numbers are passed as-is.
+    pub fn new(set: &str, collector_number: &str) -> Self {
+        Self {
+            set: set.trim().to_lowercase(),
+            collector_number: collector_number.trim().to_string(),
+        }
+    }
+
+    /// Whether Scryfall accepts this identifier in a collection request. Set
+    /// codes must be 3–6 letters or digits — Cardmarket-only codes such as
+    /// `SLDSV23` are not — and collector numbers must not contain spaces or
+    /// slashes (Cardmarket token numbers such as `T 1/2`). Scryfall rejects
+    /// the *whole* request over one bad identifier, so filter first.
+    pub fn is_accepted(&self) -> bool {
+        (3..=6).contains(&self.set.len())
+            && self.set.bytes().all(|b| b.is_ascii_alphanumeric())
+            && !self.collector_number.is_empty()
+            && self.collector_number.len() <= 16
+            && !self
+                .collector_number
+                .chars()
+                .any(|ch| ch.is_whitespace() || ch == '/' || ch == '\\' || ch.is_control())
+    }
+}
+
+#[derive(Serialize)]
+struct CollectionRequest<'a> {
+    identifiers: &'a [CollectionIdentifier],
+}
+
+/// Response of `/cards/collection`. Identifiers Scryfall could not resolve are
+/// simply missing from `data` (Scryfall lists them under `not_found`, which
+/// callers do not need).
+#[derive(Debug, Deserialize)]
+struct CollectionResponse {
+    #[serde(default)]
+    data: Vec<ScryfallCard>,
+}
+
+/// URL of the collection endpoint.
+fn collection_url(base_url: &str) -> String {
+    format!("{base_url}/cards/collection")
+}
+
+/// Rejects a batch Scryfall would refuse anyway, before any network traffic.
+fn check_collection(identifiers: &[CollectionIdentifier]) -> MtgResult<()> {
+    if identifiers.len() > COLLECTION_MAX_IDENTIFIERS {
+        return Err(MtgError::Api {
+            code: "too_many_identifiers".to_string(),
+            details: format!(
+                "{} identifiers in one collection request; Scryfall allows {}",
+                identifiers.len(),
+                COLLECTION_MAX_IDENTIFIERS
+            ),
+        });
+    }
+    if let Some(bad) = identifiers.iter().find(|id| !id.is_accepted()) {
+        return Err(MtgError::Api {
+            code: "invalid_identifier".to_string(),
+            details: format!(
+                "Scryfall does not accept set {:?} / collector number {:?}",
+                bad.set, bad.collector_number
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Looks up to [`COLLECTION_MAX_IDENTIFIERS`] printings in one request.
+///
+/// Returns the cards Scryfall found, in no guaranteed order; match them back
+/// by set and collector number. Scryfall rate-limits this endpoint harder
+/// than single-card lookups (about two requests per second), so callers that
+/// loop over batches must pause between them.
+pub async fn fetch_collection(
+    identifiers: &[CollectionIdentifier],
+) -> MtgResult<Vec<ScryfallCard>> {
+    fetch_collection_from(SCRYFALL_API, identifiers).await
+}
+
+/// [`fetch_collection`] against the given base URL (for testing).
+pub async fn fetch_collection_from(
+    base_url: &str,
+    identifiers: &[CollectionIdentifier],
+) -> MtgResult<Vec<ScryfallCard>> {
+    if identifiers.is_empty() {
+        return Ok(Vec::new());
+    }
+    check_collection(identifiers)?;
+    log::debug!("Scryfall collection lookup: {} cards", identifiers.len());
+
+    let response = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()?
+        .post(collection_url(base_url))
+        .header("User-Agent", crate::USER_AGENT)
+        .header("Accept", "application/json")
+        .json(&CollectionRequest { identifiers })
+        .send()
+        .await?;
+
+    let status = response.status();
+    if status.is_success() {
+        Ok(response.json::<CollectionResponse>().await?.data)
     } else {
         let body = response.bytes().await?;
         Err(error_from_body(status, &body))

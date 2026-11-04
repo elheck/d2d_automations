@@ -18,6 +18,14 @@ use std::time::Instant;
 
 pub struct SearchScreen;
 
+/// What to do, in order, after discarding (shown before the CSV is saved).
+pub(crate) const DISCARD_STEPS: [&str; 4] = [
+    "Save the CSV (next).",
+    "Import it into TCG Powertools right away, so Cardmarket drops the cards too.",
+    "Check the cards are gone on Cardmarket, then download a fresh inventory export.",
+    "Load that fresh export here as usual.",
+];
+
 impl SearchScreen {
     const SEARCH_DEBOUNCE_MS: u64 = 300; // Wait 300ms after user stops typing
 
@@ -89,6 +97,104 @@ impl SearchScreen {
         });
 
         Self::show_history_window(ctx, state);
+        Self::show_discard_confirm(ctx, app_state, state);
+    }
+
+    /// Warning shown before the discard CSV is saved. A discard reduces the
+    /// local inventory right away, while Cardmarket still lists the cards until
+    /// the CSV is imported — loading an export taken before that import brings
+    /// them back, and their later disappearance is then recorded as a sale.
+    fn show_discard_confirm(
+        ctx: &egui::Context,
+        app_state: &mut AppState,
+        state: &mut SearchState,
+    ) {
+        if !state.discard_confirm {
+            return;
+        }
+        if state.selected_cards.is_empty() {
+            state.discard_confirm = false;
+            return;
+        }
+        let copies: i32 = state.selected_cards.iter().map(|sc| sc.quantity).sum();
+        let value: f64 = state
+            .selected_cards
+            .iter()
+            .map(|sc| {
+                sc.card
+                    .price
+                    .trim()
+                    .replace(',', ".")
+                    .parse::<f64>()
+                    .unwrap_or(0.0)
+                    * f64::from(sc.quantity)
+            })
+            .sum();
+
+        let mut decision: Option<bool> = None;
+        let modal = egui::Modal::new(egui::Id::new("discard_order_warning")).show(ctx, |ui| {
+            ui.set_width(520.0);
+            ui.label(
+                egui::RichText::new("⚠  Import order matters for discards")
+                    .size(18.0)
+                    .strong()
+                    .color(style::COLOR_WARNING),
+            );
+            ui.add_space(8.0);
+            ui.label(format!(
+                "You are writing off {copies} {} listed at €{value:.2}. They leave your local \
+                 inventory now and are not counted as sold.",
+                if copies == 1 { "copy" } else { "copies" }
+            ));
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(
+                    "Cardmarket keeps listing them until you import the CSV. If you load an \
+                     inventory export that still contains them, they come back as stock — and \
+                     when they disappear later, they are recorded as sold at their listed price, \
+                     inflating your revenue.",
+                )
+                .color(style::TEXT_MUTED),
+            );
+            ui.add_space(12.0);
+            ui.label(egui::RichText::new("Do it in this order").strong());
+            ui.add_space(4.0);
+            for (n, step) in DISCARD_STEPS.iter().enumerate() {
+                ui.horizontal_top(|ui| {
+                    ui.label(egui::RichText::new(format!("{}.", n + 1)).color(style::ACCENT));
+                    ui.add(egui::Label::new(*step).wrap());
+                });
+            }
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(
+                    "Don't load an export you downloaded before step 2 — not on this screen and \
+                     not on any other.",
+                )
+                .strong()
+                .color(style::COLOR_WARNING),
+            );
+            ui.add_space(14.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if style::primary_button(ui, "Save CSV & discard…").clicked() {
+                    decision = Some(true);
+                }
+                if style::secondary_button(ui, "Cancel").clicked() {
+                    decision = Some(false);
+                }
+            });
+        });
+        if decision.is_none() && modal.should_close() {
+            decision = Some(false);
+        }
+        match decision {
+            Some(true) => {
+                state.discard_confirm = false;
+                Self::perform_discard(app_state, state);
+            }
+            Some(false) => state.discard_confirm = false,
+            None => {}
+        }
     }
 
     fn show_search_controls(ui: &mut egui::Ui, state: &mut SearchState) {
@@ -267,7 +373,8 @@ impl SearchScreen {
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             if style::primary_button(ui, "Discard & Export CSV…").clicked() {
-                                Self::perform_discard(app_state, state);
+                                // Explain the import order first; saving happens on confirm.
+                                state.discard_confirm = true;
                             }
                             if style::secondary_button(ui, "Clear All").clicked() {
                                 state.selected_cards.clear();
@@ -897,3 +1004,7 @@ impl SearchScreen {
         false
     }
 }
+
+#[cfg(test)]
+#[path = "search_tests.rs"]
+mod tests;

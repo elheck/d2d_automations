@@ -24,6 +24,33 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+mod bulk_lots;
+use bulk_lots::RemovalPlan;
+pub use bulk_lots::{
+    delete_bulk_lot, get_bulk_lot_cards, get_listing_dates, get_pending_bulk_removals,
+    list_bulk_lots, mark_bulk_lot_removed, per_card_share, record_bulk_lot, set_bulk_lot_price,
+    BulkLotCard, BulkLotSummary, BulkLotTotals, PendingRemoval, MAX_LOT_COPIES, MAX_LOT_NAME_CHARS,
+    MAX_LOT_PRICE_EUR,
+};
+
+/// Article key of an inventory CSV row's variant, exactly as the sync keys it
+/// (category + product id + normalised condition/language/foil/signed).
+pub fn card_variant_key(card: &Card, category: &str) -> String {
+    article_key(
+        category,
+        &card.cardmarket_id,
+        &canonical_condition(&card.condition),
+        &normalize_language(&card.language),
+        &normalize_flag(&card.is_foil),
+        &normalize_flag(&card.is_signed),
+    )
+}
+
+/// Purchase lot (`L12`) named by a location (`A-0-0-31-L12-R`), if any.
+pub fn purchase_lot_of(location: &str) -> Option<&str> {
+    extract_lot_number(location)
+}
+
 /// Normalise a boolean flag string to the canonical form used in the DB.
 ///
 /// The legacy Cardmarket export wrote `""` for false and `"1"` for true; the
@@ -65,8 +92,16 @@ pub struct LotBreakdown {
     pub in_stock_listings: i64,
     pub in_stock_copies: i64,
     pub in_stock_value: f64,
+    /// Copies that left the lot as sales — single sales plus copies sold in
+    /// bulk lots (`bulk_copies`).
     pub sold_copies: i64,
+    /// Revenue the lot earned — single sales at their price plus its share of
+    /// bulk-lot prices (`bulk_revenue`).
     pub sold_revenue: f64,
+    /// Of `sold_copies`: copies that went into bulk lots.
+    pub bulk_copies: i64,
+    /// Of `sold_revenue`: the lot's share of bulk-lot prices.
+    pub bulk_revenue: f64,
     /// Recorded acquisition cost for the whole lot, in EUR. `None` when no cost
     /// has been entered yet, which is distinct from a recorded cost of `0.0`.
     pub cost: Option<f64>,
@@ -266,6 +301,9 @@ pub struct SalesVelocity {
     pub last7_copies: Option<i64>,
     /// Copies sold in the trailing ~30 days, if a snapshot that old exists.
     pub last30_copies: Option<i64>,
+    /// Bulk lots built within the tracked period. Their prices are part of
+    /// `sold_revenue`; their copies are not part of `sold_copies`.
+    pub bulk_lots: BulkLotTotals,
 }
 
 /// One age bucket in the dead-stock aging report.
@@ -323,6 +361,8 @@ pub struct DbStats {
     pub aging_buckets: Vec<AgingBucket>,
     /// Sales velocity derived from snapshot history; `None` until ≥2 days of data.
     pub velocity: Option<SalesVelocity>,
+    /// All bulk lots ever built (whole business, every category).
+    pub bulk_totals: BulkLotTotals,
 }
 
 /// Statistics from a sync operation
@@ -332,6 +372,8 @@ pub struct SyncStats {
     pub upserted: usize,
     /// Number of card variants no longer in the CSV that were set to quantity 0
     pub zeroed: usize,
+    /// Copies whose drop was a pending bulk-lot removal (not counted as sold).
+    pub bulk_removed: i64,
 }
 
 /// Read-only preview of what a sync would change — computed before any write
@@ -344,8 +386,11 @@ pub struct SyncPreview {
     pub updated_variants: usize,
     /// In-stock variants that vanished from the CSV (would be zeroed).
     pub zeroed_variants: usize,
-    /// Copies that would be recorded as sold (quantity drops + vanished rows).
+    /// Copies that would be recorded as sold (quantity drops + vanished rows),
+    /// not counting copies already sold as part of a bulk lot.
     pub copies_sold: i64,
+    /// Copies whose drop is explained by a pending bulk-lot removal.
+    pub bulk_removed: i64,
     /// Variants whose listed price would change.
     pub price_changes: usize,
     /// Total in-stock copies before / after the sync.
@@ -717,6 +762,7 @@ fn init_schema(conn: &Connection) -> DbResult<()> {
         migrate_sold_events(conn)?;
         conn.execute_batch(LOT_COSTS_DDL)?;
         conn.execute_batch(LOT_STOCK_DDL)?;
+        conn.execute_batch(bulk_lots::BULK_LOTS_DDL)?;
         return conn.execute_batch(APP_META_DDL);
     }
 
@@ -787,6 +833,7 @@ fn init_schema(conn: &Connection) -> DbResult<()> {
     migrate_sold_events(conn)?;
     conn.execute_batch(LOT_COSTS_DDL)?;
     conn.execute_batch(LOT_STOCK_DDL)?;
+    conn.execute_batch(bulk_lots::BULK_LOTS_DDL)?;
     conn.execute_batch(APP_META_DDL)?;
 
     Ok(())
@@ -1207,6 +1254,9 @@ fn backfill_lot_stock_conn(conn: &mut Connection) -> DbResult<()> {
 /// position (capital tied up, revenue earned), not a per-category one. Since
 /// it is recomputed from the full table after every sync, syncing either
 /// category alone still produces a correct combined figure.
+///
+/// Revenue includes the price of every bulk lot built up to `today`; copies
+/// sold count singles only (a lot's copies are not single sales).
 fn write_snapshot(conn: &Connection, today: &str) -> DbResult<()> {
     conn.execute(
         "INSERT OR REPLACE INTO inventory_snapshots
@@ -1218,6 +1268,7 @@ fn write_snapshot(conn: &Connection, today: &str) -> DbResult<()> {
             COALESCE(SUM(CASE WHEN quantity > 0 THEN CAST(price AS REAL) * quantity ELSE 0 END), 0.0),
             COALESCE(SUM(sold_quantity), 0),
             COALESCE(SUM(CAST(price AS REAL) * sold_quantity), 0.0)
+                + (SELECT COALESCE(SUM(b.price), 0.0) FROM bulk_lots b WHERE b.created_at <= ?1)
          FROM inventory_cards",
         params![today],
     )?;
@@ -1596,6 +1647,9 @@ pub struct VisitDigest {
     pub last_sync: Option<String>,
     /// Current number of restock candidates (sold out, worth re-buying).
     pub restock_candidates: i64,
+    /// Bulk lots built since the baseline (not part of `sold_*`, which count
+    /// single sales).
+    pub bulk_lots: BulkLotTotals,
 }
 
 /// Builds the since-last-visit digest and records today as the latest visit.
@@ -1643,13 +1697,24 @@ fn visit_digest_conn(conn: &Connection, today: &str) -> DbResult<VisitDigest> {
             [since.as_str()],
             |r| r.get(0),
         )?;
+        digest.bulk_lots = bulk_lots::totals_between(conn, Some(since), None)?;
     }
     digest.last_sync =
         conn.query_row("SELECT MAX(last_synced_at) FROM inventory_cards", [], |r| {
             r.get(0)
         })?;
+    // Same rule as the restock report: variants that went into a bulk lot are
+    // dumped stock, not sell-outs worth buying again.
     digest.restock_candidates = conn.query_row(
-        "SELECT COUNT(*) FROM inventory_cards WHERE quantity = 0 AND sold_quantity > 0",
+        "SELECT COUNT(*) FROM inventory_cards c
+         WHERE c.quantity = 0 AND c.sold_quantity > 0
+           AND NOT EXISTS (SELECT 1 FROM bulk_lot_cards b
+                           WHERE b.category = c.category
+                             AND b.cardmarket_id = c.cardmarket_id
+                             AND b.condition = c.condition
+                             AND b.language = c.language
+                             AND b.is_foil = c.is_foil
+                             AND b.is_signed = c.is_signed)",
         [],
         |r| r.get(0),
     )?;
@@ -1663,6 +1728,9 @@ fn visit_digest_conn(conn: &Connection, today: &str) -> DbResult<VisitDigest> {
 /// are valued at the variant's last listed price. The sold-out date prefers the
 /// last event date and falls back to `last_synced_at`, which for a zeroed row is
 /// the day the sync zeroed it.
+///
+/// Variants that went into a bulk lot are left out: they were dumped as bulk,
+/// so selling out says nothing about demand.
 fn get_restock_candidates_conn(
     conn: &Connection,
     category: Option<&str>,
@@ -1693,7 +1761,14 @@ fn get_restock_candidates_conn(
             AND e.is_foil = c.is_foil
             AND e.is_signed = c.is_signed
          WHERE c.quantity = 0 AND c.sold_quantity > 0
-           AND (?1 IS NULL OR c.category = ?1)",
+           AND (?1 IS NULL OR c.category = ?1)
+           AND NOT EXISTS (SELECT 1 FROM bulk_lot_cards b
+                           WHERE b.category = c.category
+                             AND b.cardmarket_id = c.cardmarket_id
+                             AND b.condition = c.condition
+                             AND b.language = c.language
+                             AND b.is_foil = c.is_foil
+                             AND b.is_signed = c.is_signed)",
     )?
     .query_map(params![category], |r| {
         let location: String = r.get(13)?;
@@ -1785,6 +1860,7 @@ fn compute_velocity(snaps: &[InventorySnapshot]) -> Option<SalesVelocity> {
         revenue_per_week,
         last7_copies: window_sold(7),
         last30_copies: window_sold(30),
+        bulk_lots: BulkLotTotals::default(),
     })
 }
 
@@ -1839,9 +1915,39 @@ fn lot_breakdown_from(conn: &Connection) -> DbResult<Vec<LotBreakdown>> {
                 in_stock_value: r.get(3)?,
                 sold_copies: r.get(4)?,
                 sold_revenue: r.get(5)?,
+                bulk_copies: 0,
+                bulk_revenue: 0.0,
             })
         })?
         .collect::<DbResult<_>>()?;
+
+    // Copies sold in bulk lots earn their purchase lot a share of the lot price.
+    for (lot, (copies, revenue)) in bulk_lots::revenue_by_purchase_lot(conn)? {
+        if lot.is_empty() || lot == "L0" {
+            continue;
+        }
+        let entry = match result.iter().position(|l| l.lot == lot) {
+            Some(i) => &mut result[i],
+            None => {
+                result.push(LotBreakdown {
+                    cost: costs.get(&lot).copied(),
+                    lot,
+                    in_stock_listings: 0,
+                    in_stock_copies: 0,
+                    in_stock_value: 0.0,
+                    sold_copies: 0,
+                    sold_revenue: 0.0,
+                    bulk_copies: 0,
+                    bulk_revenue: 0.0,
+                });
+                result.last_mut().expect("just pushed")
+            }
+        };
+        entry.sold_copies += copies;
+        entry.sold_revenue += revenue;
+        entry.bulk_copies += copies;
+        entry.bulk_revenue += revenue;
+    }
 
     // Sort by lot number numerically (L1, L2, …)
     result.sort_by(|a, b| {
@@ -1985,8 +2091,15 @@ fn get_db_stats_conn(conn: &Connection, category: &str, today: &str) -> DbResult
         .map(|d| crate::aging::bucket_cards(&in_stock, d))
         .unwrap_or_default();
 
-    // Sales velocity from snapshot history.
-    let velocity = compute_velocity(&read_snapshots_conn(conn)?);
+    // Sales velocity from snapshot history, with the bulk lots its revenue
+    // includes (built after the first snapshot, up to the latest one).
+    let snapshots = read_snapshots_conn(conn)?;
+    let mut velocity = compute_velocity(&snapshots);
+    if let (Some(v), Some(first), Some(last)) = (&mut velocity, snapshots.first(), snapshots.last())
+    {
+        v.bulk_lots = bulk_lots::totals_between(conn, Some(&first.date), Some(&last.date))?;
+    }
+    let bulk_totals = bulk_lots::totals_between(conn, None, None)?;
 
     Ok(DbStats {
         total_articles,
@@ -2007,6 +2120,7 @@ fn get_db_stats_conn(conn: &Connection, category: &str, today: &str) -> DbResult
         lot_breakdown,
         aging_buckets,
         velocity,
+        bulk_totals,
     })
 }
 
@@ -2127,15 +2241,70 @@ fn preview_sync_conn(conn: &Connection, cards: &[Card], category: &str) -> DbRes
         }
     }
 
+    // Copies already sold in a bulk lot are not sales; the sync takes them out
+    // the same way, so the guard must not count them either.
+    let removals = RemovalPlan::plan(
+        &variant_drops(&db, &aggregated_totals(&agg)),
+        &bulk_lots::pending_removals_conn(conn, category)?,
+    );
+    preview.bulk_removed = removals.total();
+    preview.copies_sold -= preview.bulk_removed;
+
     Ok(preview)
 }
 
+/// CSV rows aggregated per variant key, as [`aggregate_by_variant`] returns them.
+type VariantAggregate<'a> =
+    std::collections::HashMap<(String, String, String, String, String, String), (&'a Card, i64)>;
+
+/// Per-variant CSV quantity totals of an aggregation, keyed by article key.
+fn aggregated_totals(agg: &VariantAggregate<'_>) -> std::collections::HashMap<String, i64> {
+    agg.iter()
+        .map(|((cat, id, cond, lang, foil, signed), (_, qty))| {
+            (article_key(cat, id, cond, lang, foil, signed), *qty)
+        })
+        .collect()
+}
+
+/// Copies each variant loses in a sync: the drop from its DB quantity to its
+/// CSV total, or its whole stock when the CSV no longer lists it. Variants
+/// that did not drop are left out.
+fn variant_drops(
+    old: &std::collections::HashMap<String, (i64, f64)>,
+    new: &std::collections::HashMap<String, i64>,
+) -> std::collections::HashMap<String, i64> {
+    old.iter()
+        .filter_map(|(key, (old_qty, _))| {
+            let drop = old_qty - new.get(key).copied().unwrap_or(0);
+            (drop > 0).then(|| (key.clone(), drop))
+        })
+        .collect()
+}
+
 /// Stock of one variant in one lot, before and after a sync.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct LotDelta {
     old_quantity: i64,
     new_quantity: i64,
     new_value: f64,
+}
+
+/// The lots of one variant with the copies that left in bulk lots taken out
+/// of each lot's drop, so a sale is never credited to the lot those copies
+/// left. A lot gives up at most its own drop.
+fn without_bulk_removals(
+    lots: &std::collections::BTreeMap<String, LotDelta>,
+    removed_by_lot: &std::collections::HashMap<String, i64>,
+) -> std::collections::BTreeMap<String, LotDelta> {
+    lots.iter()
+        .map(|(lot, delta)| {
+            let drop = (delta.old_quantity - delta.new_quantity).max(0);
+            let removed = removed_by_lot.get(lot).copied().unwrap_or(0).min(drop);
+            let mut adjusted = delta.clone();
+            adjusted.old_quantity -= removed;
+            (lot.clone(), adjusted)
+        })
+        .collect()
 }
 
 /// Returns the lot a CSV row belongs to, or `""` when its location names none.
@@ -2206,12 +2375,15 @@ fn relabelled_lot(lots: &std::collections::BTreeMap<String, LotDelta>) -> Option
 /// per-variant drops the sync records as sold events (`old_variants` is the
 /// pre-sync `quantity`/`price` per article key), credited to the lots the
 /// copies left and valued at the price they were listed at. A variant that was
-/// merely relabelled takes its history along (see [`relabelled_lot`]).
+/// merely relabelled takes its history along (see [`relabelled_lot`]). Copies
+/// that left in a bulk lot (`removals`) are not sales: their purchase lot is
+/// credited from the bulk lot price instead (see `bulk_lots`).
 fn sync_lot_stock(
     conn: &Connection,
     cards: &[Card],
     category: &str,
     old_variants: &std::collections::HashMap<String, (i64, f64)>,
+    removals: &RemovalPlan,
 ) -> DbResult<()> {
     let mut variants: std::collections::HashMap<
         VariantKey,
@@ -2275,12 +2447,10 @@ fn sync_lot_stock(
             sold_revenue  = lot_stock.sold_revenue + excluded.sold_revenue",
     )?;
     for ((id, cond, lang, foil, signed), lots) in &variants {
-        let (old_total, old_price) = old_variants
-            .get(&article_key(category, id, cond, lang, foil, signed))
-            .copied()
-            .unwrap_or((0, 0.0));
+        let key = article_key(category, id, cond, lang, foil, signed);
+        let (old_total, old_price) = old_variants.get(&key).copied().unwrap_or((0, 0.0));
         let new_total: i64 = lots.values().map(|d| d.new_quantity).sum();
-        let sold = (old_total - new_total).max(0);
+        let sold = ((old_total - new_total).max(0) - removals.removed(&key)).max(0);
 
         // A variant that sat in one lot and now sits, no larger, in a single
         // other one was relabelled, not sold and rebought: its history follows
@@ -2319,7 +2489,15 @@ fn sync_lot_stock(
             continue;
         }
 
-        let allocation = allocate_sold_to_lots(lots, sold);
+        let adjusted;
+        let basis = match removals.removed_by_lot(&key) {
+            Some(removed_by_lot) => {
+                adjusted = without_bulk_removals(lots, removed_by_lot);
+                &adjusted
+            }
+            None => lots,
+        };
+        let allocation = allocate_sold_to_lots(basis, sold);
         for (lot, delta) in lots {
             let sold = allocation.get(lot.as_str()).copied().unwrap_or(0);
             if sold == 0 && delta.old_quantity == 0 && delta.new_quantity == 0 {
@@ -2443,6 +2621,14 @@ fn sync_inventory_conn(
         })
         .collect();
 
+    // Copies of cards already sold as part of a bulk lot explain this sync's
+    // quantity drops first (see `bulk_lots`); only the rest is recorded as sold.
+    let new_totals = aggregated_totals(&agg);
+    let removals = RemovalPlan::plan(
+        &variant_drops(&db_qty_price, &new_totals),
+        &bulk_lots::pending_removals_conn(&tx, category)?,
+    );
+
     // Sold events detected this sync: (key fields..., copies, price at sale).
     let mut sold_events: Vec<(String, String, String, String, String, i64, f64)> = Vec::new();
 
@@ -2461,12 +2647,9 @@ fn sync_inventory_conn(
                 ?19, ?20, ?21, ?21
             )
             ON CONFLICT(category, cardmarket_id, condition, language, is_foil, is_signed) DO UPDATE SET
-                sold_quantity   = CASE
-                    WHEN excluded.quantity < inventory_cards.quantity
-                    THEN inventory_cards.sold_quantity
-                         + (inventory_cards.quantity - excluded.quantity)
-                    ELSE inventory_cards.sold_quantity
-                END,
+                -- ?23: copies sold this sync, computed below (quantity drop minus
+                -- copies that left as part of a bulk lot).
+                sold_quantity   = inventory_cards.sold_quantity + ?23,
                 quantity        = excluded.quantity,
                 name            = excluded.name,
                 set_name        = excluded.set_name,
@@ -2491,19 +2674,20 @@ fn sync_inventory_conn(
         )?;
 
         for ((cat, id, cond, lang, foil, signed), (rep_card, total_qty)) in &agg {
-            // Mirror the upsert's sold_quantity CASE: a lower CSV quantity than the
-            // stored one means the difference sold, at the price it was listed at.
-            if let Some((old_qty, old_price)) =
-                db_qty_price.get(&article_key(cat, id, cond, lang, foil, signed))
-            {
-                if total_qty < old_qty {
+            // A lower CSV quantity than the stored one means the difference sold,
+            // at the price it was listed at — except copies that left in a bulk lot.
+            let key = article_key(cat, id, cond, lang, foil, signed);
+            let mut sold = 0;
+            if let Some((old_qty, old_price)) = db_qty_price.get(&key) {
+                sold = ((old_qty - total_qty).max(0) - removals.removed(&key)).max(0);
+                if sold > 0 {
                     sold_events.push((
                         id.clone(),
                         cond.clone(),
                         lang.clone(),
                         foil.clone(),
                         signed.clone(),
-                        old_qty - total_qty,
+                        sold,
                         *old_price,
                     ));
                 }
@@ -2531,6 +2715,7 @@ fn sync_inventory_conn(
                 rep_card.listed_at,
                 today,
                 category,
+                sold,
             ])?;
             stats.upserted += 1;
         }
@@ -2564,27 +2749,35 @@ fn sync_inventory_conn(
             } else {
                 today
             };
+            // The whole stock left; copies that went into a bulk lot did not sell.
+            let sold = (*quantity - removals.removed(&key)).max(0);
             tx.execute(
                 "UPDATE inventory_cards
-                 SET sold_quantity = sold_quantity + quantity,
+                 SET sold_quantity = sold_quantity + ?8,
                      quantity = 0,
                      last_synced_at = ?1
                  WHERE category = ?7 AND cardmarket_id = ?2 AND condition = ?3 AND language = ?4
                    AND is_foil = ?5 AND is_signed = ?6",
-                params![new_date, id, condition, language, is_foil, is_signed, category],
+                params![new_date, id, condition, language, is_foil, is_signed, category, sold],
             )?;
-            sold_events.push((
-                id.clone(),
-                condition.clone(),
-                language.clone(),
-                is_foil.clone(),
-                is_signed.clone(),
-                *quantity,
-                *price,
-            ));
+            if sold > 0 {
+                sold_events.push((
+                    id.clone(),
+                    condition.clone(),
+                    language.clone(),
+                    is_foil.clone(),
+                    is_signed.clone(),
+                    sold,
+                    *price,
+                ));
+            }
             stats.zeroed += 1;
         }
     }
+
+    // Phase 2a: use up the pending bulk-lot removals this sync has seen happen.
+    removals.apply(&tx)?;
+    stats.bulk_removed = removals.total();
 
     // Phase 2b: persist the sold deltas detected above. Rows are appended, never
     // updated — a same-day re-sync that sells more copies simply adds another
@@ -2609,7 +2802,7 @@ fn sync_inventory_conn(
 
     // Phase 2c: split the new stock across lots and credit this sync's sales
     // to the lots they left.
-    sync_lot_stock(&tx, cards, category, &db_qty_price)?;
+    sync_lot_stock(&tx, cards, category, &db_qty_price, &removals)?;
 
     // Phase 3: record today's snapshot from the now-current table state.
     write_snapshot(&tx, today)?;
@@ -2617,9 +2810,10 @@ fn sync_inventory_conn(
     tx.commit()?;
     if stats.upserted > 0 || stats.zeroed > 0 {
         log::info!(
-            "Inventory DB sync: {} variants updated, {} zeroed",
+            "Inventory DB sync: {} variants updated, {} zeroed, {} bulk-lot copies removed",
             stats.upserted,
-            stats.zeroed
+            stats.zeroed,
+            stats.bulk_removed
         );
     } else {
         log::debug!("Inventory DB sync: no changes (same-day re-sync)");

@@ -139,6 +139,28 @@ fn test_card_is_foil_true_case_insensitive() {
 }
 
 #[test]
+fn test_card_is_foil_from_inventory_report_finish_type() {
+    // The inventory report leaves isFoil empty and marks foils via finishType.
+    let mut card = create_test_card();
+    card.is_foil = String::new();
+    card.finish_type = "Foil".to_string();
+    assert!(card.is_foil_card());
+    card.finish_type = "Regular".to_string();
+    assert!(!card.is_foil_card());
+}
+
+#[test]
+fn test_finish_type_is_read_from_the_inventory_report_csv() {
+    let csv = "cardmarketId,quantity,name,set,setCode,cn,condition,language,isFoil,isSigned,\
+               finishType,price,comment,location,rarity,listedAt\n\
+               1,1,Elf,Set,TST,1,NM,English,,,Foil,0.10,,A-0-0-1-L1-R,Common,\n";
+    let mut rdr = csv::Reader::from_reader(csv.as_bytes());
+    let card: Card = rdr.deserialize().next().unwrap().unwrap();
+    assert_eq!(card.finish_type, "Foil");
+    assert!(card.is_foil_card());
+}
+
+#[test]
 fn test_card_is_signed_false() {
     let card = create_test_card();
     assert!(!card.is_signed_card());

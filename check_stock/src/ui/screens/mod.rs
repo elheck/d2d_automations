@@ -1,4 +1,5 @@
 mod bin_analysis;
+mod bulk_lot;
 mod buy_helper;
 mod consolidation;
 mod mispricing;
@@ -14,6 +15,7 @@ mod stock_listing;
 mod welcome;
 
 pub use bin_analysis::BinAnalysisScreen;
+pub use bulk_lot::{BulkLotScreen, BulkLotState};
 pub use buy_helper::BuyHelperScreen;
 pub use consolidation::{ConsolidationScreen, ConsolidationState};
 pub use mispricing::MispricingScreen;

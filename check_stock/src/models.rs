@@ -115,6 +115,11 @@ pub struct Card {
     /// finish — so this defaults rather than failing the whole parse.
     #[serde(rename = "isFoil", default)]
     pub is_foil: String,
+    /// Finish of the inventory-report CSV (`"Regular"` / `"Foil"`). That report
+    /// leaves `isFoil` empty and marks foils only here; the legacy export has
+    /// no such column, so it defaults to empty.
+    #[serde(rename = "finishType", default)]
+    pub finish_type: String,
     #[serde(rename = "isPlayset", default)]
     pub is_playset: Option<String>,
     /// Also absent from some Generic exports; see `is_foil`.
@@ -143,9 +148,15 @@ pub struct Card {
 }
 
 impl Card {
-    /// Returns true if this card is foil
+    /// Returns true if this card is foil — flagged by the legacy `isFoil`
+    /// column or by the inventory report's `finishType`.
+    ///
+    /// The inventory DB keys variants by the raw `is_foil` value instead, so
+    /// changing this does not move any synced stock to a different variant.
     pub fn is_foil_card(&self) -> bool {
-        self.is_foil == "1" || self.is_foil.eq_ignore_ascii_case("true")
+        self.is_foil == "1"
+            || self.is_foil.eq_ignore_ascii_case("true")
+            || self.finish_type.trim().eq_ignore_ascii_case("foil")
     }
 
     /// Returns true if this card is signed
@@ -216,6 +227,7 @@ impl Card {
             condition: "NM".to_string(),
             language: "English".to_string(),
             is_foil: "false".to_string(),
+            finish_type: String::new(),
             is_playset: None,
             is_signed: "false".to_string(),
             is_first_ed: None,

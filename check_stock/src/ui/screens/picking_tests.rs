@@ -103,36 +103,6 @@ mod picking_item_tests {
     }
 
     #[test]
-    fn test_image_key_format() {
-        let card = create_test_card("Sol Ring", "CMD", "123", "1.00", None, false);
-        let mc = create_matched_card(&card, "Commander", 1);
-
-        let item = PickingItem::from_matched_card(&mc);
-
-        assert_eq!(item.image_key(), "cmd_123");
-    }
-
-    #[test]
-    fn test_image_key_lowercase() {
-        let card = create_test_card("Test", "MH2", "ABC", "1.00", None, false);
-        let mc = create_matched_card(&card, "Modern Horizons 2", 1);
-
-        let item = PickingItem::from_matched_card(&mc);
-
-        assert_eq!(item.image_key(), "mh2_ABC");
-    }
-
-    #[test]
-    fn test_image_key_special_collector_number() {
-        let card = create_test_card("Test", "uno", "1★", "1.00", None, false);
-        let mc = create_matched_card(&card, "Unfinity", 1);
-
-        let item = PickingItem::from_matched_card(&mc);
-
-        assert_eq!(item.image_key(), "uno_1★");
-    }
-
-    #[test]
     fn test_picking_item_clone() {
         let card = create_test_card("Clone", "m14", "47", "0.50", Some("B1_S1_R1_C1"), false);
         let mc = create_matched_card(&card, "Magic 2014", 3);
@@ -159,8 +129,7 @@ mod picking_state_tests {
         let state = PickingState::default();
 
         assert!(state.items.is_empty());
-        assert!(state.images.is_empty());
-        assert!(state.loading_images.is_empty());
+        assert_eq!(state.images.loading_count(), 0);
         assert!(!state.show_picked);
         assert!((state.total_price - 0.0).abs() < 0.001);
         assert!((state.picked_price - 0.0).abs() < 0.001);
@@ -398,41 +367,6 @@ mod picking_state_tests {
         let state = PickingState::from_matched_cards(&matches);
 
         assert!((state.total_price - 104.0).abs() < 0.001);
-    }
-}
-
-// ============================================================================
-// LoadedImage Tests
-// ============================================================================
-
-mod loaded_image_tests {
-    use super::*;
-
-    #[test]
-    fn test_loaded_image_creation() {
-        let loaded = LoadedImage {
-            image_key: "cmd_123".to_string(),
-            set_code: "cmd".to_string(),
-            collector_number: "123".to_string(),
-            image_data: vec![0xFF, 0xD8, 0xFF], // JPEG magic bytes
-        };
-
-        assert_eq!(loaded.image_key, "cmd_123");
-        assert_eq!(loaded.set_code, "cmd");
-        assert_eq!(loaded.collector_number, "123");
-        assert_eq!(loaded.image_data.len(), 3);
-    }
-
-    #[test]
-    fn test_loaded_image_empty_data() {
-        let loaded = LoadedImage {
-            image_key: "test_1".to_string(),
-            set_code: "test".to_string(),
-            collector_number: "1".to_string(),
-            image_data: vec![],
-        };
-
-        assert!(loaded.image_data.is_empty());
     }
 }
 

@@ -56,6 +56,7 @@ fn make_card(id: &str, name: &str, qty: &str) -> Card {
         condition: "NM".to_string(),
         language: "English".to_string(),
         is_foil: "".to_string(),
+        finish_type: String::new(),
         is_playset: None,
         is_signed: "".to_string(),
         is_first_ed: None,
@@ -1144,6 +1145,8 @@ fn lot_with(cost: Option<f64>, sold_revenue: f64) -> LotBreakdown {
         in_stock_value: 0.0,
         sold_copies: 0,
         sold_revenue,
+        bulk_copies: 0,
+        bulk_revenue: 0.0,
         cost,
     }
 }

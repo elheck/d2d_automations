@@ -24,6 +24,7 @@ pub enum Screen {
     Consolidation,
     Restock,
     PreconEv,
+    BulkLot,
 }
 
 #[derive(PartialEq)]
@@ -102,6 +103,8 @@ pub struct SyncReport {
     pub upserted: usize,
     /// In-stock variants missing from the CSV that were set to quantity 0.
     pub zeroed: usize,
+    /// Copies whose drop was a bulk lot's removal (not counted as sold).
+    pub bulk_removed: i64,
     /// Set when the sync failed; `upserted`/`zeroed` are then meaningless.
     pub error: Option<String>,
     /// True when the user overrode a blocked sync from the guard modal.
@@ -113,18 +116,28 @@ impl SyncReport {
     pub fn summary(&self) -> String {
         match &self.error {
             Some(e) => format!("Inventory sync failed ({}): {e}", self.category),
-            None => format!(
-                "{} sync ({}): {} variant{} updated, {} zeroed out",
-                if self.forced {
-                    "Forced inventory"
-                } else {
-                    "Inventory"
-                },
-                self.category,
-                self.upserted,
-                if self.upserted == 1 { "" } else { "s" },
-                self.zeroed
-            ),
+            None => {
+                let mut summary = format!(
+                    "{} sync ({}): {} variant{} updated, {} zeroed out",
+                    if self.forced {
+                        "Forced inventory"
+                    } else {
+                        "Inventory"
+                    },
+                    self.category,
+                    self.upserted,
+                    if self.upserted == 1 { "" } else { "s" },
+                    self.zeroed
+                );
+                if self.bulk_removed > 0 {
+                    summary.push_str(&format!(
+                        ", {} bulk-lot cop{} removed (not sales)",
+                        self.bulk_removed,
+                        if self.bulk_removed == 1 { "y" } else { "ies" }
+                    ));
+                }
+                summary
+            }
         }
     }
 }
@@ -142,6 +155,7 @@ impl AppState {
                     category: category.to_string(),
                     upserted: stats.upserted,
                     zeroed: stats.zeroed,
+                    bulk_removed: stats.bulk_removed,
                     error: None,
                     forced: false,
                 });
@@ -163,6 +177,7 @@ impl AppState {
                     category: category.to_string(),
                     upserted: 0,
                     zeroed: 0,
+                    bulk_removed: 0,
                     error: Some(e.to_string()),
                     forced: false,
                 });
@@ -189,6 +204,7 @@ impl AppState {
                     category: category.to_string(),
                     upserted: stats.upserted,
                     zeroed: stats.zeroed,
+                    bulk_removed: stats.bulk_removed,
                     error: None,
                     forced: true,
                 });
@@ -200,6 +216,7 @@ impl AppState {
                     category: category.to_string(),
                     upserted: 0,
                     zeroed: 0,
+                    bulk_removed: 0,
                     error: Some(e.to_string()),
                     forced: true,
                 });
@@ -441,6 +458,9 @@ pub struct SearchState {
     pub quantity_inputs: std::collections::HashMap<usize, i32>,
     /// Whether the selection is sent to lists or written off as discarded.
     pub action_mode: SearchAction,
+    /// The "import order matters" warning is open; saving the discard CSV
+    /// waits for the user to confirm it.
+    pub discard_confirm: bool,
     /// Floating per-card price-history window.
     pub history: CardHistoryState,
 }
@@ -1334,6 +1354,7 @@ impl Default for SearchState {
             selected_cards: Vec::new(),
             quantity_inputs: std::collections::HashMap::new(),
             action_mode: SearchAction::AddToLists,
+            discard_confirm: false,
             history: CardHistoryState::default(),
         }
     }

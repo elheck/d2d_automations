@@ -4,7 +4,7 @@ use eframe::egui;
 
 pub struct WelcomeScreen;
 
-const TILES: [(&str, &str); 11] = [
+const TILES: [(&str, &str); 12] = [
     ("Stock Checker", "Verify card stock\nagainst order lists"),
     ("Stock Analysis", "Analyse inventory\ntrends and signals"),
     ("Bin Analysis", "Bin capacity and\nfree-slot analysis"),
@@ -19,6 +19,7 @@ const TILES: [(&str, &str); 11] = [
     ),
     ("Price Movers", "7/30-day market moves\nacross your stock"),
     ("Precon EV", "Commander precon value\nvs. sealed price"),
+    ("Bulk Lots", "Bundle old, cheap cards\ninto Cardmarket lots"),
 ];
 
 impl WelcomeScreen {
@@ -85,7 +86,8 @@ impl WelcomeScreen {
                     7 => Screen::Mispricing,
                     8 => Screen::Restock,
                     9 => Screen::Movers,
-                    _ => Screen::PreconEv,
+                    10 => Screen::PreconEv,
+                    _ => Screen::BulkLot,
                 };
             }
         });
@@ -106,6 +108,14 @@ impl WelcomeScreen {
             }
             if d.new_listings > 0 {
                 parts.push(format!("{} new listings", d.new_listings));
+            }
+            if d.bulk_lots.lots > 0 {
+                parts.push(format!(
+                    "{} bulk lot{} (€{:.2})",
+                    d.bulk_lots.lots,
+                    if d.bulk_lots.lots == 1 { "" } else { "s" },
+                    d.bulk_lots.revenue
+                ));
             }
         }
         if d.restock_candidates > 0 {

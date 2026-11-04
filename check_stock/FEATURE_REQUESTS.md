@@ -22,8 +22,9 @@ quantifies, in minutes instead of hours, while keeping a human in the loop.
 
 Combine the aging buckets with the mispricing data: for stock older than a
 chosen threshold, propose a markdown schedule (e.g. −10 % at 90 days, −25 % at
-180, bulk-out below €0.30) and show the capital freed vs. revenue given up at
-each step. Export as a stock-update CSV like feature 1.
+180) and show the capital freed vs. revenue given up at each step. Export as a
+stock-update CSV like feature 1. The final "bulk-out" step already exists as
+the Bulk Lots screen; the planner could hand its leftovers to it.
 
 **Decision it enables:** a concrete, costed plan to convert the "capital tied
 up" number the aging report already shows into cash and free bin space.

@@ -10,7 +10,10 @@ pub use error::{MtgError, MtgResult};
 pub use file_cache::FileCache;
 pub use inventory_sync::InventorySyncClient;
 pub use mtgjson::{MtgjsonClient, PreconDeck, SealedIndex};
-pub use scryfall::{image_url, CardFace, ImageUris, PurchaseUris, ScryfallCard, ScryfallPrices};
+pub use scryfall::{
+    image_url, CardFace, CollectionIdentifier, ImageUris, PurchaseUris, ScryfallCard,
+    ScryfallPrices,
+};
 
 /// Shared User-Agent for all HTTP requests to external APIs.
 pub const USER_AGENT: &str = "D2D-Automations/1.0";

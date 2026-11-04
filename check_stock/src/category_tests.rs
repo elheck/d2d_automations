@@ -12,6 +12,7 @@ fn card(set: &str, set_code: &str, cn: &str, rarity: &str) -> Card {
         condition: "NM".to_string(),
         language: "English".to_string(),
         is_foil: String::new(),
+        finish_type: String::new(),
         is_playset: None,
         is_signed: String::new(),
         is_first_ed: None,

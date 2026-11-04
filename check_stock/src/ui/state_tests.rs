@@ -5,9 +5,29 @@ fn report(upserted: usize, zeroed: usize) -> SyncReport {
         category: "Magic Single".to_string(),
         upserted,
         zeroed,
+        bulk_removed: 0,
         error: None,
         forced: false,
     }
+}
+
+#[test]
+fn summary_mentions_bulk_lot_removals() {
+    let mut r = report(4, 1);
+    assert!(
+        !r.summary().contains("bulk"),
+        "nothing to say without removals"
+    );
+    r.bulk_removed = 1;
+    assert!(
+        r.summary().contains("1 bulk-lot copy removed"),
+        "{}",
+        r.summary()
+    );
+    r.bulk_removed = 100;
+    assert!(r
+        .summary()
+        .contains("100 bulk-lot copies removed (not sales)"));
 }
 
 #[test]

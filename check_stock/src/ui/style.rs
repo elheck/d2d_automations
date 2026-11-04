@@ -13,6 +13,8 @@ pub const PANEL_BG: egui::Color32 = egui::Color32::from_rgb(30, 36, 52);
 pub const PANEL_BORDER: egui::Color32 = egui::Color32::from_rgb(52, 62, 88);
 pub const COLOR_SUCCESS: egui::Color32 = egui::Color32::from_rgb(75, 175, 115);
 pub const COLOR_ERROR: egui::Color32 = egui::Color32::from_rgb(210, 75, 75);
+pub const COLOR_WARNING: egui::Color32 = egui::Color32::from_rgb(230, 170, 80);
+const BTN_DANGER: egui::Color32 = egui::Color32::from_rgb(150, 55, 55);
 
 // ── Navigation ───────────────────────────────────────────────────────────────
 
@@ -93,6 +95,19 @@ pub fn secondary_button_enabled(ui: &mut egui::Ui, label: &str, enabled: bool) -
         egui::Button::new(egui::RichText::new(label).color(TEXT_PRIMARY).size(13.0))
             .fill(BTN_SECONDARY)
             .min_size(egui::vec2(80.0, 26.0)),
+    )
+}
+
+/// Filled button for destructive actions (delete, undo).
+pub fn danger_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(
+            egui::RichText::new(label)
+                .color(egui::Color32::WHITE)
+                .size(14.0),
+        )
+        .fill(BTN_DANGER)
+        .min_size(egui::vec2(100.0, 28.0)),
     )
 }
 

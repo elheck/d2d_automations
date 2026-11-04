@@ -3,10 +3,10 @@ use egui::ViewportBuilder;
 
 use super::{
     screens::{
-        BinAnalysisScreen, BuyHelperScreen, ConsolidationScreen, ConsolidationState,
-        MispricingScreen, MoversScreen, PickingScreen, PickingState, PreconEvScreen, PricingScreen,
-        RestockScreen, SearchScreen, StockAnalysisScreen, StockCheckerScreen, StockListingScreen,
-        WelcomeScreen,
+        BinAnalysisScreen, BulkLotScreen, BulkLotState, BuyHelperScreen, ConsolidationScreen,
+        ConsolidationState, MispricingScreen, MoversScreen, PickingScreen, PickingState,
+        PreconEvScreen, PricingScreen, RestockScreen, SearchScreen, StockAnalysisScreen,
+        StockCheckerScreen, StockListingScreen, WelcomeScreen,
     },
     state::{
         AppState, BinAnalysisState, BuyHelperState, MispricingState, MoversState, PreconEvState,
@@ -30,6 +30,7 @@ pub struct StockCheckerApp {
     consolidation_state: ConsolidationState,
     restock_state: RestockState,
     precon_ev_state: PreconEvState,
+    bulk_lot_state: BulkLotState,
 }
 
 impl eframe::App for StockCheckerApp {
@@ -109,6 +110,9 @@ impl eframe::App for StockCheckerApp {
             }
             Screen::PreconEv => {
                 PreconEvScreen::show(ctx, &mut self.app_state, &mut self.precon_ev_state);
+            }
+            Screen::BulkLot => {
+                BulkLotScreen::show(ctx, &mut self.app_state, &mut self.bulk_lot_state);
             }
         }
 
@@ -191,6 +195,11 @@ fn show_sync_guard_modal(ctx: &egui::Context, app_state: &mut AppState) {
                     ui.label("Price changes:");
                     ui.label(format!("{}", p.price_changes));
                     ui.end_row();
+                    if p.bulk_removed > 0 {
+                        ui.label("Bulk-lot cards removed:");
+                        ui.label(format!("{} (not counted as sold)", p.bulk_removed));
+                        ui.end_row();
+                    }
                 });
             ui.add_space(8.0);
             ui.horizontal(|ui| {

@@ -55,3 +55,19 @@ pub(crate) async fn fetch_card_from_async(
 pub async fn fetch_image_async(url: &str) -> ApiResult<Vec<u8>> {
     Ok(mtg_common::scryfall::fetch_image(url).await?)
 }
+
+/// Look up to 75 printings (set + collector number) in one request (async).
+pub async fn fetch_collection_from_async(
+    base_url: &str,
+    identifiers: &[mtg_common::scryfall::CollectionIdentifier],
+) -> ApiResult<Vec<ScryfallCard>> {
+    Ok(mtg_common::scryfall::fetch_collection_from(base_url, identifiers).await?)
+}
+
+/// Fetch the exact printing behind a Cardmarket product id (async).
+pub async fn fetch_card_by_cardmarket_id_from_async(
+    base_url: &str,
+    id: u64,
+) -> ApiResult<ScryfallCard> {
+    Ok(mtg_common::scryfall::fetch_card_by_cardmarket_id_from(base_url, id).await?)
+}

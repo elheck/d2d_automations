@@ -9,7 +9,7 @@ Rust monorepo for Magic: The Gathering business operations.
 
 | Project | Type | Description |
 |---------|------|-------------|
-| [check_stock](check_stock/) | egui desktop app | Stock checker, analysis, picking, pricing, precon EV |
+| [check_stock](check_stock/) | egui desktop app | Stock checker, analysis, picking, pricing, precon EV, bulk lots |
 | [accounting](accounting/) | egui desktop app | Cardmarket CSV & CardTrader reports → SevDesk invoicing |
 | [inventory_sync](inventory_sync/) | REST API server | CSV → SQLite with price tracking & web UI |
 | [mtg_common](mtg_common/) | shared library | Shared types, API clients (Cardmarket, Scryfall, inventory_sync, MTGJSON), file cache, errors |
@@ -84,8 +84,8 @@ Status last checked 2026-10-29.
 | # | Project | Issue | Status |
 |---|---------|-------|--------|
 | M1 | check_stock | SSRF via unvalidated image URL from Scryfall | Open |
-| M2 | check_stock | Path traversal in cache filenames | Open |
-| M3 | check_stock | URL injection via unsanitized set_code/collector_number | Open |
+| M2 | check_stock | Path traversal in cache filenames | **Fixed** — image cache names are only built from ASCII letters, digits and `-`; other caches use fixed names or `is_safe_deck_file_name` |
+| M3 | check_stock | URL injection via unsanitized set_code/collector_number | Partly fixed — tile views (picking, consolidation, bulk lots) only request validated set codes/collector numbers; Magic Singles Listing still puts typed values into the URL |
 | M4 | accounting | API token stored as plain mutable String | Open |
 | M5 | accounting | Token length logged at debug level | Open |
 | M6 | inventory_sync | LIKE metacharacter injection in search | Open |

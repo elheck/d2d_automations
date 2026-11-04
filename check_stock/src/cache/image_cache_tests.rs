@@ -11,15 +11,46 @@ fn create_test_cache() -> (ImageCache, TempDir) {
 
 #[test]
 fn test_filename_format() {
-    assert_eq!(ImageCache::filename("LEA", "123"), "lea_123.jpg");
-    assert_eq!(ImageCache::filename("Hou", "45"), "hou_45.jpg");
-    assert_eq!(ImageCache::filename("abc", "1"), "abc_1.jpg");
+    assert_eq!(ImageCache::filename("LEA", "123").unwrap(), "lea_123.jpg");
+    assert_eq!(ImageCache::filename("Hou", "45").unwrap(), "hou_45.jpg");
+    assert_eq!(ImageCache::filename("abc", "1").unwrap(), "abc_1.jpg");
 }
 
 #[test]
 fn test_filename_lowercase() {
-    assert_eq!(ImageCache::filename("LEA", "123"), "lea_123.jpg");
-    assert_eq!(ImageCache::filename("HOU", "456"), "hou_456.jpg");
+    assert_eq!(ImageCache::filename("LEA", "123").unwrap(), "lea_123.jpg");
+    assert_eq!(ImageCache::filename("HOU", "456").unwrap(), "hou_456.jpg");
+}
+
+#[test]
+fn test_unsafe_keys_never_touch_the_disk() {
+    let (cache, temp_dir) = create_test_cache();
+    for (set, cn) in [
+        ("lea", "../../escape"),
+        ("..", "1"),
+        ("tst", "T 1/2"),
+        ("", "1"),
+        ("lea", ""),
+        ("lea", "1\\2"),
+    ] {
+        assert!(!ImageCache::is_safe_key(set, cn), "{set:?}/{cn:?}");
+        cache.insert(set, cn, b"x");
+        assert!(cache.get(set, cn).is_none());
+        assert!(!cache.contains(set, cn));
+    }
+    assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 0);
+    assert!(!temp_dir
+        .path()
+        .parent()
+        .unwrap()
+        .join("escape.jpg")
+        .exists());
+}
+
+#[test]
+fn test_safe_keys_include_promo_numbers() {
+    assert!(ImageCache::is_safe_key("PLST", "MH2-12"));
+    assert!(ImageCache::is_safe_key("sld", "123a"));
 }
 
 #[test]

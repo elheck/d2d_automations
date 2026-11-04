@@ -21,6 +21,7 @@ fn create_test_card(
         condition: "NM".to_string(),
         language: language.to_string(),
         is_foil: "false".to_string(),
+        finish_type: String::new(),
         is_playset: None,
         is_signed: "false".to_string(),
         is_first_ed: None,
