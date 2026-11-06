@@ -279,6 +279,27 @@ fn test_price_diff_csv_preserves_card_fields() {
 }
 
 #[test]
+fn test_price_diff_csv_marks_finish_type_foils_as_foil() {
+    // The inventory report leaves isFoil empty and marks foils only in
+    // finishType, which this CSV has no column for.
+    let mut foil = create_test_card("Foil Bolt", "10.00", 1);
+    foil.is_foil = String::new();
+    foil.finish_type = "Foil".to_string();
+    let mut regular = create_test_card("Plain Bolt", "1.00", 1);
+    regular.is_foil = String::new();
+    regular.finish_type = "Regular".to_string();
+    let cards = vec![foil, regular];
+    let overrides: std::collections::HashMap<usize, f64> =
+        [(0, 12.0), (1, 1.5)].into_iter().collect();
+
+    let output = format_price_diff_csv(&cards, &[0, 1], &overrides);
+    let mut rdr = csv::Reader::from_reader(output.as_bytes());
+    let rows: Vec<csv::StringRecord> = rdr.records().map(|r| r.unwrap()).collect();
+    assert_eq!(&rows[0][8], "true", "foil keeps its finish");
+    assert_eq!(&rows[1][8], "", "non-foil stays as exported");
+}
+
+#[test]
 fn test_price_diff_csv_skips_indices_not_in_overrides() {
     let cards = vec![
         create_test_card("Card A", "1.00", 1),

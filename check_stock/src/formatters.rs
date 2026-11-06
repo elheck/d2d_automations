@@ -406,9 +406,11 @@ pub fn format_update_stock_csv(matched_cards: &[MatchedCard]) -> String {
     String::from_utf8(data).unwrap()
 }
 
-/// Generates a CSV containing only cards whose price changed via the pricing
-/// node graph.  Each row carries the **new** price so the file can be imported
-/// back into Cardmarket to update listings.
+/// Generates a CSV of the rows in `indices` that have an entry in
+/// `overrides`, each carrying that price instead of its own. The repricer
+/// writes it twice: with the new prices, and with the old ones as an undo
+/// file. Foils that the inventory report marks only via `finishType` get
+/// `isFoil` set, so the right article is updated.
 pub fn format_price_diff_csv(
     cards: &[crate::models::Card],
     indices: &[usize],
@@ -443,6 +445,11 @@ pub fn format_price_diff_csv(
         };
         let card = &cards[idx];
         let price_str = format!("{new_price:.2}");
+        let is_foil = if card.is_foil_card() && card.is_foil.trim().is_empty() {
+            "true"
+        } else {
+            card.is_foil.as_str()
+        };
         let _ = wtr.write_record([
             &card.cardmarket_id,
             &card.quantity,
@@ -452,7 +459,7 @@ pub fn format_price_diff_csv(
             &card.cn,
             &card.condition,
             &card.language,
-            &card.is_foil,
+            is_foil,
             &card.is_signed,
             card.is_first_ed.as_deref().unwrap_or("false"),
             card.is_reverse_holo.as_deref().unwrap_or("false"),

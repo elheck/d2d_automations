@@ -5,31 +5,22 @@ This document contains feature requests for the Check Stock Application.
 
 ## High Priority
 
-### 1. Repricing action export from the Mispricing Report
-
-The report finds under/over-priced cards but stays read-only, so acting on it
-means manual work per card. Add configurable repricing rules (e.g. "set to
-trend − 5 %, never below X, cap change at Y %"), a review checklist like the
-consolidation move list, and export of the ticked rows as a Cardmarket
-stock-update CSV — same pattern the Discard flow already uses.
-
-**Decision it enables:** capture the repricing upside the report already
-quantifies, in minutes instead of hours, while keeping a human in the loop.
+_Nothing open._
 
 ## Medium Priority
 
-### 2. Dead-stock liquidation planner
+### 1. Dead-stock liquidation planner
 
-Combine the aging buckets with the mispricing data: for stock older than a
-chosen threshold, propose a markdown schedule (e.g. −10 % at 90 days, −25 % at
-180) and show the capital freed vs. revenue given up at each step. Export as a
-stock-update CSV like feature 1. The final "bulk-out" step already exists as
-the Bulk Lots screen; the planner could hand its leftovers to it.
+Markdown rules themselves now exist in the Repricing screen ("no sale for 180
+days → current price −10%", aging conditions, export). Still missing: a
+costed view of a whole schedule (e.g. −10 % at 90 days, −25 % at 180) that
+shows the capital freed vs. revenue given up at each step, and a hand-off of
+the leftovers to the Bulk Lots screen.
 
 **Decision it enables:** a concrete, costed plan to convert the "capital tied
 up" number the aging report already shows into cash and free bin space.
 
-### 3. Buy Helper × own-stock/demand cross-check
+### 2. Buy Helper × own-stock/demand cross-check
 
 When valuing an offer, flag each card with what you already know: current
 copies in stock, its sales velocity (from the sold-events log), and dead-stock risk
@@ -39,7 +30,7 @@ singles from the price-guide trend instead of the seller's CSV prices.
 **Decision it enables:** avoid paying singles rates for cards that will rot in
 a bin, and bid confidently on cards your own history proves sell fast.
 
-### 4. Inventory turnover & cash-flow dashboard
+### 3. Inventory turnover & cash-flow dashboard
 
 From the snapshot history: chart in-stock value and revenue/week over time,
 plus derived KPIs — inventory turnover (annualized revenue ÷ average stock
@@ -51,7 +42,7 @@ most useful health check for a reselling operation.
 
 ## Low Priority
 
-### 5. Concentration & exposure report
+### 4. Concentration & exposure report
 
 Break current stock value down by set and show concentration risk: % of total
 value in the top 10 cards / top 3 sets, and value held in cards above a price
@@ -61,7 +52,7 @@ threshold (reprint-sensitive capital).
 wipe out a meaningful share of inventory value, and when to diversify or sell
 down a position.
 
-### 6. Average sale price vs. current listing price
+### 5. Average sale price vs. current listing price
 
 Using the sold-events log: for variants still in stock, compare the average
 realized sale price against the current listed price and the market trend.
@@ -69,7 +60,7 @@ realized sale price against the current listed price and the market trend.
 **Decision it enables:** spot listings priced below what buyers demonstrably
 paid before (free margin) and listings priced above what they ever sold at.
 
-### 7. Wantslist demand mining
+### 6. Wantslist demand mining
 
 Count how often cards appear across checked wantslists/decklists over time and
 match against stock.

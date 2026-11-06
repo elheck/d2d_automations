@@ -3081,3 +3081,55 @@ fn backfill_seeds_lots_for_a_db_from_before_lot_tracking() {
         3
     );
 }
+
+// ==================== Sales per variant (repricer) ====================
+
+#[test]
+fn sales_by_variant_keys_match_csv_variant_keys() {
+    let mut conn = test_conn();
+    let mut foil = make_card("2", "Shock", "4");
+    foil.is_foil = "true".to_string();
+    foil.language = "German".to_string();
+    sync_inventory_conn(
+        &mut conn,
+        &[make_card("1", "Bolt", "10"), foil.clone()],
+        "2026-01-01",
+    )
+    .unwrap();
+    let mut foil_after = foil.clone();
+    foil_after.quantity = "1".to_string();
+    sync_inventory_conn(
+        &mut conn,
+        &[make_card("1", "Bolt", "7"), foil_after.clone()],
+        "2026-01-02",
+    )
+    .unwrap();
+    sync_inventory_conn(
+        &mut conn,
+        &[make_card("1", "Bolt", "5"), foil_after],
+        "2026-01-04",
+    )
+    .unwrap();
+
+    let sales = super::sales_by_variant_conn(&conn, CAT).unwrap();
+    let bolt = &sales[&card_variant_key(&make_card("1", "Bolt", "5"), CAT)];
+    assert_eq!(
+        bolt,
+        &vec![("2026-01-02".to_string(), 3), ("2026-01-04".to_string(), 2)],
+        "oldest first, one entry per sold delta"
+    );
+    let shock = &sales[&card_variant_key(&foil, CAT)];
+    assert_eq!(shock, &vec![("2026-01-02".to_string(), 3)]);
+}
+
+#[test]
+fn sales_by_variant_is_scoped_to_category() {
+    let mut conn = test_conn();
+    sync_inventory_conn(&mut conn, &[make_card("1", "Bolt", "3")], "2026-01-01").unwrap();
+    sync_inventory_conn(&mut conn, &[make_card("1", "Bolt", "1")], "2026-01-02").unwrap();
+
+    assert_eq!(super::sales_by_variant_conn(&conn, CAT).unwrap().len(), 1);
+    assert!(super::sales_by_variant_conn(&conn, "Generic")
+        .unwrap()
+        .is_empty());
+}

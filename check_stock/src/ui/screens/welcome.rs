@@ -10,7 +10,7 @@ const TILES: [(&str, &str); 12] = [
     ("Bin Analysis", "Bin capacity and\nfree-slot analysis"),
     ("Magic Singles Listing", "Generate listings\nfor Cardmarket"),
     ("Search Cards", "Find cards by name\nor location"),
-    ("Pricing", "Price stock from\nCSV inventory"),
+    ("Repricing", "Reprice your stock\nby your own rules"),
     ("Card Buy Helper", "Value a buy offer\nfrom a card export"),
     ("Mispricing Report", "Compare listings\nto market prices"),
     (

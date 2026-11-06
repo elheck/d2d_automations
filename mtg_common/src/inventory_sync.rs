@@ -212,8 +212,8 @@ pub struct PriceSnapshotRequest {
 
 /// Which of the standard Cardmarket price-guide columns to read.
 ///
-/// Serialized by variant name — these names are part of the saved node-graph
-/// format in check_stock, so renaming a variant breaks old save files.
+/// Serialized by variant name — these names are part of check_stock's saved
+/// repricing rulesets, so renaming a variant breaks old save files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PriceField {
     Trend,

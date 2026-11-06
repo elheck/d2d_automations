@@ -22,7 +22,7 @@ const BTN_DANGER: egui::Color32 = egui::Color32::from_rgb(150, 55, 55);
 pub fn back_button(ui: &mut egui::Ui, label: &str) -> bool {
     ui.add(
         egui::Button::new(
-            egui::RichText::new(format!("← {label}"))
+            egui::RichText::new(format!("⏴ {label}"))
                 .color(TEXT_MUTED)
                 .size(13.0),
         )

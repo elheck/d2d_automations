@@ -21,7 +21,7 @@
 use crate::category::{canonical_category, DEFAULT_CATEGORY};
 use crate::models::{canonical_condition, Card, Language};
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 mod bulk_lots;
@@ -1600,6 +1600,45 @@ fn get_sold_events_conn(conn: &Connection, category: &str) -> DbResult<Vec<SoldE
         })
     })?
     .collect()
+}
+
+/// Sale history per variant of a category, keyed by article key (the key
+/// [`card_variant_key`] builds for a CSV row): `(date, copies)` pairs, oldest
+/// first. Discards and bulk-lot removals never appear (they record no sales).
+pub fn get_sales_by_variant(category: &str) -> DbResult<HashMap<String, Vec<(String, i64)>>> {
+    let conn = open_db()?;
+    sales_by_variant_conn(&conn, category)
+}
+
+/// Inner query that accepts an explicit connection — used in tests.
+fn sales_by_variant_conn(
+    conn: &Connection,
+    category: &str,
+) -> DbResult<HashMap<String, Vec<(String, i64)>>> {
+    let mut out: HashMap<String, Vec<(String, i64)>> = HashMap::new();
+    let mut stmt = conn.prepare(
+        "SELECT cardmarket_id, condition, language, is_foil, is_signed, date, copies
+         FROM sold_events WHERE category = ?1 ORDER BY date ASC, rowid ASC",
+    )?;
+    let rows = stmt.query_map(params![category], |r| {
+        Ok((
+            article_key(
+                category,
+                &r.get::<_, String>(0)?,
+                &r.get::<_, String>(1)?,
+                &r.get::<_, String>(2)?,
+                &r.get::<_, String>(3)?,
+                &r.get::<_, String>(4)?,
+            ),
+            r.get::<_, String>(5)?,
+            r.get::<_, i64>(6)?,
+        ))
+    })?;
+    for row in rows {
+        let (key, date, copies) = row?;
+        out.entry(key).or_default().push((date, copies));
+    }
+    Ok(out)
 }
 
 /// Returns every sold-out variant (quantity 0, sold copies > 0) in the given

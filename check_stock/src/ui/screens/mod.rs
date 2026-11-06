@@ -22,7 +22,7 @@ pub use mispricing::MispricingScreen;
 pub use movers::MoversScreen;
 pub use picking::{PickingScreen, PickingState};
 pub use precon_ev::PreconEvScreen;
-pub use pricing::PricingScreen;
+pub use pricing::{PricingScreen, PricingState};
 pub use restock::RestockScreen;
 pub use search::SearchScreen;
 pub use stock_analysis::StockAnalysisScreen;

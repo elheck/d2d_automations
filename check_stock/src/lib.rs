@@ -18,6 +18,7 @@ pub mod models;
 pub mod precon_ev;
 pub mod precon_loader;
 pub mod price_trends;
+pub mod repricing;
 pub mod restock;
 pub mod stock_analysis;
 pub mod ui;

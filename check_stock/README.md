@@ -60,7 +60,43 @@ showing exactly what would change before anything is written.
   import still contains the cards, brings them back as stock, and their later
   disappearance would count as a sale.
 - **Picking** — Order picking workflow (reached via Stock Checker results)
-- **Pricing** — Node-based visual editor for filtering and pricing stock from CSV inventory
+- **Repricing** — Reprice the whole stock by your own ruleset, review every
+  change, and export the result. Three steps:
+  1. **Stock** — load the Cardmarket inventory export (it is synced into the
+     inventory DB like on the other screens). Sold-out rows are ignored. Each
+     listing's time in stock and sales come from the DB.
+  2. **Market prices** — fetch the latest prices from the inventory_sync
+     tracker, or download / open a Cardmarket price guide.
+  3. **Rules** — an ordered list; each listing takes its price from the
+     **first** enabled rule that matches. A rule has conditions (rarity,
+     condition, language, foil, listed or market price range, name / set /
+     location text, time in stock, days without a sale, copies sold in the
+     last 30 days, copies in stock, market rising / falling / flat) and a price:
+     a market column (trend, low, avg, 1/7/30-day average, foil-aware; alone or
+     the higher / lower of two), the current price, a fixed price, or **keep**
+     (protects the listing from later rules). The price is scaled by a
+     percentage plus an offset, optionally adjusted for condition and language,
+     and bounded by the rule's min / max, "only raise" / "only lower", and a
+     maximum raise / drop per run. Ready-made rules cover common strategies
+     (protect expensive cards, raise fast sellers, mark down dead stock, follow
+     the market, never sell into a dip, undercut the cheapest offer, …).
+     **Guardrails** apply to every rule: price floors per rarity (they always
+     win), rounding (cent, 5 / 10 cents, ending in 9), ignoring changes below
+     €X or Y%, skipping market data older than N days, and a review threshold:
+     changes above X% *and* €Y start unticked until confirmed. Condition and
+     language factors scale market prices (the price guide is ≈ NM and
+     language-blind). The rules are saved automatically and can be saved as /
+     opened from JSON files.
+
+  The review table updates live: summary tiles (changes, ticked, stock value
+  change, needing review, unchanged with reasons), filters (changes, raises,
+  drops, needs review, unchanged, per rule, search), sortable columns, a tick per
+  change, and a detail pane for the selected card that explains step by step
+  how its price was found, shows all market columns and its sales history,
+  and lets you set a price by hand. **Export** writes the ticked changes as a
+  CSV with the inventory export's columns and the new prices, plus an
+  `_undo.csv` with the current prices to roll back. Check the import with a few
+  cards first.
 - **Card Buy Helper** — Value a purchase offer from a card export CSV: split cards into individually-priced singles (by rarity and/or price threshold) versus bulk (flat rate per N cards), see the total offer, and export a breakdown CSV. Strictly read-only — never writes to the inventory database.
 - **Mispricing Report** — Compare every in-stock listing against a market
   reference (trend/avg/low, foil-aware) to surface under- and over-priced
@@ -197,7 +233,7 @@ showing exactly what would change before anything is written.
 - **inventory_sync server**: Latest collected prices, raw price snapshots for
   7/30-day movement, per-card price history, and the Commander precon catalog
   (via `/api/search`) (see `inventory_sync/`; the server URL is configured once
-  in the shared connection bar and used by the Pricing, Mispricing, Price
+  in the shared connection bar and used by the Repricing, Mispricing, Price
   Movers, Precon EV and Search screens)
 - **MTGJSON** (`https://mtgjson.com/api/v5`, HTTPS, no auth): official precon
   decklists with Cardmarket product ids per card, and the sealed-product index
