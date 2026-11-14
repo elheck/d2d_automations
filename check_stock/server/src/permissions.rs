@@ -10,10 +10,12 @@
 
 use serde::Serialize;
 use std::collections::BTreeSet;
+use ts_rs::TS;
 
 /// Groups shown as sections in the user administration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum PermissionGroup {
     Administration,
     Inventory,
@@ -201,7 +203,8 @@ impl PermissionSet {
 }
 
 /// One permission as the admin interface shows it.
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct PermissionInfo {
     pub key: &'static str,
     pub label: &'static str,

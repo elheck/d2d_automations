@@ -16,8 +16,7 @@ use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::{header, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use serde::Serialize;
 use std::any::Any;
@@ -27,6 +26,7 @@ use std::time::Duration;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
+use ts_rs::TS;
 
 /// Longest a request may take before it is answered with 408.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -56,20 +56,20 @@ pub const SECURITY_HEADERS: [(&str, &str); 7] = [
 pub const DEFAULT_CACHE_CONTROL: &str = "no-store";
 
 /// The router with all routes and middleware. Every `/api` route comes from
-/// [`crate::api`], where each one declares who may call it.
+/// [`crate::api`], where each one declares who may call it; every other path
+/// belongs to the web UI ([`crate::web`]), unknown `/api` paths get a JSON 404.
 pub fn router(state: AppState) -> Router {
     let allowed_hosts = state.allowed_hosts.clone();
     let routes = Router::new()
-        .route("/", get(index))
-        .merge(crate::api::router(state));
+        .merge(crate::api::router(state))
+        .fallback(crate::web::fallback);
     with_middleware(routes, allowed_hosts)
 }
 
-/// Adds the 404 fallback and the middleware stack to `routes`. Separate from
-/// [`router`] so tests can wrap routes of their own.
+/// Adds the middleware stack to `routes`. Separate from [`router`] so tests
+/// can wrap routes of their own.
 pub fn with_middleware(routes: Router, allowed_hosts: Arc<HostAllowlist>) -> Router {
     let mut router = routes
-        .fallback(not_found)
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             REQUEST_TIMEOUT,
@@ -112,11 +112,6 @@ async fn check_host(
     }
 }
 
-/// Placeholder page until the web UI arrives (step 1c).
-async fn index() -> Html<&'static str> {
-    Html(include_str!("placeholder.html"))
-}
-
 /// Body of the health check (`GET /api/health`) for a database probe result.
 pub fn health_response(result: Result<(), DbError>) -> Response {
     match result {
@@ -137,10 +132,6 @@ pub fn health_response(result: Result<(), DbError>) -> Response {
 #[derive(Serialize)]
 struct HealthBody {
     status: &'static str,
-}
-
-async fn not_found() -> ApiError {
-    ApiError::not_found()
 }
 
 /// A panicking handler is logged with its message; the client only gets a 500.
@@ -272,15 +263,18 @@ impl ApiError {
     }
 }
 
-#[derive(Serialize)]
-struct ErrorBody<'a> {
-    error: ErrorDetail<'a>,
+/// Body of every error response.
+#[derive(Serialize, TS)]
+#[ts(export, rename = "ApiErrorBody")]
+pub struct ErrorBody<'a> {
+    pub error: ErrorDetail<'a>,
 }
 
-#[derive(Serialize)]
-struct ErrorDetail<'a> {
-    code: &'a str,
-    message: &'a str,
+#[derive(Serialize, TS)]
+#[ts(export, rename = "ApiErrorDetail")]
+pub struct ErrorDetail<'a> {
+    pub code: &'a str,
+    pub message: &'a str,
 }
 
 impl IntoResponse for ApiError {

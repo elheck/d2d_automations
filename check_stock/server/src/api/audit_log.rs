@@ -10,6 +10,7 @@ use axum::extract::{Query, State};
 use axum::routing::get;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Page size when the request names none.
 pub const DEFAULT_PAGE: u32 = 50;
@@ -29,7 +30,8 @@ struct AuditQuery {
     limit: Option<u32>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct AuditPage {
     pub entries: Vec<AuditEntry>,
     /// Pass as `before_id` for the next (older) page; `None` at the end.

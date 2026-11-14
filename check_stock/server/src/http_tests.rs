@@ -1,6 +1,7 @@
 use super::*;
 use crate::db::Db;
 use axum::http::Request as HttpRequest;
+use axum::routing::get;
 use check_stock_core::inventory_db::InventoryDb;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -134,7 +135,9 @@ async fn wrong_method_is_refused_with_headers() {
 }
 
 #[tokio::test]
-async fn index_is_a_static_placeholder() {
+async fn the_start_page_is_html_with_security_headers() {
+    // With a built UI this is web/dist/index.html, without one the hint page:
+    // the test holds for both (the serving rules are tested in web_tests).
     let dir = tempfile::tempdir().unwrap();
     let response = router(state(dir.path()))
         .oneshot(req("/", Some("localhost")))
@@ -145,11 +148,18 @@ async fn index_is_a_static_placeholder() {
         .to_str()
         .unwrap()
         .starts_with("text/html"));
-    assert_security_headers(&response);
+    for (name, value) in SECURITY_HEADERS {
+        assert_eq!(response.headers()[name], value, "{name}");
+    }
+    let cache = response.headers()[header::CACHE_CONTROL].to_str().unwrap();
+    assert!(matches!(cache, "no-store" | "no-cache"), "{cache}");
     let html = body_text(response).await;
-    assert!(html.contains("check_stock server is running"));
-    // The CSP forbids inline code; the page must not need any.
-    assert!(!html.contains("<script") && !html.contains("<style") && !html.contains("style="));
+    // The CSP forbids inline code: scripts only by src, no style elements or attributes.
+    assert!(!html.contains("<script>") && !html.contains("<style") && !html.contains("style="));
+    for script in html.match_indices("<script") {
+        let tag = &html[script.0..html[script.0..].find('>').unwrap() + script.0];
+        assert!(tag.contains(" src="), "inline script: {tag}");
+    }
 }
 
 #[tokio::test]

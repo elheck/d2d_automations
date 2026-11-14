@@ -130,6 +130,25 @@ jobs:
           libx11-dev \
           libwayland-dev
     
+    - name: Set up Node.js (web UI)
+      uses: actions/setup-node@v4
+      with:
+        node-version-file: check_stock/web/.nvmrc
+        cache: npm
+        cache-dependency-path: check_stock/web/package-lock.json
+
+    # Before the Rust builds: the server embeds web/dist.
+    - name: Web UI checks
+      working-directory: ./check_stock/web
+      run: |
+        npm ci --no-fund --no-audit
+        npm run format:check
+        npm run typecheck
+        npm run lint
+        npm test
+        npm audit --audit-level=moderate
+        npm run build
+
     - name: Check code formatting
       run: cargo fmt --all -- --check
       working-directory: ./check_stock
@@ -164,6 +183,18 @@ jobs:
     - name: Test documentation
       run: cargo test --doc --verbose
       working-directory: ./check_stock
+
+    # `cargo test` regenerates the web UI's TypeScript API types (ts-rs).
+    - name: Generated API types are committed and up to date
+      working-directory: ./check_stock
+      run: |
+        changes=$(git status --porcelain -- web/src/api/generated)
+        if [ -n "$changes" ]; then
+          echo "::error::The TypeScript API types differ from the committed ones. Run cargo test in check_stock/ and commit web/src/api/generated."
+          echo "$changes"
+          git diff -- web/src/api/generated
+          exit 1
+        fi
     
     - name: Clippy
       run: cargo clippy --all-targets --all-features -- -D warnings

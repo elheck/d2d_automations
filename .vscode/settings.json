@@ -1,0 +1,14 @@
+{
+  // Build output and installed packages need no file watching. Without this,
+  // VS Code used up most of Linux's inotify watches (about 27,000 directories
+  // under the target/ folders alone), and Vite's dev server got none left
+  // ("ENOSPC: System limit for number of file watchers reached").
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/target/**": true,
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/dev-data/**": true
+  }
+}

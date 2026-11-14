@@ -5,15 +5,16 @@ All logic and data access come from [`check_stock_core`](../core/); this crate
 adds the HTTP layer, logins and permissions, the server's own database tables
 and admin commands.
 
-Status: foundation done up to step 1b: server, login, users with
-fine-grained permissions, audit log. The web UI follows in step 1c; until then
-the API can be tried with `curl` (see below).
+Status: foundation done up to step 1c: server, login, users with
+fine-grained permissions, audit log, and the [web UI](../web/) (login, user
+administration, audit log, account) built into the binary.
 
 ## Try it locally
 
 ```bash
 cd check_stock
-./dev.sh              # http://127.0.0.1:8080, on a copy of the desktop DB
+./dev.sh              # web UI on http://localhost:5173 (hot reload), server on 127.0.0.1:8080
+./dev.sh --release    # UI built into a release server: http://127.0.0.1:8080
 ./dev.sh reset-data   # fresh copy of the desktop data; your login stays
 ./dev.sh help
 ```
@@ -23,7 +24,7 @@ The first start copies the desktop app's `inventory.db` into
 login (user name: your Linux user, or `DEV_ADMIN`). The desktop file is only
 read, never changed, and the desktop app keeps working alongside.
 
-Logging in with `curl`:
+The API can also be used with `curl`:
 
 ```bash
 curl -i -X POST http://127.0.0.1:8080/api/auth/login \
@@ -96,6 +97,21 @@ change applies to the user's next request, without a new login.
 The server keeps at least one enabled user with *Manage users*: removing that
 permission from the last admin, or disabling or deleting them, is refused.
 Nobody can disable or delete their own account.
+
+## Web UI
+
+`build.rs` embeds `check_stock/web/dist` (from `npm run build`) into the
+binary; every path outside `/api` is the UI (`src/web.rs`): embedded files are
+served as they are (`assets/…` with content hashes cached for a year,
+everything else revalidated), any other path gets `index.html` for the
+browser-side router. Lookups are exact matches in the embedded list, never
+file system paths. Without a build (desktop release builds, CI without Node)
+the server shows a short hint page instead.
+
+The UI's TypeScript types for the API are generated from the Rust structs
+(`#[derive(TS)]`, ts-rs) into `web/src/api/generated/` by `cargo test`
+(configured in `check_stock/.cargo/config.toml`); CI fails if the committed
+files are out of date.
 
 ## Safety
 

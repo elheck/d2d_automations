@@ -5,9 +5,10 @@ egui desktop app for Magic: The Gathering card inventory management.
 This folder is a Cargo workspace: the desktop app (`src/`, egui UI only),
 [`core/`](core/) (`check_stock_core`), which holds all logic and data access,
 and [`server/`](server/) (`check_stock_server`), the web version that is being
-built on top of core. Try the web version locally with `./dev.sh` (see the
-server README); it works on a copy of the desktop database and asks for a
-password for your local login on the first start.
+built on top of core, with its browser interface in [`web/`](web/). Try the
+web version locally with `./dev.sh` (needs Node.js 24; see the server README):
+it works on a copy of the desktop database and asks for a password for your
+local login on the first start.
 
 The welcome screen shows a **since-last-visit digest** (copies sold and revenue
 since the previous day the app was opened, new listings, bulk lots built,
@@ -340,5 +341,7 @@ cargo run
 ```
 
 Run `cargo` commands from this folder: the workspace's default members are the
-desktop app, `core/` and `server/`, so `cargo test` covers all of them. File locations (DB,
+desktop app, `core/` and `server/`, so `cargo test` covers all of them. The
+quality script also runs the web UI's checks (format, types, lint, tests,
+build, `npm audit`) when Node.js is installed. File locations (DB,
 caches, ruleset) are chosen in `src/paths.rs`; core never picks them itself.

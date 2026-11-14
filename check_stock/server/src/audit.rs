@@ -8,6 +8,7 @@ use crate::migrations::format_utc;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Largest page `list` returns.
 pub const MAX_PAGE: u32 = 200;
@@ -81,7 +82,8 @@ pub fn record(
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct AuditEntry {
     pub id: i64,
     pub at: String,

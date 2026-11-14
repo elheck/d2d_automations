@@ -9,7 +9,7 @@ Rust monorepo for Magic: The Gathering business operations.
 
 | Project | Type | Description |
 |---------|------|-------------|
-| [check_stock](check_stock/) | egui desktop app + [core library](check_stock/core/) + [web server](check_stock/server/) (in progress) | Stock checker, analysis, picking, repricing, precon EV, bulk lots |
+| [check_stock](check_stock/) | egui desktop app + [core library](check_stock/core/) + [web server](check_stock/server/) and [web UI](check_stock/web/) (in progress) | Stock checker, analysis, picking, repricing, precon EV, bulk lots |
 | [accounting](accounting/) | egui desktop app | Cardmarket CSV & CardTrader reports → SevDesk invoicing |
 | [inventory_sync](inventory_sync/) | REST API server | CSV → SQLite with price tracking & web UI |
 | [mtg_common](mtg_common/) | shared library | Shared types, API clients (Cardmarket, Scryfall, inventory_sync, MTGJSON), file cache, errors |

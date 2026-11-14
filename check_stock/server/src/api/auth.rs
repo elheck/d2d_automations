@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
+use ts_rs::TS;
 
 pub(super) fn routes(api: Api) -> Api {
     api.route("/api/auth/login", Access::Public, post(login))
@@ -35,15 +36,17 @@ pub(super) fn routes(api: Api) -> Api {
         )
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-struct LoginRequest {
-    username: String,
-    password: String,
+#[ts(export)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
 }
 
 /// The logged-in user, as the web UI sees it.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct MeResponse {
     pub username: String,
     pub display_name: String,
@@ -228,11 +231,12 @@ async fn me(user: CurrentUser) -> Json<MeResponse> {
     ))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-struct ChangePasswordRequest {
-    current_password: String,
-    new_password: String,
+#[ts(export)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
 }
 
 /// Changes one's own password. Needs the current one (a stolen session alone

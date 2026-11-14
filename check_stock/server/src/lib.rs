@@ -1,6 +1,6 @@
 //! Web backend of the MTG stock checker.
 //!
-//! Serves the JSON API (and from step 1c the web UI) on the home LAN. All
+//! Serves the JSON API and the web UI on the home LAN. All
 //! logic and data access come from [`check_stock_core`]; this crate adds the
 //! HTTP layer, the server's own tables and the admin commands.
 //!
@@ -29,3 +29,4 @@ pub mod permissions;
 pub mod rate_limit;
 pub mod sessions;
 pub mod users;
+pub mod web;

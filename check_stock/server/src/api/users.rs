@@ -23,6 +23,7 @@ use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use ts_rs::TS;
 
 const MANAGE: Access = Access::Permission(Permission::UsersManage);
 
@@ -38,7 +39,8 @@ pub(super) fn routes(api: Api) -> Api {
 }
 
 /// A user as the admin interface sees it (never the password hash).
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export)]
 pub struct UserView {
     pub id: i64,
     pub username: String,
@@ -101,14 +103,16 @@ async fn load_view(state: &AppState, id: i64) -> Result<UserView, ApiError> {
         .ok_or_else(|| StoreError::NotFound.into())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-struct CreateUserRequest {
-    username: String,
-    display_name: String,
-    password: String,
+#[ts(export)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub display_name: String,
+    pub password: String,
+    /// Left out: no permissions.
     #[serde(default)]
-    permissions: Vec<String>,
+    pub permissions: Vec<String>,
 }
 
 async fn create_user(
@@ -148,16 +152,17 @@ async fn create_user(
     Ok((StatusCode::CREATED, Json(view)).into_response())
 }
 
-#[derive(Deserialize)]
+/// Fields left out stay as they are.
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-struct UpdateUserRequest {
-    display_name: Option<String>,
-    disabled: Option<bool>,
+#[ts(export, optional_fields)]
+pub struct UpdateUserRequest {
+    pub display_name: Option<String>,
+    pub disabled: Option<bool>,
     /// Replaces the whole set.
-    permissions: Option<Vec<String>>,
+    pub permissions: Option<Vec<String>>,
     /// `true` lifts a lockout after failed logins.
-    #[serde(default)]
-    unlock: bool,
+    pub unlock: Option<bool>,
 }
 
 async fn update_user(
@@ -169,7 +174,7 @@ async fn update_user(
     if request.display_name.is_none()
         && request.disabled.is_none()
         && request.permissions.is_none()
-        && !request.unlock
+        && request.unlock != Some(true)
     {
         return Err(ApiError::bad_request("Nothing to change"));
     }
@@ -192,7 +197,7 @@ async fn update_user(
         .transpose()
         .map_err(ApiError::bad_request)?;
     let disabled = request.disabled;
-    let unlock = request.unlock;
+    let unlock = request.unlock == Some(true);
 
     let now = Utc::now();
     state
@@ -264,10 +269,11 @@ async fn update_user(
     Ok(Json(load_view(&state, id).await?))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-struct SetPasswordRequest {
-    password: String,
+#[ts(export)]
+pub struct SetPasswordRequest {
+    pub password: String,
 }
 
 /// Sets another user's password (or one's own without the old one). Unlocks
