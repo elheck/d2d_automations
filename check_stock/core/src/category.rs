@@ -96,7 +96,7 @@ fn category_from_filename(path: &str) -> Option<String> {
 /// Older versions scoped `inventory-report-Magic (1).csv` as `Magic (1)` and
 /// `inventory-report-5173.csv` as `Game5173`, splitting one inventory across
 /// several categories. `has_card_metadata` says whether the category's rows
-/// look like cards (see [`category_from_rows`]); it settles the legacy
+/// look like cards (the row test [`detect_category`] uses); it settles the legacy
 /// `Game<digits>` names, which carry no information of their own.
 pub fn canonical_category(name: &str, has_card_metadata: bool) -> Option<String> {
     let stripped = strip_duplicate_marker(name);

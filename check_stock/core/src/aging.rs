@@ -46,7 +46,7 @@ fn bucket_index(age: i64) -> usize {
 
 /// Buckets `cards` by listing age relative to `today`.
 ///
-/// Always returns all [`BUCKETS`] in order (including empty ones) so callers can
+/// Always returns every age bucket in order (including empty ones) so callers can
 /// render a stable table. `value` accumulates capital tied up (price × quantity).
 pub fn bucket_cards(cards: &[InStockCard], today: NaiveDate) -> Vec<AgingBucket> {
     let mut buckets: Vec<AgingBucket> = BUCKETS

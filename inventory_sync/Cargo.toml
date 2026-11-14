@@ -14,7 +14,9 @@ serde_json = "1.0"
 log = "0.4"
 env_logger = "0.11"
 clap = { version = "4", features = ["derive"] }
-rusqlite = { version = "0.36", features = ["bundled"] }
+# `fallible_uint`: keeps the u64 <-> INTEGER conversions rusqlite <= 0.36 had built in
+# (an error for values above i64::MAX, never a silent wrap).
+rusqlite = { version = "0.42", features = ["bundled", "fallible_uint"] }
 dirs = "5.0"
 chrono = { version = "0.4", features = ["clock"] }
 chrono-tz = "0.10"

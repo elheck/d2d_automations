@@ -108,8 +108,10 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           ~/.cargo/advisory-db
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          check_stock/target
+        key: ${{ runner.os }}-check-stock-cargo-${{ hashFiles('check_stock/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-check-stock-cargo-
     
     - name: Install system dependencies for check_stock
       run: |
