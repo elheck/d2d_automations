@@ -993,17 +993,12 @@ impl SearchScreen {
         }
 
         // Also match legacy translated names when present (older CSV exports).
-        if state.search_in_all_languages
+        state.search_in_all_languages
             && state.selected_fields.name
             && (check_field(true, &card.name_de)
                 || check_field(true, &card.name_es)
                 || check_field(true, &card.name_fr)
                 || check_field(true, &card.name_it))
-        {
-            return true;
-        }
-
-        false
     }
 }
 

@@ -90,12 +90,13 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     
+    # Like the other jobs: cargo then uses the version pinned in
+    # rust-toolchain.toml. (actions-rs/toolchain with `override: true` set a
+    # directory override that beat the pin, so this job ran the newest stable
+    # and broke on every new clippy lint.)
     - name: Install Rust toolchain
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@stable
       with:
-        profile: minimal
-        toolchain: stable
-        override: true
         components: clippy, rustfmt
     
     - name: Install cargo-audit
