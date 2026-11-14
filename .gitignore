@@ -26,6 +26,7 @@ accounting/openapi.yaml
 # Check stock export CSV files
 check_stock/export-*.csv
 check_stock/inventory-report*
+check_stock/WEB_MIGRATION_PLAN*
 
 
 # Backup environment config (contains server paths and bucket names)
