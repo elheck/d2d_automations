@@ -1,0 +1,24 @@
+[package]
+name = "check_stock_server"
+version = "0.1.0"
+edition = "2021"
+description = "Web backend of the MTG stock checker (LAN only)"
+
+[dependencies]
+check_stock_core = { path = "../core" }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tower-http = { version = "0.6", features = ["catch-panic", "set-header", "timeout"] }
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rusqlite = { version = "0.42", features = ["bundled", "backup"] }
+chrono = "0.4.40"
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+check_stock_core = { path = "../core", features = ["test-support"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tempfile = "3.12.0"

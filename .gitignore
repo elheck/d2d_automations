@@ -35,3 +35,5 @@ backup.env
 # Claude Code project settings
 .claude/
 CLAUDE.md
+# Local web dev data (copy of the desktop DB, see check_stock/dev.sh)
+check_stock/dev-data/

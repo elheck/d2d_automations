@@ -462,8 +462,10 @@ impl InventoryDb {
     }
 
     /// Opens (or creates) the database, initialises the schema and repairs the
-    /// data (see `repair_data`).
-    fn open(&self) -> DbResult<Connection> {
+    /// data (see `repair_data`). The methods of this type call it for every
+    /// operation; a caller that manages its own connections (the web server)
+    /// uses it once per connection and then the `_conn` functions.
+    pub fn open(&self) -> DbResult<Connection> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).ok();
         }

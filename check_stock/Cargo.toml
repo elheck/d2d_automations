@@ -6,11 +6,11 @@ authors = ["Your Name"]
 description = "MTG Stock Checker and Analysis Tool"
 
 # Everything belonging to check_stock lives in this folder. The desktop app is
-# the root package; `core` holds all logic and data access (no UI). A plain
-# `cargo test` / `clippy` / `build` here covers both.
+# the root package; `core` holds all logic and data access (no UI), `server`
+# is the web backend. A plain `cargo test` / `clippy` / `build` here covers all.
 [workspace]
-members = ["core"]
-default-members = [".", "core"]
+members = ["core", "server"]
+default-members = [".", "core", "server"]
 
 [profile.release]
 opt-level = 3

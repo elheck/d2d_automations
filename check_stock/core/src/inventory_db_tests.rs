@@ -3209,3 +3209,16 @@ fn two_databases_never_mix() {
     assert_eq!(db_a.get_in_stock_cards(CAT).unwrap().len(), 1);
     assert!(db_b.get_in_stock_cards(CAT).unwrap().is_empty());
 }
+
+#[test]
+fn open_gives_a_ready_connection_for_callers_with_their_own_connections() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = InventoryDb::in_dir(dir.path());
+    let conn = db.open().unwrap();
+    // Schema is in place, so the `_conn` functions work on it right away.
+    assert!(get_in_stock_cards_conn(&conn).unwrap().is_empty());
+    // A second connection sees what the first one wrote.
+    let mut writer = db.open().unwrap();
+    sync_inventory_conn(&mut writer, &[Card::test_default()], &today_date()).unwrap();
+    assert_eq!(get_in_stock_cards_conn(&conn).unwrap().len(), 1);
+}
