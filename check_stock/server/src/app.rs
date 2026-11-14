@@ -1,9 +1,12 @@
 //! Starting and stopping the server.
 
+use crate::client_ip::TrustedProxies;
 use crate::config::{HostAllowlist, ServeConfig};
 use crate::data_dir::{DataDirLock, LockError};
 use crate::db::{Db, DbError};
 use crate::http;
+use crate::password::{self, PasswordError};
+use crate::rate_limit::LoginRateLimiter;
 use axum::Router;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -16,6 +19,28 @@ use tokio::net::TcpListener;
 pub struct AppState {
     pub db: Db,
     pub allowed_hosts: Arc<HostAllowlist>,
+    pub trusted_proxies: Arc<TrustedProxies>,
+    pub login_limiter: Arc<LoginRateLimiter>,
+    /// Checked instead of a real hash for unknown user names (equal timing).
+    pub dummy_hash: Arc<str>,
+}
+
+impl AppState {
+    /// Builds the state; computes the dummy hash, so call it on a blocking
+    /// thread.
+    pub fn new(
+        db: Db,
+        allowed_hosts: HostAllowlist,
+        trusted_proxies: TrustedProxies,
+    ) -> Result<Self, PasswordError> {
+        Ok(Self {
+            db,
+            allowed_hosts: Arc::new(allowed_hosts),
+            trusted_proxies: Arc::new(trusted_proxies),
+            login_limiter: Arc::new(LoginRateLimiter::default()),
+            dummy_hash: password::dummy_hash()?.into(),
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -24,6 +49,7 @@ pub enum RunError {
     /// The data folder has no database and `--create-empty` was not given.
     NoDatabase(PathBuf),
     Db(DbError),
+    Password(PasswordError),
     Io(std::io::Error),
 }
 
@@ -37,6 +63,7 @@ impl std::fmt::Display for RunError {
                 path.display()
             ),
             RunError::Db(e) => write!(f, "{e}"),
+            RunError::Password(e) => write!(f, "{e}"),
             RunError::Io(e) => write!(f, "{e}"),
         }
     }
@@ -85,15 +112,18 @@ where
         return Err(RunError::NoDatabase(inventory_db.path().to_path_buf()));
     }
     let read_connections = config.read_connections;
-    let db = tokio::task::spawn_blocking(move || Db::open(&inventory_db, read_connections))
-        .await
-        .map_err(|e| RunError::Db(DbError::Task(e.to_string())))??;
-    log::info!("Database: {}", db.path().display());
-
-    let state = AppState {
-        db,
-        allowed_hosts: Arc::new(config.allowed_hosts.clone()),
-    };
+    let allowed_hosts = config.allowed_hosts.clone();
+    let trusted_proxies = config.trusted_proxies.clone();
+    let state = tokio::task::spawn_blocking(move || -> Result<AppState, RunError> {
+        let db = Db::open(&inventory_db, read_connections)?;
+        log::info!("Database: {}", db.path().display());
+        AppState::new(db, allowed_hosts, trusted_proxies).map_err(RunError::Password)
+    })
+    .await
+    .map_err(|e| RunError::Db(DbError::Task(e.to_string())))??;
+    if !config.trusted_proxies.is_empty() {
+        log::info!("Trusting X-Forwarded-For from the configured proxies");
+    }
     let listener = TcpListener::bind(config.bind).await?;
     let addr = listener.local_addr()?;
     if !config.is_loopback_only() {
@@ -116,9 +146,13 @@ pub async fn serve<S>(listener: TcpListener, router: Router, shutdown: S) -> std
 where
     S: Future<Output = ()> + Send + 'static,
 {
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown)
-        .await
+    // Connection info gives handlers the peer address (login rate limit).
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
 }
 
 /// Completes on Ctrl-C or (Unix) SIGTERM. If a signal cannot be watched it

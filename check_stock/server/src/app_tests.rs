@@ -93,3 +93,64 @@ fn errors_explain_what_to_do() {
     assert!(message.contains("import-desktop"), "{message}");
     assert!(message.contains("--create-empty"), "{message}");
 }
+
+/// Raw HTTP/1.1 request with extra header lines and a body.
+async fn http_send(addr: SocketAddr, head: &str, body: &str) -> String {
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let request = format!(
+        "{head}\r\nHost: localhost\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+    response
+}
+
+#[tokio::test]
+async fn login_works_over_a_real_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::admin::create_admin(dir.path(), "aron", None, false, |_| {
+        Ok("a long admin password".into())
+    })
+    .unwrap();
+    let (stop_tx, stop_rx) = oneshot::channel::<()>();
+    let (ready_tx, ready_rx) = oneshot::channel::<SocketAddr>();
+    let server = tokio::spawn(run_until(
+        config(dir.path()),
+        false,
+        async move {
+            let _ = stop_rx.await;
+        },
+        move |addr| {
+            let _ = ready_tx.send(addr);
+        },
+    ));
+    let addr = ready_rx.await.unwrap();
+
+    let login = http_send(
+        addr,
+        "POST /api/auth/login HTTP/1.1\r\nContent-Type: application/json\r\nX-Check-Stock-CSRF: 1",
+        r#"{"username":"aron","password":"a long admin password"}"#,
+    )
+    .await;
+    assert!(login.starts_with("HTTP/1.1 200"), "{login}");
+    let cookie = login
+        .lines()
+        .find_map(|l| l.strip_prefix("set-cookie: "))
+        .and_then(|c| c.split(';').next())
+        .expect("session cookie")
+        .to_string();
+
+    let me = http_send(
+        addr,
+        &format!("GET /api/auth/me HTTP/1.1\r\nCookie: {cookie}"),
+        "",
+    )
+    .await;
+    assert!(me.starts_with("HTTP/1.1 200"), "{me}");
+    assert!(me.contains(r#""username":"aron""#), "{me}");
+
+    stop_tx.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}

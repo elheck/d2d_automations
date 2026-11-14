@@ -12,11 +12,20 @@
 //!   500. Every response carries strict security headers.
 //! - One process per data folder ([`data_dir::DataDirLock`]).
 
+pub mod admin;
+pub mod api;
 pub mod app;
+pub mod audit;
 pub mod cli;
+pub mod client_ip;
 pub mod config;
 pub mod data_dir;
 pub mod db;
 pub mod http;
 pub mod import;
 pub mod migrations;
+pub mod password;
+pub mod permissions;
+pub mod rate_limit;
+pub mod sessions;
+pub mod users;

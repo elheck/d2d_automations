@@ -172,3 +172,28 @@ fn a_database_from_a_newer_server_is_refused() {
         result.err()
     );
 }
+
+#[tokio::test]
+async fn the_writer_enforces_foreign_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path(), 1);
+    let on: bool = db
+        .write(|conn| conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)))
+        .await
+        .unwrap();
+    assert!(on);
+}
+
+#[test]
+fn open_writer_prepares_a_standalone_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = open_writer(&InventoryDb::in_dir(dir.path())).unwrap();
+    assert_eq!(
+        migrations::current_version(&conn).unwrap(),
+        migrations::LATEST
+    );
+    let on: bool = conn
+        .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+        .unwrap();
+    assert!(on);
+}

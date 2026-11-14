@@ -4,10 +4,11 @@
 # ./dev-data (gitignored); the desktop file is only read, never changed.
 #
 #   ./dev.sh               start the server on http://127.0.0.1:8080
-#                          (copies the desktop DB first if dev-data is empty)
+#                          (first start: copies the desktop DB and asks for a
+#                          password for your local login)
 #   ./dev.sh --release     same with a release build (what gets deployed)
-#   ./dev.sh reset-data    replace dev-data with a fresh copy of the desktop DB
-#                          (the previous copy is kept as a .bak file)
+#   ./dev.sh reset-data    fresh copy of the desktop data; local users and the
+#                          audit log stay (the previous copy is kept as .bak)
 #   ./dev.sh help
 #
 # Environment:
@@ -15,6 +16,7 @@
 #                 (default: $XDG_DATA_HOME or ~/.local/share, then d2d_automations/inventory.db)
 #   DEV_DATA_DIR  data folder (default: ./dev-data)
 #   DEV_PORT      port (default: 8080)
+#   DEV_ADMIN     login name of the local admin (default: your user name)
 #
 # The server only listens on 127.0.0.1, so nothing in dev-data is reachable
 # from other machines. Ctrl-C stops it.
@@ -26,9 +28,11 @@ cd "$SCRIPT_DIR"
 DESKTOP_DB="${DESKTOP_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/d2d_automations/inventory.db}"
 DATA_DIR="${DEV_DATA_DIR:-dev-data}"
 PORT="${DEV_PORT:-8080}"
+ADMIN="${DEV_ADMIN:-${USER:-admin}}"
 
 usage() {
-    sed -n '2,20p' "$SCRIPT_DIR/dev.sh" | sed 's/^# \{0,1\}//'
+    # The comment block at the top of this file, without the '#'.
+    awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$SCRIPT_DIR/dev.sh"
 }
 
 server() {
@@ -49,7 +53,25 @@ copy_desktop_db() {
         exit 1
     fi
     echo "Copying $DESKTOP_DB into $DATA_DIR (the desktop file is not changed)..."
-    server "$profile" import-desktop --db "$DESKTOP_DB" --data-dir "$DATA_DIR" --replace
+    if [[ -f "$DATA_DIR/inventory.db" ]]; then
+        # Keeps users, sessions and the audit log; swaps only the desktop data.
+        server "$profile" import-desktop --db "$DESKTOP_DB" --data-dir "$DATA_DIR" --refresh
+    else
+        server "$profile" import-desktop --db "$DESKTOP_DB" --data-dir "$DATA_DIR"
+    fi
+}
+
+# On the first start, asks for a password for the local admin login (does
+# nothing once any user exists). Three tries for a password that is too short.
+ensure_admin() {
+    local profile="$1"
+    for _ in 1 2 3; do
+        if server "$profile" create-admin --data-dir "$DATA_DIR" --username "$ADMIN" --if-none; then
+            return 0
+        fi
+    done
+    echo "No local admin created; run ./dev.sh again." >&2
+    exit 1
 }
 
 serve() {
@@ -57,6 +79,7 @@ serve() {
     if [[ ! -f "$DATA_DIR/inventory.db" ]]; then
         copy_desktop_db "$profile"
     fi
+    ensure_admin "$profile"
     echo "Starting check_stock server on http://127.0.0.1:$PORT (Ctrl-C to stop)"
     server "$profile" serve --data-dir "$DATA_DIR" --bind "127.0.0.1:$PORT"
 }

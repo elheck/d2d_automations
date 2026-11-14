@@ -333,3 +333,166 @@ fn pruning_keeps_the_newest_by_time_and_counter() {
         ]
     );
 }
+
+// ── --refresh: only the desktop tables are replaced ────────────────────────
+
+/// A server database with a user, created by a plain import.
+fn server_db_with_user(data: &Path, desktop: &Path, cards: usize) -> i64 {
+    import_desktop(&desktop_db(desktop, cards), data, false).unwrap();
+    let conn = open_writer(&inventory_db_in(data)).unwrap();
+    crate::users::create(
+        &conn,
+        "aron",
+        "Aron",
+        "$hash",
+        &crate::permissions::PermissionSet::all(),
+        chrono::Utc::now(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn refresh_replaces_desktop_data_and_keeps_users() {
+    let old_desktop = tempfile::tempdir().unwrap();
+    let new_desktop = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let user_id = server_db_with_user(data.path(), old_desktop.path(), 2);
+
+    let report = refresh_desktop(&desktop_db(new_desktop.path(), 9), data.path()).unwrap();
+    assert_eq!(report.inventory_rows, 9);
+    assert_eq!(rows(&report.target), 9);
+    let backup = report.previous_kept_as.expect("backup before refreshing");
+    assert_eq!(rows(&backup), 2);
+
+    let conn = Connection::open(&report.target).unwrap();
+    let user = crate::users::find_by_id(&conn, user_id)
+        .unwrap()
+        .expect("user kept");
+    assert_eq!(user.username, "aron");
+    assert_eq!(
+        migrations::get_meta(&conn, META_COPY_TAKEN_AT).unwrap(),
+        Some(report.taken_at.clone())
+    );
+    let actions: Vec<String> = crate::audit::list(&conn, None, 10)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.action)
+        .collect();
+    assert_eq!(actions, ["import.refresh", "import.desktop"]);
+    assert!(
+        leftovers(data.path()).is_empty(),
+        "{:?}",
+        leftovers(data.path())
+    );
+}
+
+#[test]
+fn refresh_brings_indexes_and_sequences_along() {
+    let desktop = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    server_db_with_user(data.path(), desktop.path(), 1);
+    // A bulk lot in the fresh desktop DB: its AUTOINCREMENT counter must come along.
+    let fresh = tempfile::tempdir().unwrap();
+    let fresh_db = desktop_db(fresh.path(), 3);
+    {
+        let conn = Connection::open(&fresh_db).unwrap();
+        conn.execute(
+            "INSERT INTO bulk_lots (name, created_at, price) VALUES ('lot', '2026-11-01', 1.0)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM bulk_lots", []).unwrap();
+    }
+    refresh_desktop(&fresh_db, data.path()).unwrap();
+
+    let conn = Connection::open(inventory_db_in(data.path()).path()).unwrap();
+    let fresh_conn = Connection::open(&fresh_db).unwrap();
+    let schema = |c: &Connection| -> Vec<(String, String)> {
+        let mut stmt = c
+            .prepare(
+                "SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'srv\\_%' ESCAPE '\\'
+                 AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY type, name",
+            )
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert_eq!(
+        schema(&conn),
+        schema(&fresh_conn),
+        "same tables and indexes"
+    );
+    let seq = |c: &Connection| -> i64 {
+        c.query_row(
+            "SELECT seq FROM sqlite_sequence WHERE name = 'bulk_lots'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(seq(&conn), seq(&fresh_conn), "ids are never reused");
+    assert_eq!(
+        conn.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "ok"
+    );
+}
+
+#[test]
+fn refresh_needs_an_existing_database() {
+    let desktop = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        refresh_desktop(&desktop_db(desktop.path(), 1), data.path()),
+        Err(ImportError::NothingToRefresh(_))
+    ));
+}
+
+#[test]
+fn refresh_leaves_everything_as_it_was_when_the_source_is_bad() {
+    let desktop = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    server_db_with_user(data.path(), desktop.path(), 2);
+    let target = data.path().join("inventory.db");
+    let before = rows(&target);
+    let junk = desktop.path().join("junk.db");
+    std::fs::write(&junk, "definitely not a database file at all").unwrap();
+    assert!(matches!(
+        refresh_desktop(&junk, data.path()),
+        Err(ImportError::NotAnInventoryDb(..))
+    ));
+    assert_eq!(rows(&target), before);
+    assert!(
+        leftovers(data.path()).is_empty(),
+        "{:?}",
+        leftovers(data.path())
+    );
+}
+
+#[test]
+fn refresh_refuses_a_folder_in_use() {
+    let desktop = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    server_db_with_user(data.path(), desktop.path(), 1);
+    let _server = DataDirLock::acquire(data.path()).unwrap();
+    assert!(matches!(
+        refresh_desktop(&desktop_db(desktop.path(), 1), data.path()),
+        Err(ImportError::Lock(LockError::InUse(_)))
+    ));
+}
+
+#[test]
+fn a_plain_import_is_logged_in_the_copy() {
+    let desktop = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let report = import_desktop(&desktop_db(desktop.path(), 4), data.path(), false).unwrap();
+    let conn = Connection::open(&report.target).unwrap();
+    let entry = &crate::audit::list(&conn, None, 1).unwrap()[0];
+    assert_eq!(
+        (entry.actor.as_str(), entry.action.as_str()),
+        ("cli", "import.desktop")
+    );
+    assert_eq!(entry.details["inventory_rows"], 4);
+}

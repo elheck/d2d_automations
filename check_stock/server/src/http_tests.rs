@@ -11,10 +11,12 @@ fn allowlist(extra: &[&str]) -> Arc<HostAllowlist> {
 }
 
 fn state(dir: &std::path::Path) -> AppState {
-    AppState {
-        db: Db::open(&InventoryDb::in_dir(dir), 1).unwrap(),
-        allowed_hosts: allowlist(&["stock.example.com"]),
-    }
+    AppState::new(
+        Db::open(&InventoryDb::in_dir(dir), 1).unwrap(),
+        HostAllowlist::new(&["stock.example.com".to_string()]).unwrap(),
+        crate::client_ip::TrustedProxies::default(),
+    )
+    .unwrap()
 }
 
 fn req(uri: &str, host: Option<&str>) -> HttpRequest<Body> {
@@ -118,10 +120,12 @@ async fn unknown_routes_get_a_json_404() {
 #[tokio::test]
 async fn wrong_method_is_refused_with_headers() {
     let dir = tempfile::tempdir().unwrap();
+    // With the CSRF header (without it, any POST is refused before routing).
     let request = HttpRequest::builder()
         .method("POST")
         .uri("/api/health")
         .header(header::HOST, "localhost")
+        .header(crate::api::CSRF_HEADER, crate::api::CSRF_VALUE)
         .body(Body::empty())
         .unwrap();
     let response = router(state(dir.path())).oneshot(request).await.unwrap();

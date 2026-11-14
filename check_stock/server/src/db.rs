@@ -76,7 +76,7 @@ impl Db {
     /// `read_connections` read-only connections.
     pub fn open(db: &InventoryDb, read_connections: usize) -> Result<Self, DbError> {
         let mut writer = db.open()?;
-        writer.busy_timeout(BUSY_TIMEOUT)?;
+        configure_writer(&writer)?;
         let mode: String = writer.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
         if !mode.eq_ignore_ascii_case("wal") {
             return Err(DbError::NoWal(mode));
@@ -155,6 +155,24 @@ impl Db {
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Settings for every connection that writes the server's tables: wait for
+/// locks instead of failing, and enforce foreign keys (deleting a user removes
+/// their sessions and permissions). Core declares no foreign keys, so this
+/// changes nothing for core's tables.
+pub fn configure_writer(conn: &Connection) -> rusqlite::Result<()> {
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    conn.pragma_update(None, "foreign_keys", true)
+}
+
+/// Opens a writer connection outside the server (admin commands, import):
+/// core schema + repair, writer settings, server migrations.
+pub fn open_writer(db: &InventoryDb) -> Result<Connection, DbError> {
+    let mut conn = db.open()?;
+    configure_writer(&conn)?;
+    migrations::run(&mut conn)?;
+    Ok(conn)
 }
 
 /// A connection that cannot write, enforced twice: SQLite's read-only open

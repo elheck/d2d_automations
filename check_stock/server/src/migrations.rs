@@ -15,13 +15,57 @@ use rusqlite::{params, Connection, OptionalExtension};
 pub const TABLE_PREFIX: &str = "srv_";
 
 /// `(version, SQL)`, applied in order, each in its own transaction.
-const MIGRATIONS: &[(u32, &str)] = &[(
-    1,
-    "CREATE TABLE srv_meta (
-         key   TEXT PRIMARY KEY NOT NULL,
-         value TEXT NOT NULL
-     ) STRICT;",
-)];
+/// Append only: never edit a migration that has shipped.
+const MIGRATIONS: &[(u32, &str)] = &[
+    (
+        1,
+        "CREATE TABLE srv_meta (
+             key   TEXT PRIMARY KEY NOT NULL,
+             value TEXT NOT NULL
+         ) STRICT;",
+    ),
+    (
+        2,
+        // Users, their permissions, login sessions and the audit log.
+        // Times are RFC 3339 UTC strings (`now_utc`), so they also compare
+        // correctly as text. Sessions store only the SHA-256 of the token.
+        "CREATE TABLE srv_users (
+             id                  INTEGER PRIMARY KEY,
+             username            TEXT NOT NULL UNIQUE COLLATE NOCASE,
+             display_name        TEXT NOT NULL,
+             password_hash       TEXT NOT NULL,
+             disabled            INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0, 1)),
+             failed_logins       INTEGER NOT NULL DEFAULT 0,
+             locked_until        TEXT,
+             password_changed_at TEXT NOT NULL,
+             created_at          TEXT NOT NULL,
+             last_login_at       TEXT
+         ) STRICT;
+         CREATE TABLE srv_user_permissions (
+             user_id    INTEGER NOT NULL REFERENCES srv_users (id) ON DELETE CASCADE,
+             permission TEXT NOT NULL,
+             PRIMARY KEY (user_id, permission)
+         ) STRICT, WITHOUT ROWID;
+         CREATE TABLE srv_sessions (
+             token_hash   BLOB PRIMARY KEY NOT NULL,
+             user_id      INTEGER NOT NULL REFERENCES srv_users (id) ON DELETE CASCADE,
+             created_at   TEXT NOT NULL,
+             last_seen_at TEXT NOT NULL,
+             expires_at   TEXT NOT NULL,
+             user_agent   TEXT
+         ) STRICT;
+         CREATE INDEX srv_sessions_user ON srv_sessions (user_id);
+         CREATE TABLE srv_audit_log (
+             id            INTEGER PRIMARY KEY,
+             at            TEXT NOT NULL,
+             actor_user_id INTEGER,
+             actor         TEXT NOT NULL,
+             action        TEXT NOT NULL,
+             target        TEXT,
+             details       TEXT NOT NULL DEFAULT '{}'
+         ) STRICT;",
+    ),
+];
 
 /// Newest schema version this build knows.
 pub const LATEST: u32 = MIGRATIONS[MIGRATIONS.len() - 1].0;
@@ -128,7 +172,20 @@ pub fn set_meta(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<(
 
 /// Current time as RFC 3339 in UTC, as stored in the server tables.
 pub fn now_utc() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    format_utc(chrono::Utc::now())
+}
+
+/// A time in the stored format (`2026-11-14T18:08:05Z`): fixed width, so the
+/// strings also sort and compare correctly in SQL.
+pub fn format_utc(time: chrono::DateTime<chrono::Utc>) -> String {
+    time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Parses a stored time; `None` if it is not valid RFC 3339.
+pub fn parse_utc(text: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(text)
+        .ok()
+        .map(|t| t.with_timezone(&chrono::Utc))
 }
 
 #[cfg(test)]

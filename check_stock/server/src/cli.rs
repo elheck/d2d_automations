@@ -1,5 +1,6 @@
-//! Command line: `serve` and `import-desktop`.
+//! Command line: `serve`, `import-desktop`, `create-admin`, `reset-password`.
 
+use crate::admin::{self, CreateAdminOutcome};
 use crate::app;
 use crate::config::{ServeConfig, DEFAULT_BIND, DEFAULT_READ_CONNECTIONS};
 use crate::import;
@@ -23,6 +24,12 @@ pub enum Command {
     /// Copy the desktop app's inventory database into the data folder
     /// (the desktop file is only read, never changed).
     ImportDesktop(ImportArgs),
+    /// Create a user with every permission (the server must be stopped).
+    /// The password is asked for on the terminal, or read from stdin.
+    CreateAdmin(CreateAdminArgs),
+    /// Set a new password for a user, unlock it and end its sessions (the
+    /// server must be stopped).
+    ResetPassword(ResetPasswordArgs),
 }
 
 #[derive(Args, Debug)]
@@ -54,6 +61,16 @@ pub struct ServeArgs {
     /// the server refuses to start, so a forgotten import is noticed).
     #[arg(long)]
     pub create_empty: bool,
+
+    /// Proxy (IP address or CIDR range) whose `X-Forwarded-For` header names
+    /// the real client, e.g. Caddy. Repeatable or comma-separated. Without it
+    /// the header is ignored.
+    #[arg(
+        long = "trusted-proxy",
+        env = "CHECK_STOCK_TRUSTED_PROXIES",
+        value_delimiter = ','
+    )]
+    pub trusted_proxies: Vec<String>,
 }
 
 impl ServeArgs {
@@ -64,7 +81,8 @@ impl ServeArgs {
             self.data_dir.clone(),
             &self.allowed_hosts,
             self.read_connections,
-        )
+        )?
+        .with_trusted_proxies(&self.trusted_proxies)
     }
 }
 
@@ -79,8 +97,40 @@ pub struct ImportArgs {
     pub source: PathBuf,
 
     /// Replace an existing database (it is kept as a dated backup first).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "refresh")]
     pub replace: bool,
+
+    /// Update only the desktop data of an existing database; users,
+    /// sessions and the audit log stay (a backup is kept first).
+    #[arg(long)]
+    pub refresh: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CreateAdminArgs {
+    #[arg(long, env = "CHECK_STOCK_DATA_DIR")]
+    pub data_dir: PathBuf,
+
+    /// Login name (a-z, 0-9, '.', '_', '-').
+    #[arg(long)]
+    pub username: String,
+
+    /// Name shown in the interface (default: the login name).
+    #[arg(long)]
+    pub display_name: Option<String>,
+
+    /// Do nothing if the database already has users (for setup scripts).
+    #[arg(long)]
+    pub if_none: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ResetPasswordArgs {
+    #[arg(long, env = "CHECK_STOCK_DATA_DIR")]
+    pub data_dir: PathBuf,
+
+    #[arg(long)]
+    pub username: String,
 }
 
 /// Entry point of the binary.
@@ -106,7 +156,11 @@ pub fn run_command(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             runtime.block_on(app::run(config, args.create_empty))?;
         }
         Command::ImportDesktop(args) => {
-            let report = import::import_desktop(&args.source, &args.data_dir, args.replace)?;
+            let report = if args.refresh {
+                import::refresh_desktop(&args.source, &args.data_dir)?
+            } else {
+                import::import_desktop(&args.source, &args.data_dir, args.replace)?
+            };
             println!(
                 "Copied {} inventory rows into {} (copy taken {}).",
                 report.inventory_rows,
@@ -116,6 +170,30 @@ pub fn run_command(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             if let Some(previous) = report.previous_kept_as {
                 println!("The previous database is kept as {}.", previous.display());
             }
+        }
+        Command::CreateAdmin(args) => {
+            match admin::create_admin(
+                &args.data_dir,
+                &args.username,
+                args.display_name.as_deref(),
+                args.if_none,
+                admin::read_new_password,
+            )? {
+                CreateAdminOutcome::Created { username } => {
+                    println!("Created {username} with every permission.")
+                }
+                // Silent: `--if-none` runs on every start of dev.sh.
+                CreateAdminOutcome::SkippedUsersExist => {
+                    log::debug!("Users exist already; nothing created.")
+                }
+            }
+        }
+        Command::ResetPassword(args) => {
+            admin::reset_password(&args.data_dir, &args.username, admin::read_new_password)?;
+            println!(
+                "New password set for {}; the account is unlocked and logged out everywhere.",
+                args.username
+            );
         }
     }
     Ok(())

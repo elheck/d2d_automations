@@ -1,6 +1,7 @@
 //! Server configuration: where it listens, which host names it answers and
 //! where its data lives.
 
+use crate::client_ip::TrustedProxies;
 use check_stock_core::inventory_db::InventoryDb;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -25,6 +26,8 @@ pub struct ServeConfig {
     pub data_dir: PathBuf,
     pub allowed_hosts: HostAllowlist,
     pub read_connections: usize,
+    /// Proxies (Caddy) whose `X-Forwarded-For` names the real client.
+    pub trusted_proxies: TrustedProxies,
 }
 
 impl ServeConfig {
@@ -48,7 +51,14 @@ impl ServeConfig {
             data_dir,
             allowed_hosts: HostAllowlist::new(extra_hosts)?,
             read_connections,
+            trusted_proxies: TrustedProxies::default(),
         })
+    }
+
+    /// Sets the trusted proxies (IP addresses or CIDR ranges).
+    pub fn with_trusted_proxies(mut self, proxies: &[String]) -> Result<Self, String> {
+        self.trusted_proxies = TrustedProxies::parse(proxies)?;
+        Ok(self)
     }
 
     /// Whether only this machine can connect.

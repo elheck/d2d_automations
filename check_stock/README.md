@@ -6,7 +6,8 @@ This folder is a Cargo workspace: the desktop app (`src/`, egui UI only),
 [`core/`](core/) (`check_stock_core`), which holds all logic and data access,
 and [`server/`](server/) (`check_stock_server`), the web version that is being
 built on top of core. Try the web version locally with `./dev.sh` (see the
-server README); it works on a copy of the desktop database.
+server README); it works on a copy of the desktop database and asks for a
+password for your local login on the first start.
 
 The welcome screen shows a **since-last-visit digest** (copies sold and revenue
 since the previous day the app was opened, new listings, bulk lots built,

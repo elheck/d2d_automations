@@ -8,11 +8,16 @@
 //! up to date by core and the server migrations, and only then moved into
 //! place. An existing database is replaced only on request, and is kept as a
 //! dated backup first.
+//!
+//! `--refresh` instead keeps the existing database and swaps only the
+//! desktop tables (everything not prefixed `srv_`) for the fresh copy's, in
+//! one transaction: users, sessions and the audit log stay.
 
+use crate::audit::{self, action, Actor};
 use crate::config::inventory_db_in;
 use crate::data_dir::{DataDirLock, LockError};
-use crate::db::BUSY_TIMEOUT;
-use crate::migrations::{self, MigrationError};
+use crate::db::{open_writer, DbError, BUSY_TIMEOUT};
+use crate::migrations::{self, MigrationError, TABLE_PREFIX};
 use check_stock_core::inventory_db::InventoryDb;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, MAIN_DB};
 use std::path::{Path, PathBuf};
@@ -46,6 +51,8 @@ pub enum ImportError {
     NotAnInventoryDb(PathBuf, String),
     /// A database already exists and `--replace` was not given.
     TargetExists(PathBuf),
+    /// `--refresh` needs an existing database.
+    NothingToRefresh(PathBuf),
     /// `PRAGMA integrity_check` found problems in the copy.
     Corrupt(Vec<String>),
     Lock(LockError),
@@ -70,7 +77,12 @@ impl std::fmt::Display for ImportError {
             ),
             ImportError::TargetExists(p) => write!(
                 f,
-                "{} already exists; pass --replace to replace it (it is kept as a backup)",
+                "{} already exists; pass --refresh to update only the desktop data (users stay), or --replace to replace the whole file (it is kept as a backup)",
+                p.display()
+            ),
+            ImportError::NothingToRefresh(p) => write!(
+                f,
+                "there is no database at {} to refresh; import without --refresh first",
                 p.display()
             ),
             ImportError::Corrupt(messages) => write!(
@@ -112,57 +124,206 @@ impl From<LockError> for ImportError {
     }
 }
 
+impl From<DbError> for ImportError {
+    fn from(e: DbError) -> Self {
+        match e {
+            DbError::Sqlite(e) => ImportError::Sqlite(e),
+            DbError::Migration(e) => ImportError::Migration(e),
+            other => ImportError::Io(std::io::Error::other(other.to_string())),
+        }
+    }
+}
+
 /// Copies the desktop database at `source` into `data_dir`.
 pub fn import_desktop(
     source: &Path,
     data_dir: &Path,
     replace: bool,
 ) -> Result<ImportReport, ImportError> {
-    if !source.is_file() {
-        return Err(ImportError::SourceMissing(source.to_path_buf()));
+    let (_lock, source, target) = checked_paths(source, data_dir)?;
+    if target.exists() && !replace {
+        return Err(ImportError::TargetExists(target));
     }
-    let _lock = DataDirLock::acquire(data_dir)?;
-    let target = inventory_db_in(data_dir).path().to_path_buf();
-    let source = source.canonicalize()?;
-    if target.exists() {
-        if target.canonicalize()? == source {
-            return Err(ImportError::SameFile(source));
-        }
-        if !replace {
-            return Err(ImportError::TargetExists(target));
-        }
-    }
-
-    let tmp = TempFile::new(data_dir.join(format!("{}.importing", InventoryDb::FILE_NAME)))?;
-    copy_snapshot(&source, tmp.path())?;
-    let problems = integrity_problems(tmp.path())?;
-    if !problems.is_empty() {
-        return Err(ImportError::Corrupt(problems));
-    }
+    let snapshot = prepare_snapshot(&source, data_dir)?;
 
     let taken_at = migrations::now_utc();
     let inventory_rows = {
-        // Core's schema migrations and data repairs, then the server tables.
-        let mut conn = InventoryDb::at(tmp.path()).open()?;
+        let mut conn = InventoryDb::at(snapshot.path()).open()?;
         migrations::run(&mut conn)?;
-        migrations::set_meta(&conn, META_COPY_SOURCE, &source.display().to_string())?;
-        migrations::set_meta(&conn, META_COPY_TAKEN_AT, &taken_at)?;
-        conn.query_row("SELECT COUNT(*) FROM inventory_cards", [], |row| row.get(0))?
+        let rows = record_provenance(&conn, &source, &taken_at, action::DESKTOP_IMPORTED)?;
+        drop(conn);
+        rows
     };
 
     let previous_kept_as = if target.exists() {
-        Some(keep_previous(&target)?)
+        let backup = backup_current(&target)?;
+        remove_database(&target)?;
+        Some(backup)
     } else {
         None
     };
-    std::fs::rename(tmp.path(), &target)?;
-    tmp.disarm();
+    std::fs::rename(snapshot.path(), &target)?;
+    snapshot.disarm();
     Ok(ImportReport {
         target,
         inventory_rows,
         taken_at,
         previous_kept_as,
     })
+}
+
+/// Replaces only the desktop tables of the existing database in `data_dir`
+/// with those of a fresh copy of `source`; the server's tables stay.
+pub fn refresh_desktop(source: &Path, data_dir: &Path) -> Result<ImportReport, ImportError> {
+    let (_lock, source, target) = checked_paths(source, data_dir)?;
+    if !target.exists() {
+        return Err(ImportError::NothingToRefresh(target));
+    }
+    let snapshot = prepare_snapshot(&source, data_dir)?;
+    let previous_kept_as = backup_current(&target)?;
+
+    let taken_at = migrations::now_utc();
+    let mut conn = open_writer(&inventory_db_in(data_dir))?;
+    conn.execute(
+        "ATTACH DATABASE ?1 AS fresh",
+        [snapshot.path().to_string_lossy().as_ref()],
+    )?;
+    let result = swap_desktop_tables(&mut conn).and_then(|()| {
+        let tx = conn.transaction()?;
+        let rows = record_provenance(&tx, &source, &taken_at, action::DESKTOP_REFRESHED)?;
+        tx.commit()?;
+        Ok(rows)
+    });
+    conn.execute("DETACH DATABASE fresh", [])?;
+    let inventory_rows = result?;
+    Ok(ImportReport {
+        target,
+        inventory_rows,
+        taken_at,
+        previous_kept_as: Some(previous_kept_as),
+    })
+}
+
+/// Lock, canonical source, target path; refuses importing the target itself.
+fn checked_paths(
+    source: &Path,
+    data_dir: &Path,
+) -> Result<(DataDirLock, PathBuf, PathBuf), ImportError> {
+    if !source.is_file() {
+        return Err(ImportError::SourceMissing(source.to_path_buf()));
+    }
+    let lock = DataDirLock::acquire(data_dir)?;
+    let target = inventory_db_in(data_dir).path().to_path_buf();
+    let source = source.canonicalize()?;
+    if target.exists() && target.canonicalize()? == source {
+        return Err(ImportError::SameFile(source));
+    }
+    Ok((lock, source, target))
+}
+
+/// A consistent, integrity-checked copy of `source` next to the target, with
+/// core's schema migrations and data repairs applied.
+fn prepare_snapshot(source: &Path, data_dir: &Path) -> Result<TempFile, ImportError> {
+    let tmp = TempFile::new(data_dir.join(format!("{}.importing", InventoryDb::FILE_NAME)))?;
+    copy_snapshot(source, tmp.path())?;
+    let problems = integrity_problems(tmp.path())?;
+    if !problems.is_empty() {
+        return Err(ImportError::Corrupt(problems));
+    }
+    drop(InventoryDb::at(tmp.path()).open()?);
+    Ok(tmp)
+}
+
+/// Remembers where and when the copy was taken, logs it, returns the number
+/// of inventory rows.
+fn record_provenance(
+    conn: &Connection,
+    source: &Path,
+    taken_at: &str,
+    what: &str,
+) -> Result<i64, ImportError> {
+    let source_text = source.display().to_string();
+    migrations::set_meta(conn, META_COPY_SOURCE, &source_text)?;
+    migrations::set_meta(conn, META_COPY_TAKEN_AT, taken_at)?;
+    let rows: i64 = conn.query_row("SELECT COUNT(*) FROM inventory_cards", [], |row| row.get(0))?;
+    audit::record(
+        conn,
+        chrono::Utc::now(),
+        Actor::Cli,
+        what,
+        Some(&source_text),
+        serde_json::json!({ "inventory_rows": rows }),
+    )?;
+    Ok(rows)
+}
+
+/// In one transaction: drops every desktop table of `main` and recreates
+/// them, with their rows, indexes and triggers, from the attached `fresh`
+/// copy. Server tables (`srv_…`) and SQLite's own are not touched.
+fn swap_desktop_tables(conn: &mut Connection) -> Result<(), ImportError> {
+    let tx = conn.transaction()?;
+    let not_ours = "name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND name NOT LIKE ?1 ESCAPE '\\'";
+    let server_pattern = format!("{}%", TABLE_PREFIX.replace('_', "\\_"));
+    let names = |schema: &str, kind: &str| -> rusqlite::Result<Vec<String>> {
+        let mut stmt = tx.prepare(&format!(
+            "SELECT name FROM {schema}.sqlite_master WHERE type = '{kind}' AND {not_ours} ORDER BY name"
+        ))?;
+        let rows = stmt.query_map([&server_pattern], |r| r.get::<_, String>(0))?;
+        rows.collect()
+    };
+    for view in names("main", "view")? {
+        tx.execute_batch(&format!("DROP VIEW main.{};", quoted(&view)))?;
+    }
+    for table in names("main", "table")? {
+        tx.execute_batch(&format!("DROP TABLE main.{};", quoted(&table)))?;
+    }
+    let fresh_tables = names("fresh", "table")?;
+    for table in &fresh_tables {
+        let sql: String = tx.query_row(
+            "SELECT sql FROM fresh.sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |r| r.get(0),
+        )?;
+        tx.execute_batch(&sql)?;
+        tx.execute_batch(&format!(
+            "INSERT INTO main.{t} SELECT * FROM fresh.{t};",
+            t = quoted(table)
+        ))?;
+    }
+    let has_sequence: bool = tx
+        .query_row(
+            "SELECT 1 FROM fresh.sqlite_master WHERE name = 'sqlite_sequence'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if has_sequence {
+        tx.execute(
+            "DELETE FROM main.sqlite_sequence WHERE name NOT LIKE ?1 ESCAPE '\\'",
+            [&server_pattern],
+        )?;
+        tx.execute_batch("INSERT INTO main.sqlite_sequence SELECT * FROM fresh.sqlite_sequence;")?;
+    }
+    for kind in ["index", "trigger", "view"] {
+        let mut stmt = tx.prepare(&format!(
+            "SELECT sql FROM fresh.sqlite_master WHERE type = '{kind}' AND sql IS NOT NULL AND {not_ours}"
+        ))?;
+        let statements = stmt
+            .query_map([&server_pattern], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        for sql in statements {
+            tx.execute_batch(&sql)?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// SQL identifier in double quotes.
+fn quoted(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 /// Consistent copy of `source` (opened read-only) into `dst`.
@@ -209,10 +370,9 @@ fn integrity_problems(path: &Path) -> Result<Vec<String>, ImportError> {
 pub const KEEP_REPLACED: usize = 3;
 
 /// Saves a consistent copy of the database at `target` (including anything
-/// still in its WAL) as `inventory.db.replaced-<timestamp>.bak`, then removes
-/// the database and its WAL side files. Only the newest [`KEEP_REPLACED`]
-/// of these backups are kept.
-fn keep_previous(target: &Path) -> Result<PathBuf, ImportError> {
+/// still in its WAL) as `inventory.db.replaced-<timestamp>.bak`. Only the
+/// newest [`KEEP_REPLACED`] of these backups are kept.
+fn backup_current(target: &Path) -> Result<PathBuf, ImportError> {
     let stamp = chrono::Local::now().format("%Y%m%dT%H%M%S").to_string();
     let backup = unique_backup_path(target, &stamp);
     {
@@ -220,6 +380,14 @@ fn keep_previous(target: &Path) -> Result<PathBuf, ImportError> {
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
     }
+    if let Some(dir) = target.parent() {
+        prune_replaced(dir, KEEP_REPLACED)?;
+    }
+    Ok(backup)
+}
+
+/// Removes the database file and its WAL side files.
+fn remove_database(target: &Path) -> Result<(), ImportError> {
     std::fs::remove_file(target)?;
     for suffix in ["-wal", "-shm"] {
         let side = PathBuf::from(format!("{}{suffix}", target.display()));
@@ -227,10 +395,7 @@ fn keep_previous(target: &Path) -> Result<PathBuf, ImportError> {
             std::fs::remove_file(side)?;
         }
     }
-    if let Some(dir) = target.parent() {
-        prune_replaced(dir, KEEP_REPLACED)?;
-    }
-    Ok(backup)
+    Ok(())
 }
 
 /// `inventory.db.replaced-<stamp>.bak`, with `-2`, `-3`, … appended when a

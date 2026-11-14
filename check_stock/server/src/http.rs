@@ -55,13 +55,13 @@ pub const SECURITY_HEADERS: [(&str, &str); 7] = [
 /// missing).
 pub const DEFAULT_CACHE_CONTROL: &str = "no-store";
 
-/// The router with all routes and middleware.
+/// The router with all routes and middleware. Every `/api` route comes from
+/// [`crate::api`], where each one declares who may call it.
 pub fn router(state: AppState) -> Router {
     let allowed_hosts = state.allowed_hosts.clone();
     let routes = Router::new()
         .route("/", get(index))
-        .route("/api/health", get(health))
-        .with_state(state);
+        .merge(crate::api::router(state));
     with_middleware(routes, allowed_hosts)
 }
 
@@ -117,17 +117,7 @@ async fn index() -> Html<&'static str> {
     Html(include_str!("placeholder.html"))
 }
 
-/// `GET /api/health`: the only route without a login. Says only whether the
-/// database answers; no version, no counts.
-async fn health(State(state): State<AppState>) -> Response {
-    let result = state
-        .db
-        .read(|conn| conn.query_row("SELECT 1", [], |_| Ok(())))
-        .await;
-    health_response(result)
-}
-
-/// Body of the health check for a database probe result.
+/// Body of the health check (`GET /api/health`) for a database probe result.
 pub fn health_response(result: Result<(), DbError>) -> Response {
     match result {
         Ok(()) => Json(HealthBody { status: "ok" }).into_response(),
@@ -172,6 +162,7 @@ pub struct ApiError {
     status: StatusCode,
     code: &'static str,
     message: Cow<'static, str>,
+    headers: Vec<(HeaderName, HeaderValue)>,
 }
 
 impl ApiError {
@@ -184,7 +175,72 @@ impl ApiError {
             status,
             code,
             message: message.into(),
+            headers: Vec::new(),
         }
+    }
+
+    /// Adds a header to the error response (e.g. `Retry-After`).
+    pub fn with_header(mut self, name: HeaderName, value: HeaderValue) -> Self {
+        self.headers.push((name, value));
+        self
+    }
+
+    pub fn bad_request(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+    }
+
+    pub fn conflict(code: &'static str, message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(StatusCode::CONFLICT, code, message)
+    }
+
+    /// No (valid) session. Also tells the browser to drop a stale cookie.
+    pub fn unauthenticated() -> Self {
+        let clear = HeaderValue::from_str(&crate::sessions::clear_cookie())
+            .expect("cookie header is ASCII");
+        Self::new(StatusCode::UNAUTHORIZED, "unauthenticated", "Please log in")
+            .with_header(header::SET_COOKIE, clear)
+    }
+
+    /// Logged in, but without the permission the route needs.
+    pub fn forbidden(permission: crate::permissions::Permission) -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            format!("Missing permission: {}", permission.label()),
+        )
+    }
+
+    /// A state-changing request that did not come from this site's pages.
+    pub fn csrf() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "csrf",
+            "Request refused: it did not come from this site",
+        )
+    }
+
+    /// Any failed login, whatever the reason, so the answer does not reveal
+    /// which user names exist or which accounts are locked.
+    pub fn invalid_credentials() -> Self {
+        Self::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid_credentials",
+            "Wrong user name or password, or the account is locked for a while after too many failed attempts",
+        )
+    }
+
+    /// The address used up its login attempts; `wait` until it may try again.
+    pub fn too_many_attempts(wait: std::time::Duration) -> Self {
+        let minutes = wait.as_secs().div_ceil(60).max(1);
+        Self::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_attempts",
+            format!("Too many login attempts from this address, try again in {minutes} min"),
+        )
+        .with_header(
+            header::RETRY_AFTER,
+            HeaderValue::from(wait.as_secs().max(1)),
+        )
     }
 
     pub fn not_found() -> Self {
@@ -235,7 +291,11 @@ impl IntoResponse for ApiError {
                 message: &self.message,
             },
         };
-        (self.status, Json(body)).into_response()
+        let mut response = (self.status, Json(body)).into_response();
+        for (name, value) in self.headers {
+            response.headers_mut().append(name, value);
+        }
+        response
     }
 }
 

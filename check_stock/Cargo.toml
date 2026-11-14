@@ -12,6 +12,14 @@ description = "MTG Stock Checker and Analysis Tool"
 members = ["core", "server"]
 default-members = [".", "core", "server"]
 
+# Password hashing is deliberately slow; unoptimized it takes seconds per hash
+# and makes the login tests crawl. Optimize just these crates in dev/test builds.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
+
 [profile.release]
 opt-level = 3
 lto = true
