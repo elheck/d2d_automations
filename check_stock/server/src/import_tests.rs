@@ -123,18 +123,39 @@ fn replace_keeps_data_that_was_still_in_the_wal() {
     let source = desktop_db(desktop.path(), 1);
     import_desktop(&source, data.path(), false).unwrap();
 
-    // A server wrote in WAL mode and stopped without a checkpoint.
+    // A server wrote in WAL mode and crashed before a checkpoint. The files
+    // as a crash leaves them are copied while the connection is still open
+    // (a leaked open handle would block deleting the file on Windows).
     let target = data.path().join("inventory.db");
-    let conn = Connection::open(&target).unwrap();
-    let _: String = conn
-        .query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))
-        .unwrap();
-    conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
-    migrations::set_meta(&conn, "only_in_wal", "yes").unwrap();
-    std::mem::forget(conn); // like a crash: no clean close, WAL keeps the change
-    assert!(data.path().join("inventory.db-wal").exists());
+    let crashed = tempfile::tempdir().unwrap();
+    {
+        let conn = Connection::open(&target).unwrap();
+        let _: String = conn
+            .query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))
+            .unwrap();
+        conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        migrations::set_meta(&conn, "only_in_wal", "yes").unwrap();
+        for name in ["inventory.db", "inventory.db-wal"] {
+            std::fs::copy(data.path().join(name), crashed.path().join(name)).unwrap();
+        }
+    }
+    // Premise: the change is only in the WAL. The database file alone
+    // (copied without its WAL) does not have it yet.
+    assert!(crashed.path().join("inventory.db-wal").exists());
+    let main_only = tempfile::tempdir().unwrap();
+    std::fs::copy(
+        crashed.path().join("inventory.db"),
+        main_only.path().join("inventory.db"),
+    )
+    .unwrap();
+    let main_conn = Connection::open(main_only.path().join("inventory.db")).unwrap();
+    assert_eq!(
+        migrations::get_meta(&main_conn, "only_in_wal").unwrap(),
+        None
+    );
+    drop(main_conn);
 
-    let report = import_desktop(&source, data.path(), true).unwrap();
+    let report = import_desktop(&source, crashed.path(), true).unwrap();
     let kept = Connection::open(report.previous_kept_as.unwrap()).unwrap();
     assert_eq!(
         migrations::get_meta(&kept, "only_in_wal")
@@ -186,7 +207,11 @@ fn files_that_are_not_inventory_databases_are_refused() {
 
     for source in [text, other] {
         match import_desktop(&source, data.path(), false) {
-            Err(ImportError::NotAnInventoryDb(path, _)) => assert_eq!(path, source),
+            // The import reports the canonical path (macOS: /var is
+            // /private/var; Windows: \\?\ prefix and long folder names).
+            Err(ImportError::NotAnInventoryDb(path, _)) => {
+                assert_eq!(path, source.canonicalize().unwrap())
+            }
             other => panic!(
                 "expected NotAnInventoryDb for {}, got {other:?}",
                 source.display()
