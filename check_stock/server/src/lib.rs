@@ -16,6 +16,7 @@ pub mod admin;
 pub mod api;
 pub mod app;
 pub mod audit;
+pub mod cards;
 pub mod cli;
 pub mod client_ip;
 pub mod config;

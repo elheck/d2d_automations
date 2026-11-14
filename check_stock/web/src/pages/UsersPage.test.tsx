@@ -38,7 +38,7 @@ describe("users page", () => {
   it("lists users with status and permission count", async () => {
     server();
     await openUsers();
-    expect(within(row("helper")).getByText("1 of 7")).toBeInTheDocument();
+    expect(within(row("helper")).getByText(`1 of ${catalog.length}`)).toBeInTheDocument();
     expect(within(row("helper")).getByText("Active")).toBeInTheDocument();
     expect(within(screen.getByText("you").closest("tr") as HTMLElement).getByText("All")).toBeInTheDocument();
   });

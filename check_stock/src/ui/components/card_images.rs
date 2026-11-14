@@ -7,7 +7,7 @@
 //! number is unsafe for a URL or file name (see [`ImageCache::is_safe_key`])
 //! are never requested.
 
-use crate::api::scryfall::{fetch_card_async, fetch_image_async};
+use crate::api::scryfall::{fetch_card_async, fetch_scryfall_image_async};
 use crate::cache::ImageCache;
 use eframe::egui;
 use log::{debug, warn};
@@ -239,7 +239,7 @@ async fn fetch(set_code: &str, collector_number: &str) -> Option<Vec<u8>> {
         warn!("No image URL for {set_code}/{collector_number}");
         return None;
     };
-    match fetch_image_async(url).await {
+    match fetch_scryfall_image_async(url).await {
         Ok(bytes) => {
             debug!("Fetched image for {set_code}/{collector_number}");
             Some(bytes)

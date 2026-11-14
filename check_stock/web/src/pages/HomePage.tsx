@@ -3,6 +3,7 @@ import { can, useMe } from "../api/queries";
 import { NAV_ITEMS } from "../components/AppLayout";
 
 const DESCRIPTIONS: Record<string, string> = {
+  "/singles": "Look up cards by set and collector number, with image and prices.",
   "/users": "Create accounts and choose what each person may do.",
   "/audit": "Who did what and when.",
 };

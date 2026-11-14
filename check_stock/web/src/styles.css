@@ -282,6 +282,7 @@ code {
   color: var(--muted);
   font-weight: 600;
 }
+.table tr:last-child th,
 .table tr:last-child td {
   border-bottom: none;
 }
@@ -381,4 +382,78 @@ code {
 }
 .permission-list li {
   margin-bottom: 0.35rem;
+}
+
+/* Singles listing */
+.singles-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0 0.75rem;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.singles-form__set input {
+  width: 7rem;
+}
+.singles-form__card {
+  flex: 1 1 12rem;
+}
+.singles-form__card input {
+  width: 100%;
+  font-size: 1.15rem;
+}
+.singles-form__submit {
+  margin-bottom: 0.75rem;
+}
+.singles-form__hint {
+  flex-basis: 100%;
+  margin: 0;
+  min-height: 1.45em;
+}
+.single {
+  display: grid;
+  grid-template-columns: minmax(12rem, 20rem) 1fr;
+  gap: 1.5rem;
+  margin-top: 1.25rem;
+}
+@media (max-width: 40rem) {
+  .single {
+    grid-template-columns: 1fr;
+  }
+}
+.single__image {
+  width: 100%;
+  max-width: 20rem;
+  aspect-ratio: 488 / 680;
+  border-radius: 4.75% / 3.5%;
+  background: var(--border);
+}
+.single__image--missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+.single__info p {
+  margin: 0.25rem 0;
+}
+.single__name {
+  margin-top: 0;
+}
+.single__set {
+  color: var(--muted);
+}
+.single__prices {
+  max-width: 28rem;
+}
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.table th.num,
+.table td.num {
+  text-align: right;
 }

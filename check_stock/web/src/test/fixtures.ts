@@ -1,4 +1,4 @@
-import type { AuditPage, JsonValue, MeResponse, PermissionInfo, UserView } from "../api/types";
+import type { AuditPage, JsonValue, MeResponse, PermissionInfo, SingleCard, UserView } from "../api/types";
 
 export const catalog: PermissionInfo[] = [
   {
@@ -57,6 +57,14 @@ export const catalog: PermissionInfo[] = [
     group_label: "Pricing",
     requires: ["repricing.view"],
   },
+  {
+    key: "listing.use",
+    label: "Singles listing",
+    description: "Look up cards by set and collector number, with images and prices.",
+    group: "tools",
+    group_label: "Tools",
+    requires: [],
+  },
 ];
 
 export const admin: MeResponse = {
@@ -66,6 +74,32 @@ export const admin: MeResponse = {
 };
 
 export const helper: MeResponse = { username: "helper", display_name: "Helper", permissions: ["search.use"] };
+
+export const lister: MeResponse = { username: "lister", display_name: "Lister", permissions: ["listing.use"] };
+
+export function singleCard(overrides: Partial<SingleCard> = {}): SingleCard {
+  return {
+    set_code: "hou",
+    collector_number: "120",
+    name: "Lightning Bolt",
+    set_name: "Hour of Devastation",
+    rarity: "common",
+    mana_cost: "{R}",
+    type_line: "Instant",
+    scryfall_eur: 0.25,
+    scryfall_eur_foil: 1.1,
+    cardmarket_id: 301234,
+    cardmarket_url: "https://www.cardmarket.com/en/Magic/Products?idProduct=301234",
+    image_path: "/api/singles/image/hou/120",
+    prices: {
+      status: "found",
+      price_date: "2026-11-13",
+      regular: { trend: 0.28, low: 0.02, avg: 0.3, avg1: 0.25, avg7: 0.27, avg30: 0.29 },
+      foil: { trend: 1.05, low: null, avg: 1.2, avg1: null, avg7: 1.1, avg30: 1.15 },
+    },
+    ...overrides,
+  };
+}
 
 export function userView(overrides: Partial<UserView> = {}): UserView {
   return {

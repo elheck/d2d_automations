@@ -14,4 +14,4 @@ mod scryfall_tests;
 #[allow(unused_imports)]
 pub use cardmarket::PriceGuide;
 #[allow(unused_imports)]
-pub use scryfall::{fetch_card, fetch_card_async, fetch_image, fetch_image_async, ScryfallCard};
+pub use scryfall::{fetch_card, fetch_card_async, fetch_scryfall_image_async, ScryfallCard};

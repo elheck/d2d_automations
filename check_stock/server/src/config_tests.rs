@@ -126,3 +126,50 @@ fn duplicate_names_are_kept_once() {
         ["localhost", "127.0.0.1", "[::1]", "a.example"]
     );
 }
+
+#[test]
+fn service_urls_are_validated() {
+    assert_eq!(
+        parse_service_url("http://cardscanner.local:3000").unwrap(),
+        "http://cardscanner.local:3000"
+    );
+    assert_eq!(
+        parse_service_url("https://inventory.example.com/").unwrap(),
+        "https://inventory.example.com"
+    );
+    assert_eq!(
+        parse_service_url("http://192.168.178.20:3000").unwrap(),
+        "http://192.168.178.20:3000"
+    );
+    for bad in [
+        "",
+        "cardscanner.local:3000",
+        "ftp://cardscanner.local",
+        "file:///etc/passwd",
+        "http://user:secret@cardscanner.local:3000",
+        "http://cardscanner.local:3000/api",
+        "http://cardscanner.local:3000/?x=1",
+        "http://cardscanner.local:3000/#x",
+        "http://",
+    ] {
+        assert!(parse_service_url(bad).is_err(), "{bad:?} should be refused");
+    }
+}
+
+#[test]
+fn inventory_sync_url_is_optional() {
+    let c = config(DEFAULT_BIND);
+    assert_eq!(c.inventory_sync_url, None);
+    let c = c.with_inventory_sync_url(Some("  ")).unwrap();
+    assert_eq!(c.inventory_sync_url, None);
+    let c = c
+        .with_inventory_sync_url(Some("http://cardscanner.local:3000/"))
+        .unwrap();
+    assert_eq!(
+        c.inventory_sync_url.as_deref(),
+        Some("http://cardscanner.local:3000")
+    );
+    assert!(config(DEFAULT_BIND)
+        .with_inventory_sync_url(Some("javascript:alert(1)"))
+        .is_err());
+}

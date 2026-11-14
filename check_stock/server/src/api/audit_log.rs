@@ -1,12 +1,12 @@
 //! `GET /api/audit` (permission `audit.view`): the audit log, newest first,
 //! paged with `before_id`.
 
-use super::{Access, Api};
+use super::{Access, Api, ApiQuery};
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
 use crate::http::ApiError;
 use crate::permissions::Permission;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::routing::get;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -40,7 +40,7 @@ pub struct AuditPage {
 
 async fn list_entries(
     State(state): State<AppState>,
-    Query(query): Query<AuditQuery>,
+    ApiQuery(query): ApiQuery<AuditQuery>,
 ) -> Result<Json<AuditPage>, ApiError> {
     let limit = query
         .limit

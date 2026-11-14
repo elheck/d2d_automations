@@ -12,6 +12,7 @@
 
 mod audit_log;
 mod auth;
+mod singles;
 mod users;
 
 use crate::app::AppState;
@@ -21,7 +22,7 @@ use crate::permissions::{Permission, PermissionSet};
 use crate::sessions::{self, SessionStatus};
 use crate::users::StoreError;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{DefaultBodyLimit, FromRequest, FromRequestParts, Request, State};
+use axum::extract::{DefaultBodyLimit, FromRequest, FromRequestParts, Query, Request, State};
 use axum::http::request::Parts;
 use axum::http::{header, Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -133,7 +134,8 @@ fn api(state: AppState) -> Api {
     let api = Api::new(state).route("/api/health", Access::Public, get(health));
     let api = auth::routes(api);
     let api = users::routes(api);
-    audit_log::routes(api)
+    let api = audit_log::routes(api);
+    singles::routes(api)
 }
 
 /// The API router with CSRF check and body limit.
@@ -312,6 +314,27 @@ where
                     "The request body is not valid for this endpoint",
                 )
             }),
+        }
+    }
+}
+
+/// Query string extractor whose errors use the API's error format (and never
+/// echo the parser's message, which can quote the input).
+pub struct ApiQuery<T>(pub T);
+
+impl<S, T> FromRequestParts<S> for ApiQuery<T>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        match Query::<T>::from_request_parts(parts, state).await {
+            Ok(Query(value)) => Ok(ApiQuery(value)),
+            Err(_) => Err(ApiError::bad_request(
+                "The query parameters are not valid for this endpoint",
+            )),
         }
     }
 }

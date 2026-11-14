@@ -1,4 +1,5 @@
-use crate::api::scryfall::{fetch_card_async, fetch_image_async};
+use crate::api::scryfall::{fetch_card_async, fetch_scryfall_image_async};
+use crate::card_input::resolve_card_input;
 use crate::ui::{
     state::{
         CardFetchMessage, CardFetchResult, FocusRequest, PriceGuideMessage, Screen,
@@ -10,45 +11,6 @@ use eframe::egui;
 use log::{error, info};
 
 pub struct StockListingScreen;
-
-/// Parse a combined set code + collector number input like "hou120", "mh2130", or "2xm050"
-/// Returns (set_code, collector_number) or None if invalid
-///
-/// Strategy: The collector number is always the last 3 digits, everything before is the set code.
-fn parse_card_input(input: &str) -> Option<(String, String)> {
-    let input = input.trim().to_lowercase();
-
-    // Need at least 4 chars: 1 for set + 3 for collector number
-    if input.len() < 4 {
-        return None;
-    }
-
-    // Last 3 characters are the collector number
-    let split_pos = input.len() - 3;
-    let set_code = &input[..split_pos];
-    let collector_number = &input[split_pos..];
-
-    // Validate: collector number must be all digits
-    if !collector_number.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-
-    // Validate: set code must be non-empty
-    if set_code.is_empty() {
-        return None;
-    }
-
-    // Strip leading zeros from collector number (API requires e.g. "5" not "005")
-    let collector_number = collector_number.trim_start_matches('0');
-    // Handle edge case: if all zeros, keep one zero
-    let collector_number = if collector_number.is_empty() {
-        "0"
-    } else {
-        collector_number
-    };
-
-    Some((set_code.to_string(), collector_number.to_string()))
-}
 
 impl StockListingScreen {
     pub fn show(ctx: &egui::Context, current_screen: &mut Screen, state: &mut StockListingState) {
@@ -167,7 +129,8 @@ impl StockListingScreen {
                     ui.add_space(10.0);
 
                     // Try to parse card input
-                    let parsed = Self::resolve_card_input(&state.card_input, &state.default_set);
+                    let parsed = resolve_card_input(&state.card_input, &state.default_set)
+                        .map(|c| (c.set_code, c.collector_number));
                     let can_fetch = parsed.is_some() && !state.image_loading;
 
                     // Handle Enter key in card field -> move to quantity field
@@ -249,31 +212,6 @@ impl StockListingScreen {
         });
     }
 
-    /// Resolve card input to (set_code, collector_number)
-    /// If input is just digits (3 chars), use the default set
-    /// Otherwise parse as set+number
-    fn resolve_card_input(input: &str, default_set: &str) -> Option<(String, String)> {
-        let input = input.trim();
-        if input.is_empty() {
-            return None;
-        }
-
-        // If input is exactly 3 digits and we have a default set, use it
-        if input.len() == 3 && input.chars().all(|c| c.is_ascii_digit()) && !default_set.is_empty()
-        {
-            let collector_number = input.trim_start_matches('0');
-            let collector_number = if collector_number.is_empty() {
-                "0"
-            } else {
-                collector_number
-            };
-            return Some((default_set.to_lowercase(), collector_number.to_string()));
-        }
-
-        // Otherwise try to parse as set+number
-        parse_card_input(input)
-    }
-
     /// Trigger a non-blocking card + image fetch.
     ///
     /// Checks in-memory and disk caches synchronously first (fast).
@@ -319,7 +257,7 @@ impl StockListingScreen {
             let collector_number = collector_number.to_string();
             state.runtime.spawn(async move {
                 let image_bytes = if let Some(url) = image_url {
-                    fetch_image_async(&url).await.ok()
+                    fetch_scryfall_image_async(&url).await.ok()
                 } else {
                     None
                 };
@@ -344,7 +282,7 @@ impl StockListingScreen {
             match fetch_card_async(&set_code, &collector_number).await {
                 Ok(card) => {
                     let image_bytes = if let Some(url) = card.image_url() {
-                        fetch_image_async(url).await.ok()
+                        fetch_scryfall_image_async(url).await.ok()
                     } else {
                         None
                     };

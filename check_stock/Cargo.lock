@@ -771,6 +771,7 @@ dependencies = [
  "getrandom 0.4.3",
  "http-body-util",
  "log",
+ "reqwest",
  "rpassword",
  "rusqlite",
  "serde",
@@ -781,6 +782,7 @@ dependencies = [
  "tower",
  "tower-http",
  "ts-rs",
+ "wiremock",
 ]
 
 [[package]]

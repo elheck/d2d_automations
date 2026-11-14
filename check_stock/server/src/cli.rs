@@ -71,6 +71,12 @@ pub struct ServeArgs {
         value_delimiter = ','
     )]
     pub trusted_proxies: Vec<String>,
+
+    /// Base URL of the inventory_sync price tracker, e.g.
+    /// `http://cardscanner.local:3000`. Without it pages show no Cardmarket
+    /// prices.
+    #[arg(long, env = "CHECK_STOCK_INVENTORY_SYNC_URL")]
+    pub inventory_sync_url: Option<String>,
 }
 
 impl ServeArgs {
@@ -82,7 +88,8 @@ impl ServeArgs {
             &self.allowed_hosts,
             self.read_connections,
         )?
-        .with_trusted_proxies(&self.trusted_proxies)
+        .with_trusted_proxies(&self.trusted_proxies)?
+        .with_inventory_sync_url(self.inventory_sync_url.as_deref())
     }
 }
 

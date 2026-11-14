@@ -205,3 +205,38 @@ fn admin_commands() {
     ])
     .is_err());
 }
+
+#[test]
+fn inventory_sync_url_option() {
+    let Command::Serve(args) = parse(&[
+        "serve",
+        "--data-dir",
+        "d",
+        "--inventory-sync-url",
+        "http://cardscanner.local:3000",
+    ])
+    .unwrap()
+    .command
+    else {
+        panic!("expected serve");
+    };
+    let config = args.to_config().unwrap();
+    assert_eq!(
+        config.inventory_sync_url.as_deref(),
+        Some("http://cardscanner.local:3000")
+    );
+
+    let Command::Serve(bad) = parse(&[
+        "serve",
+        "--data-dir",
+        "d",
+        "--inventory-sync-url",
+        "http://user:pw@cardscanner.local:3000",
+    ])
+    .unwrap()
+    .command
+    else {
+        panic!("expected serve");
+    };
+    assert!(bad.to_config().is_err());
+}

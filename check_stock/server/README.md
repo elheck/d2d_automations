@@ -5,9 +5,9 @@ All logic and data access come from [`check_stock_core`](../core/); this crate
 adds the HTTP layer, logins and permissions, the server's own database tables
 and admin commands.
 
-Status: foundation done up to step 1c: server, login, users with
-fine-grained permissions, audit log, and the [web UI](../web/) (login, user
-administration, audit log, account) built into the binary.
+Status: foundation done (steps 1aâ€“1c: server, login, users with
+fine-grained permissions, audit log, and the [web UI](../web/) built into the
+binary); first ported screen: the singles listing (step 2a).
 
 ## Try it locally
 
@@ -39,7 +39,8 @@ curl http://127.0.0.1:8080/api/auth/me -H 'Cookie: __Host-check_stock_session=â€
 ```bash
 check_stock_server serve --data-dir <DIR> [--bind 127.0.0.1:8080] \
     [--allowed-host stock.example.com] [--trusted-proxy 172.18.0.0/16] \
-    [--read-connections 4] [--create-empty]
+    [--read-connections 4] [--create-empty] \
+    [--inventory-sync-url http://cardscanner.local:3000]
 check_stock_server import-desktop --data-dir <DIR> --db <desktop inventory.db> [--refresh | --replace]
 check_stock_server create-admin --data-dir <DIR> --username <NAME> [--display-name <NAME>] [--if-none]
 check_stock_server reset-password --data-dir <DIR> --username <NAME>
@@ -51,6 +52,7 @@ check_stock_server reset-password --data-dir <DIR> --username <NAME>
 | `--bind` | `CHECK_STOCK_BIND` | Listen address; default `127.0.0.1:8080`. Any other address makes the server reachable from other machines. |
 | `--allowed-host` | `CHECK_STOCK_ALLOWED_HOSTS` (comma-separated) | Extra host names to answer; `localhost`, `127.0.0.1`, `[::1]` always work |
 | `--trusted-proxy` | `CHECK_STOCK_TRUSTED_PROXIES` (comma-separated) | Proxies (Caddy) whose `X-Forwarded-For` names the real client, as IPs or CIDR ranges. Without it the header is ignored. |
+| `--inventory-sync-url` | `CHECK_STOCK_INVENTORY_SYNC_URL` | The inventory_sync price tracker (Cardmarket prices). `http`/`https` with a host only: no user name, path, query or fragment. Without it pages show no Cardmarket prices. `dev.sh` passes `http://cardscanner.local:3000` (`DEV_INVENTORY_SYNC_URL`, empty = none). |
 | `--create-empty` | | Start with an empty database if none exists (otherwise the server refuses, so a forgotten import is noticed) |
 | `--refresh` | | `import-desktop`: swap only the desktop data of an existing database; users, sessions and the audit log stay |
 | `--replace` | | `import-desktop`: replace the whole database file |
@@ -77,6 +79,8 @@ standard input; passwords are never command-line arguments.
 | `PATCH /api/users/{id}`, `DELETE /api/users/{id}` | Manage users | change display name, permissions, disabled, unlock / delete |
 | `POST /api/users/{id}/password` | Manage users | set a password (unlocks, ends the user's sessions) |
 | `GET /api/audit?before_id=&limit=` | View audit log | newest first |
+| `GET /api/singles/lookup?input=&default_set=` | Singles listing | the card for `hou120` (or `120` + default set): Scryfall data, Cardmarket link, latest inventory_sync prices (`prices.status`: `found`, `no_cardmarket_id`, `not_tracked`, `not_configured`, `unavailable`) |
+| `GET /api/singles/image/{set}/{number}` | Singles listing | the card image (JPEG/PNG), browser-cacheable for 7 days (`private`) |
 
 State-changing requests (anything but `GET`) need the header
 `X-Check-Stock-CSRF: 1`. Errors are always
@@ -148,6 +152,16 @@ files are out of date.
   readers (SQLite read-only flag and `query_only`), WAL mode, 5 s busy
   timeout. All database work and password hashing run on blocking threads.
   Ctrl-C / SIGTERM finish the requests in flight before stopping.
+- **Scryfall** (`src/cards.rs`): the browser never contacts Scryfall; the
+  server looks a printing up once and keeps it in `<data-dir>/cache/`
+  (`scryfall_cache.json`, `images/`, the desktop app's cache layout). Set
+  codes and collector numbers are only letters, digits and `-` (they end up
+  in a URL and a file name). Images only from `https://cards.scryfall.io`,
+  without following redirects, at most 4 MiB, and only JPEG/PNG data is kept
+  and served. API requests to Scryfall are spaced 100 ms apart for the whole
+  server. Unknown printings are not cached, so made-up input cannot fill the
+  disk; a Scryfall or inventory_sync failure never shows their answer to the
+  client.
 - **Import:** the desktop file is opened read-only; the copy is taken with
   SQLite's backup API, integrity-checked, migrated, and only then put in
   place. A damaged or foreign file never becomes the server database.

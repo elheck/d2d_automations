@@ -10,6 +10,7 @@ pub mod bin_consolidation;
 pub mod bulk_lot;
 pub mod buy_helper;
 pub mod cache;
+pub mod card_input;
 pub mod card_matching;
 pub mod card_types;
 pub mod category;

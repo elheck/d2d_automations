@@ -37,7 +37,7 @@ npm run test:watch
 | `src/api/generated/` | TypeScript types generated from the Rust structs by `cargo test` (ts-rs). **Never edit**: change the Rust struct, run `cargo test`, commit the result. CI fails if they are out of date |
 | `src/router.tsx`     | Pages (TanStack Router); everything but `/login` is inside the app layout, which sends visitors without a session to the login                                                          |
 | `src/components/`    | Layout, permission picker, dialog, error message                                                                                                                                        |
-| `src/pages/`         | Login, start page, users, audit log, account                                                                                                                                            |
+| `src/pages/`         | Login, start page, singles listing (`singles.ts`: input rules and price texts), users, audit log, account                                                                               |
 | `src/test/`          | Fake server for `fetch`, fixtures, `renderApp` (whole app at a path)                                                                                                                    |
 
 ## Rules
@@ -57,3 +57,10 @@ npm run test:watch
   install with `npm ci`. An `overrides` entry pins `minimatch` 11 for
   typescript-eslint (fixes GHSA-g3hv-75wg-m249 in the lint tooling).
 - Tablet first: touch targets at least 44 px, no sideways scrolling.
+- **Images and links come from the server.** Card images are loaded from the
+  server's own `/api/singles/image/…` (CSP `img-src 'self'`; the browser never
+  contacts Scryfall). External links are only rendered for the expected site
+  (`isCardmarketUrl`) and open with `rel="noopener noreferrer"`.
+- **Browser storage only for conveniences** (e.g. the singles listing's
+  default set), always inside `try`/`catch`: work state that must survive
+  belongs on the server.

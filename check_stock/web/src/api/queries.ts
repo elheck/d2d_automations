@@ -10,6 +10,7 @@ import type {
   LoginRequest,
   MeResponse,
   PermissionInfo,
+  SingleCard,
   UpdateUserRequest,
   UserView,
 } from "./types";
@@ -19,6 +20,7 @@ export const keys = {
   permissions: ["permissions"] as const,
   users: ["users"] as const,
   audit: ["audit"] as const,
+  singles: ["singles"] as const,
 };
 
 /** The logged-in user; `null` when not logged in. */
@@ -127,6 +129,30 @@ export function useAuditLog() {
       ),
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (last) => last.next_before_id ?? undefined,
+  });
+}
+
+/** One card lookup of the singles listing, as typed. */
+export interface SingleLookup {
+  input: string;
+  defaultSet: string;
+  /** The printing it resolves to (cache key: same card, same answer). */
+  setCode: string;
+  collectorNumber: string;
+}
+
+/** The card behind `lookup`; nothing is fetched while it is `null`. */
+export function useSingleCard(lookup: SingleLookup | null) {
+  return useQuery({
+    queryKey: [...keys.singles, lookup?.setCode, lookup?.collectorNumber],
+    queryFn: () => {
+      if (!lookup) throw new Error("no card to look up");
+      const query = new URLSearchParams({ input: lookup.input, default_set: lookup.defaultSet });
+      return api.get<SingleCard>(`/api/singles/lookup?${query.toString()}`);
+    },
+    enabled: lookup !== null,
+    // Prices change once a day; a few minutes avoid asking again while listing.
+    staleTime: 5 * 60_000,
   });
 }
 

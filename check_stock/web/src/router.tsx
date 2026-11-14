@@ -9,6 +9,7 @@ import { AuditPage } from "./pages/AuditPage";
 import { HomePage } from "./pages/HomePage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
+import { SinglesPage } from "./pages/SinglesPage";
 import { UsersPage } from "./pages/UsersPage";
 
 /**
@@ -49,6 +50,16 @@ const homeRoute = createRoute({
   component: HomePage,
 });
 
+const singlesRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/singles",
+  component: () => (
+    <RequirePermission permission="listing.use">
+      <SinglesPage />
+    </RequirePermission>
+  ),
+});
+
 const usersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/users",
@@ -77,7 +88,7 @@ const accountRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  appRoute.addChildren([homeRoute, usersRoute, auditRoute, accountRoute]),
+  appRoute.addChildren([homeRoute, singlesRoute, usersRoute, auditRoute, accountRoute]),
 ]);
 
 export function createAppRouter(history?: RouterHistory) {

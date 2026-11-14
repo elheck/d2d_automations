@@ -8,7 +8,8 @@ and [`server/`](server/) (`check_stock_server`), the web version that is being
 built on top of core, with its browser interface in [`web/`](web/). Try the
 web version locally with `./dev.sh` (needs Node.js 24; see the server README):
 it works on a copy of the desktop database and asks for a password for your
-local login on the first start.
+local login on the first start. Ported so far: the Magic Singles Listing
+(Cardmarket prices from inventory_sync, set with `--inventory-sync-url`).
 
 The welcome screen shows a **since-last-visit digest** (copies sold and revenue
 since the previous day the app was opened, new listings, bulk lots built,
@@ -53,7 +54,7 @@ showing exactly what would change before anything is written.
   tick as moved**, so it reflects what you actually did. Read-only — never writes to
   the inventory DB; moves apply when you re-load an updated CSV, and each card keeps
   its lot/side so per-lot revenue is unaffected.
-- **Magic Singles Listing** — Card lookup via Scryfall by set code + collector number, with images and Cardmarket prices
+- **Magic Singles Listing** — Card lookup via Scryfall by set code + collector number (`hou120`, or `120` with a default set), with images and Cardmarket prices. Also in the web version (`/singles`), where the server caches Scryfall data and images and the prices come from inventory_sync instead of the 50 MB price guide
 - **Search Cards** — Interactive inventory search with filtering. Each result row
   has a **price-history button (📈)** that opens a floating window with the card's
   trend-price sparkline and 7/30-day movement, fetched from the inventory_sync

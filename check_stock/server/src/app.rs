@@ -1,5 +1,6 @@
 //! Starting and stopping the server.
 
+use crate::cards::CardLookup;
 use crate::client_ip::TrustedProxies;
 use crate::config::{HostAllowlist, ServeConfig};
 use crate::data_dir::{DataDirLock, LockError};
@@ -8,6 +9,7 @@ use crate::http;
 use crate::password::{self, PasswordError};
 use crate::rate_limit::LoginRateLimiter;
 use axum::Router;
+use check_stock_core::api::inventory_sync::InventorySyncClient;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -23,23 +25,45 @@ pub struct AppState {
     pub login_limiter: Arc<LoginRateLimiter>,
     /// Checked instead of a real hash for unknown user names (equal timing).
     pub dummy_hash: Arc<str>,
+    /// Scryfall card data and images, cached in the data folder.
+    pub cards: Arc<CardLookup>,
+    /// The inventory_sync price tracker, if configured.
+    pub inventory_sync: Option<Arc<InventorySyncClient>>,
 }
 
 impl AppState {
-    /// Builds the state; computes the dummy hash, so call it on a blocking
-    /// thread.
+    /// Builds the state; computes the dummy hash and reads the card cache
+    /// (next to the database, see [`crate::config::cache_root_in`]), so call
+    /// it on a blocking thread. No price tracker until
+    /// [`with_inventory_sync`](Self::with_inventory_sync).
     pub fn new(
         db: Db,
         allowed_hosts: HostAllowlist,
         trusted_proxies: TrustedProxies,
     ) -> Result<Self, PasswordError> {
+        let data_dir = db.path().parent().map(PathBuf::from).unwrap_or_default();
+        let cards = CardLookup::new(&crate::config::cache_root_in(&data_dir));
         Ok(Self {
             db,
             allowed_hosts: Arc::new(allowed_hosts),
             trusted_proxies: Arc::new(trusted_proxies),
             login_limiter: Arc::new(LoginRateLimiter::default()),
             dummy_hash: password::dummy_hash()?.into(),
+            cards: Arc::new(cards),
+            inventory_sync: None,
         })
+    }
+
+    /// Uses `cards` for card lookups (tests: a fake Scryfall).
+    pub fn with_cards(mut self, cards: CardLookup) -> Self {
+        self.cards = Arc::new(cards);
+        self
+    }
+
+    /// Asks the inventory_sync server at `url` for Cardmarket prices.
+    pub fn with_inventory_sync(mut self, url: Option<&str>) -> Self {
+        self.inventory_sync = url.map(|u| Arc::new(InventorySyncClient::new(u)));
+        self
     }
 }
 
@@ -114,15 +138,22 @@ where
     let read_connections = config.read_connections;
     let allowed_hosts = config.allowed_hosts.clone();
     let trusted_proxies = config.trusted_proxies.clone();
+    let inventory_sync_url = config.inventory_sync_url.clone();
     let state = tokio::task::spawn_blocking(move || -> Result<AppState, RunError> {
         let db = Db::open(&inventory_db, read_connections)?;
         log::info!("Database: {}", db.path().display());
-        AppState::new(db, allowed_hosts, trusted_proxies).map_err(RunError::Password)
+        Ok(AppState::new(db, allowed_hosts, trusted_proxies)
+            .map_err(RunError::Password)?
+            .with_inventory_sync(inventory_sync_url.as_deref()))
     })
     .await
     .map_err(|e| RunError::Db(DbError::Task(e.to_string())))??;
     if !config.trusted_proxies.is_empty() {
         log::info!("Trusting X-Forwarded-For from the configured proxies");
+    }
+    match &config.inventory_sync_url {
+        Some(url) => log::info!("Cardmarket prices from inventory_sync at {url}"),
+        None => log::info!("No --inventory-sync-url: pages show no Cardmarket prices"),
     }
     let listener = TcpListener::bind(config.bind).await?;
     let addr = listener.local_addr()?;

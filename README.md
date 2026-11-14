@@ -83,9 +83,9 @@ Status last checked 2026-10-29.
 
 | # | Project | Issue | Status |
 |---|---------|-------|--------|
-| M1 | check_stock | SSRF via unvalidated image URL from Scryfall | Open |
+| M1 | check_stock | SSRF via unvalidated image URL from Scryfall | **Fixed** — images are only fetched from `https://cards.scryfall.io` (desktop singles listing and tile views; the web server also refuses redirects and caps the size) |
 | M2 | check_stock | Path traversal in cache filenames | **Fixed** — image cache names are only built from ASCII letters, digits and `-`; other caches use fixed names or `is_safe_deck_file_name` |
-| M3 | check_stock | URL injection via unsanitized set_code/collector_number | Partly fixed — tile views (picking, consolidation, bulk lots) only request validated set codes/collector numbers; Magic Singles Listing still puts typed values into the URL |
+| M3 | check_stock | URL injection via unsanitized set_code/collector_number | **Fixed** — the singles listing (desktop and web) and the tile views (picking, consolidation, bulk lots) only request set codes/collector numbers made of ASCII letters, digits and `-` |
 | M4 | accounting | API token stored as plain mutable String | Open |
 | M5 | accounting | Token length logged at debug level | Open |
 | M6 | inventory_sync | LIKE metacharacter injection in search | Open |

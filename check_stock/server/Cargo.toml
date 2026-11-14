@@ -24,9 +24,14 @@ getrandom = "0.4"
 rpassword = "7"
 # TypeScript types for the web UI (see .cargo/config.toml).
 ts-rs = { version = "12", features = ["serde-json-impl"] }
+# Card images from Scryfall (same version as check_stock_core uses).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [dev-dependencies]
 check_stock_core = { path = "../core", features = ["test-support"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3.12.0"
+# Fake Scryfall and inventory_sync servers.
+wiremock = "0.6"
+tokio = { version = "1", features = ["io-util"] }

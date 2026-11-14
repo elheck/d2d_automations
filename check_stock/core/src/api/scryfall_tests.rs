@@ -4,8 +4,8 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::scryfall::{
-    fetch_card_from, fetch_card_from_async, fetch_image, fetch_image_async, CardFace, ImageUris,
-    ScryfallCard, ScryfallPrices,
+    fetch_card_from, fetch_card_from_async, fetch_image_async, CardFace, ImageUris, ScryfallCard,
+    ScryfallPrices,
 };
 use crate::error::ApiError;
 
@@ -167,51 +167,6 @@ async fn fetch_card_deserializes_cardmarket_id() {
         .unwrap();
 
     assert_eq!(result.unwrap().cardmarket_id, Some(12345));
-}
-
-// ── fetch_image ──────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn fetch_image_success() {
-    let mock_server = MockServer::start().await;
-
-    let image_bytes = vec![0x89, 0x50, 0x4E, 0x47]; // PNG header bytes
-
-    Mock::given(method("GET"))
-        .and(path("/image.png"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(image_bytes.clone()))
-        .mount(&mock_server)
-        .await;
-
-    let url = format!("{}/image.png", mock_server.uri());
-    let result = tokio::task::spawn_blocking(move || fetch_image(&url))
-        .await
-        .unwrap();
-
-    assert_eq!(result.unwrap(), image_bytes);
-}
-
-#[tokio::test]
-async fn fetch_image_404_returns_http_status() {
-    let mock_server = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/missing.png"))
-        .respond_with(ResponseTemplate::new(404))
-        .mount(&mock_server)
-        .await;
-
-    let url = format!("{}/missing.png", mock_server.uri());
-    let result = tokio::task::spawn_blocking(move || fetch_image(&url))
-        .await
-        .unwrap();
-
-    match result {
-        Err(ApiError::HttpStatus(status)) => {
-            assert_eq!(status, reqwest::StatusCode::NOT_FOUND);
-        }
-        other => panic!("Expected ApiError::HttpStatus(404), got: {other:?}"),
-    }
 }
 
 // ── ScryfallCard::image_url ──────────────────────────────────────────
@@ -502,4 +457,44 @@ async fn fetch_image_async_returns_full_bytes() {
 
     assert_eq!(result, payload);
     assert_eq!(result.len(), 16);
+}
+
+// ── Image URLs only from Scryfall's image host (no SSRF) ───────────────────
+
+#[test]
+fn only_scryfall_image_urls_are_trusted() {
+    assert!(super::scryfall::is_scryfall_image_url(
+        "https://cards.scryfall.io/normal/front/6/d/6da045f8.jpg?1562404626"
+    ));
+    for bad in [
+        "http://cards.scryfall.io/normal/front/x.jpg",
+        "https://cards.scryfall.io:8443/x.jpg",
+        "https://user@cards.scryfall.io/x.jpg",
+        "https://cards.scryfall.io.evil.example/x.jpg",
+        "https://evil.example/cards.scryfall.io/x.jpg",
+        "https://127.0.0.1/x.jpg",
+        "https://169.254.169.254/latest/meta-data",
+        "file:///etc/passwd",
+        "not a url",
+        "",
+    ] {
+        assert!(!super::scryfall::is_scryfall_image_url(bad), "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn untrusted_image_urls_are_refused_without_a_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"secret".to_vec()))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let url = format!("{}/internal", server.uri());
+    let result = super::scryfall::fetch_scryfall_image_async(&url).await;
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("not a Scryfall image URL"));
 }

@@ -1,6 +1,7 @@
 //! End-to-end tests of the API through the real router and middleware.
 
 use super::*;
+use crate::cards::CardLookup;
 use crate::client_ip::TrustedProxies;
 use crate::db::Db;
 use crate::password;
@@ -14,15 +15,26 @@ use serde_json::{json, Value};
 use std::net::SocketAddr;
 use tower::ServiceExt;
 
-const PASSWORD: &str = "a long enough password";
+pub(super) const PASSWORD: &str = "a long enough password";
 
-struct TestApp {
-    _dir: tempfile::TempDir,
-    state: AppState,
+pub(super) struct TestApp {
+    pub(super) dir: tempfile::TempDir,
+    pub(super) state: AppState,
+}
+
+/// Card lookups that never leave the machine: nothing listens on port 9, and
+/// no image URL is allowed.
+pub(super) fn offline_cards(cache_root: &std::path::Path) -> CardLookup {
+    CardLookup::with_endpoints(
+        cache_root,
+        "http://127.0.0.1:9",
+        |_| false,
+        std::time::Duration::ZERO,
+    )
 }
 
 impl TestApp {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(&InventoryDb::in_dir(dir.path()), 2).unwrap();
         let state = AppState::new(
@@ -30,21 +42,28 @@ impl TestApp {
             HostAllowlist::new(&[]).unwrap(),
             TrustedProxies::default(),
         )
-        .unwrap();
-        Self { _dir: dir, state }
+        .unwrap()
+        .with_cards(offline_cards(&dir.path().join("cache")));
+        Self { dir, state }
+    }
+
+    /// Changes the state (fake Scryfall, price tracker, …).
+    pub(super) fn with(mut self, f: impl FnOnce(AppState, &std::path::Path) -> AppState) -> Self {
+        self.state = f(self.state, self.dir.path());
+        self
     }
 
     /// The full router, as if the request came from `peer`.
-    fn router_from(&self, peer: [u8; 4]) -> Router {
+    pub(super) fn router_from(&self, peer: [u8; 4]) -> Router {
         crate::http::router(self.state.clone())
             .layer(MockConnectInfo(SocketAddr::from((peer, 40000))))
     }
 
-    fn router(&self) -> Router {
+    pub(super) fn router(&self) -> Router {
         self.router_from([192, 168, 178, 30])
     }
 
-    async fn add_user(&self, name: &str, keys: &[&str]) -> i64 {
+    pub(super) async fn add_user(&self, name: &str, keys: &[&str]) -> i64 {
         let granted = PermissionSet::from_keys(keys).unwrap();
         let hash = password::hash(PASSWORD).unwrap();
         let name = name.to_string();
@@ -57,7 +76,7 @@ impl TestApp {
             .unwrap()
     }
 
-    async fn admin(&self) -> (i64, String) {
+    pub(super) async fn admin(&self) -> (i64, String) {
         let id = self.add_user("admin", &all_keys()).await;
         let cookie = login_ok(&self.router(), "admin", PASSWORD).await;
         (id, cookie)
@@ -82,7 +101,7 @@ fn all_keys() -> Vec<&'static str> {
 }
 
 /// A request the way the web UI sends it: same host, CSRF header, JSON.
-fn request(
+pub(super) fn request(
     method: Method,
     path: &str,
     body: Option<Value>,
@@ -107,7 +126,7 @@ fn request(
     }
 }
 
-async fn send(
+pub(super) async fn send(
     router: &Router,
     request: HttpRequest<Body>,
 ) -> (StatusCode, axum::http::HeaderMap, Value) {
@@ -151,7 +170,7 @@ async fn login(
     .await
 }
 
-async fn login_ok(router: &Router, user: &str, pw: &str) -> String {
+pub(super) async fn login_ok(router: &Router, user: &str, pw: &str) -> String {
     let (status, headers, body) = login(router, user, pw).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     session_cookie(&headers).expect("session cookie")
@@ -160,6 +179,8 @@ async fn login_ok(router: &Router, user: &str, pw: &str) -> String {
 /// Substitutes path parameters for the route test.
 fn concrete(path: &str) -> String {
     path.replace("{id}", "1")
+        .replace("{set}", "hou")
+        .replace("{number}", "120")
 }
 
 const METHODS: [Method; 5] = [
@@ -953,12 +974,18 @@ async fn the_audit_log_pages_backwards() {
     )
     .await;
     assert!(older["entries"][0]["id"].as_i64().unwrap() < next);
-    let (status, _, _) = send(
+    let (status, _, body) = send(
         &router,
         request(Method::GET, "/api/audit?nonsense=1", None, Some(&admin)),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    // The usual error format, not axum's plain-text rejection.
+    assert_eq!(body["error"]["code"], "invalid_request");
+    assert!(!body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("nonsense"));
 }
 
 // ── Request bodies ─────────────────────────────────────────────────────────

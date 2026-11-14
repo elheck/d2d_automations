@@ -28,6 +28,9 @@ pub struct ServeConfig {
     pub read_connections: usize,
     /// Proxies (Caddy) whose `X-Forwarded-For` names the real client.
     pub trusted_proxies: TrustedProxies,
+    /// Base URL of the inventory_sync price tracker (Cardmarket prices);
+    /// `None` = pages show prices as not configured.
+    pub inventory_sync_url: Option<String>,
 }
 
 impl ServeConfig {
@@ -52,7 +55,17 @@ impl ServeConfig {
             allowed_hosts: HostAllowlist::new(extra_hosts)?,
             read_connections,
             trusted_proxies: TrustedProxies::default(),
+            inventory_sync_url: None,
         })
+    }
+
+    /// Sets the inventory_sync base URL (validated by [`parse_service_url`]).
+    pub fn with_inventory_sync_url(mut self, url: Option<&str>) -> Result<Self, String> {
+        self.inventory_sync_url = match url.map(str::trim).filter(|u| !u.is_empty()) {
+            Some(url) => Some(parse_service_url(url)?),
+            None => None,
+        };
+        Ok(self)
     }
 
     /// Sets the trusted proxies (IP addresses or CIDR ranges).
@@ -73,13 +86,41 @@ impl ServeConfig {
 
     /// Cache root in the data folder (same layout as the desktop cache root).
     pub fn cache_root(&self) -> PathBuf {
-        self.data_dir.join("cache")
+        cache_root_in(&self.data_dir)
     }
 }
 
 /// The inventory database inside a data folder.
 pub fn inventory_db_in(data_dir: &Path) -> InventoryDb {
     InventoryDb::in_dir(data_dir)
+}
+
+/// The cache root inside a data folder (Scryfall cards and images, …).
+pub fn cache_root_in(data_dir: &Path) -> PathBuf {
+    data_dir.join("cache")
+}
+
+/// Validates the base URL of another LAN service (inventory_sync): `http`
+/// or `https`, a host, no user name or password, no path, query or fragment.
+/// Returns it without a trailing slash.
+pub fn parse_service_url(raw: &str) -> Result<String, String> {
+    let bad = |why: &str| Err(format!("not a valid service URL {raw:?}: {why}"));
+    let Ok(url) = reqwest::Url::parse(raw) else {
+        return bad("expected e.g. http://cardscanner.local:3000");
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return bad("only http and https are allowed");
+    }
+    if url.host_str().is_none_or(str::is_empty) {
+        return bad("no host name");
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return bad("no user name or password in the URL");
+    }
+    if url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
+        return bad("no path, query or fragment");
+    }
+    Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
 /// Host names the server answers to. A request whose `Host` header names any

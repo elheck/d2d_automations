@@ -63,10 +63,10 @@ describe("PermissionPicker", () => {
   it("offers all and none", async () => {
     const user = userEvent.setup();
     render(<Harness initial={["search.use"]} />);
-    expect(screen.getByText("1 of 7 granted")).toBeInTheDocument();
+    expect(screen.getByText(`1 of ${catalog.length} granted`)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "All" }));
-    expect(screen.getByText("7 of 7 granted")).toBeInTheDocument();
+    expect(screen.getByText(`${catalog.length} of ${catalog.length} granted`)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "None" }));
-    expect(screen.getByText("0 of 7 granted")).toBeInTheDocument();
+    expect(screen.getByText(`0 of ${catalog.length} granted`)).toBeInTheDocument();
   });
 });

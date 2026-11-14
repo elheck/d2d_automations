@@ -1,5 +1,3 @@
-use crate::api::scryfall::fetch_image;
-use crate::error::ApiResult;
 use mtg_common::FileCache;
 
 /// Persistent cache for card images, keyed by set code + collector number.
@@ -72,32 +70,6 @@ impl ImageCache {
         self.files.write(&filename, bytes);
         log::debug!("Cached image for {}/{}", set_code, collector_number);
     }
-}
-
-/// Fetch an image, checking cache first
-pub fn fetch_image_cached(
-    cache: &ImageCache,
-    set_code: &str,
-    collector_number: &str,
-    url: &str,
-) -> ApiResult<Vec<u8>> {
-    // Check cache first
-    if let Some(bytes) = cache.get(set_code, collector_number) {
-        return Ok(bytes);
-    }
-
-    // Fetch from URL
-    log::info!(
-        "Image cache miss for {}/{}, fetching from Scryfall",
-        set_code,
-        collector_number
-    );
-    let bytes = fetch_image(url)?;
-
-    // Store in cache
-    cache.insert(set_code, collector_number, &bytes);
-
-    Ok(bytes)
 }
 
 #[cfg(test)]

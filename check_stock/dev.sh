@@ -18,6 +18,9 @@
 #   DEV_DATA_DIR  data folder (default: ./dev-data)
 #   DEV_PORT      port (default: 8080)
 #   DEV_ADMIN     login name of the local admin (default: your user name)
+#   DEV_INVENTORY_SYNC_URL  price tracker for Cardmarket prices
+#                 (default: http://cardscanner.local:3000, like the desktop
+#                 app; empty = no prices)
 #
 # Needs Rust and Node.js 24 (web/.nvmrc). Both servers only listen on this
 # machine, so nothing in dev-data is reachable from other machines. Ctrl-C
@@ -31,6 +34,7 @@ DESKTOP_DB="${DESKTOP_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/d2d_automations/i
 DATA_DIR="${DEV_DATA_DIR:-dev-data}"
 PORT="${DEV_PORT:-8080}"
 ADMIN="${DEV_ADMIN:-${USER:-admin}}"
+INVENTORY_SYNC_URL="${DEV_INVENTORY_SYNC_URL-http://cardscanner.local:3000}"
 
 usage() {
     # The comment block at the top of this file, without the '#'.
@@ -111,7 +115,8 @@ prepare_data() {
 serve_dev() {
     web_deps
     prepare_data debug
-    server debug serve --data-dir "$DATA_DIR" --bind "127.0.0.1:$PORT" &
+    server debug serve --data-dir "$DATA_DIR" --bind "127.0.0.1:$PORT" \
+        --inventory-sync-url "$INVENTORY_SYNC_URL" &
     local server_pid=$!
     trap 'kill "$server_pid" 2>/dev/null; wait "$server_pid" 2>/dev/null' EXIT
     echo "Open http://localhost:5173 (the API server starts on 127.0.0.1:$PORT; Ctrl-C stops both)"
@@ -125,7 +130,8 @@ serve_release() {
     (cd web && npm run build)
     prepare_data release
     echo "Open http://127.0.0.1:$PORT (Ctrl-C to stop)"
-    server release serve --data-dir "$DATA_DIR" --bind "127.0.0.1:$PORT"
+    server release serve --data-dir "$DATA_DIR" --bind "127.0.0.1:$PORT" \
+        --inventory-sync-url "$INVENTORY_SYNC_URL"
 }
 
 case "${1:-}" in
