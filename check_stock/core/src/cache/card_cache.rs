@@ -2,29 +2,43 @@ use crate::api::scryfall::{fetch_card, ScryfallCard};
 use crate::error::ApiResult;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// Persistent cache for Scryfall card lookups
-/// Stores cards in a JSON file to avoid redundant API calls
+/// Stores cards in a JSON file to avoid redundant API calls.
+///
+/// `CardCache::default()` is in-memory only: [`CardCache::save`] does nothing
+/// until the cache was loaded from a file.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct CardCache {
     /// Map of "set/collector_number" to card data
     cards: HashMap<String, ScryfallCard>,
+    /// File the cache was loaded from and saves to (not part of the file).
+    #[serde(skip)]
+    file: Option<PathBuf>,
 }
 
 impl CardCache {
-    /// Get the default cache file path
-    fn cache_path() -> std::path::PathBuf {
-        dirs::cache_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("d2d_automations")
-            .join("scryfall_cache.json")
+    /// File name of this cache inside the application's cache root.
+    pub const FILE_NAME: &'static str = "scryfall_cache.json";
+
+    /// Loads the cache file inside the application's cache root
+    /// (`<root>/scryfall_cache.json`).
+    pub fn load_in(cache_root: &Path) -> Self {
+        Self::load_from(cache_root.join(Self::FILE_NAME))
     }
 
-    /// Load cache from disk, or create empty if doesn't exist
-    pub fn load() -> Self {
-        let path = Self::cache_path();
+    /// Load cache from `path`, or start empty if it is missing or unreadable.
+    /// Either way, later saves go to `path`.
+    pub fn load_from(path: PathBuf) -> Self {
+        let mut cache = Self::read_file(&path);
+        cache.file = Some(path);
+        cache
+    }
+
+    fn read_file(path: &Path) -> Self {
         if path.exists() {
-            match std::fs::read_to_string(&path) {
+            match std::fs::read_to_string(path) {
                 Ok(content) => match serde_json::from_str(&content) {
                     Ok(cache) => {
                         log::info!("Loaded card cache with {} entries", Self::count(&cache));
@@ -47,9 +61,11 @@ impl CardCache {
         cache.cards.len()
     }
 
-    /// Save cache to disk
+    /// Save cache to the file it was loaded from (no-op for an in-memory cache).
     pub fn save(&self) -> ApiResult<()> {
-        let path = Self::cache_path();
+        let Some(path) = &self.file else {
+            return Ok(());
+        };
 
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
@@ -57,7 +73,7 @@ impl CardCache {
         }
 
         let content = serde_json::to_string_pretty(self)?;
-        std::fs::write(&path, content)?;
+        std::fs::write(path, content)?;
 
         log::debug!("Saved card cache with {} entries", self.cards.len());
         Ok(())

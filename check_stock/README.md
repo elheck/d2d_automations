@@ -2,6 +2,10 @@
 
 egui desktop app for Magic: The Gathering card inventory management.
 
+This folder is a Cargo workspace: the desktop app (`src/`, egui UI only) and
+[`core/`](core/) (`check_stock_core`), which holds all logic and data access.
+A web version (server + browser UI) is being built on top of core.
+
 The welcome screen shows a **since-last-visit digest** (copies sold and revenue
 since the previous day the app was opened, new listings, bulk lots built,
 restock candidates, and how old the last inventory import is — with a warning
@@ -329,5 +333,9 @@ cargo run
 ## Development
 
 ```bash
-./run_quality_checks.sh
+./run_quality_checks.sh   # fmt, clippy, tests and builds for the app and core
 ```
+
+Run `cargo` commands from this folder: the workspace's default members are the
+desktop app and `core/`, so `cargo test` covers both. File locations (DB,
+caches, ruleset) are chosen in `src/paths.rs`; core never picks them itself.

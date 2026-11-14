@@ -22,7 +22,7 @@ use crate::models::{canonical_condition, Card};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Cardmarket refuses listings below this price.
 pub const CARDMARKET_MIN_PRICE: f64 = 0.02;
@@ -783,13 +783,9 @@ impl Ruleset {
     }
 }
 
-/// Where the working ruleset is kept between sessions.
-pub fn default_ruleset_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("d2d_automations")
-        .join("repricing_ruleset.json")
-}
+/// File name of the working ruleset inside the application's config folder.
+/// The app picks the folder (the desktop app: the platform config dir).
+pub const RULESET_FILE_NAME: &str = "repricing_ruleset.json";
 
 /// Writes a ruleset atomically (temp file + rename), creating the folder.
 pub fn save_ruleset(path: &Path, ruleset: &Ruleset) -> std::io::Result<()> {

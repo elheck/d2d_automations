@@ -1,5 +1,5 @@
-use d2d_automations::card_matching::find_matching_cards;
-use d2d_automations::models::{Card, Language};
+use check_stock_core::card_matching::find_matching_cards;
+use check_stock_core::models::{Card, Language};
 use std::time::Instant;
 
 fn create_test_card(

@@ -12,7 +12,6 @@ mod ranking;
 
 use crate::{
     api::{cardmarket::product_url, inventory_sync::InventorySyncClient, mtgjson::MtgjsonClient},
-    cache::{DeckCache, SalesCache},
     precon_ev::{
         build_rows, ev_history, history_start, sales_candidates, sort_rows, trim_leading_gaps,
         weekly_dates, EvParams, PreconData, FOIL_LOOKBACK_DAYS, LIQUID_FULL_SHARE, SALES_DAYS,
@@ -452,7 +451,7 @@ impl PreconEvScreen {
             let progress = |event| {
                 let _ = progress_tx.send(PreconLoadMsg::Event(event));
             };
-            let data = match load_precons(&opts, &DeckCache::new(), &progress) {
+            let data = match load_precons(&opts, &crate::paths::deck_cache(), &progress) {
                 Ok(data) => data,
                 Err(e) => {
                     let _ = tx.send(PreconLoadMsg::Done(Err(e)));
@@ -465,7 +464,7 @@ impl PreconEvScreen {
             }
             let result = load_sales(
                 &opts.tracker,
-                &SalesCache::new(),
+                &crate::paths::sales_cache(),
                 &candidates,
                 local_date(opts.now_unix),
                 &progress,

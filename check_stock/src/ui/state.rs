@@ -148,7 +148,7 @@ impl AppState {
     /// parked in [`AppState::sync_guard`] for the confirmation modal instead;
     /// nothing is written until confirmed.
     pub fn sync_inventory_guarded(&mut self, cards: &[Card], category: &str) {
-        match crate::inventory_db::sync_inventory(cards, category) {
+        match crate::paths::inventory_db().sync_inventory(cards, category) {
             Ok(crate::inventory_db::SyncOutcome::Synced(stats)) => {
                 self.sync_report = Some(SyncReport {
                     category: category.to_string(),
@@ -191,7 +191,7 @@ impl AppState {
     /// lives in the app shell, not in the screen whose cached data just went
     /// stale, so nothing else would invalidate it.
     pub fn sync_inventory_confirmed(&mut self, cards: &[Card], category: &str) {
-        match crate::inventory_db::sync_inventory_forced(cards, category) {
+        match crate::paths::inventory_db().sync_inventory_forced(cards, category) {
             Ok(stats) => {
                 log::info!(
                     "Forced inventory sync applied ({}): {} upserted, {} zeroed",
@@ -397,8 +397,8 @@ impl Default for StockListingState {
             error: None,
             price_guide: None,
             price_guide_loading: false,
-            card_cache: CardCache::load(), // Load from disk on startup
-            image_cache: ImageCache::new(),
+            card_cache: crate::paths::card_cache(), // Load from disk on startup
+            image_cache: crate::paths::image_cache(),
             runtime: Runtime::new().expect("Failed to create Tokio runtime for StockListing"),
             card_tx,
             card_rx,

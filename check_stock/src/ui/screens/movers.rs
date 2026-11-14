@@ -12,7 +12,6 @@
 
 use crate::{
     api::inventory_sync::InventorySyncClient,
-    inventory_db::get_in_stock_cards,
     price_trends::{build_stock_movers, SnapshotSet, StockMover},
     ui::{
         components::InventorySyncBar,
@@ -360,7 +359,9 @@ impl MoversScreen {
 
     /// Loads the in-stock inventory and fetches raw snapshots for its products.
     fn spawn_fetch(state: &mut MoversState, url: &str) {
-        state.cards = match get_in_stock_cards(crate::category::DEFAULT_CATEGORY) {
+        state.cards = match crate::paths::inventory_db()
+            .get_in_stock_cards(crate::category::DEFAULT_CATEGORY)
+        {
             Ok(c) => c,
             Err(e) => {
                 state.error = Some(format!("Failed to read inventory: {e}"));

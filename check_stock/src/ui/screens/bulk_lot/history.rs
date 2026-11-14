@@ -3,7 +3,7 @@
 
 use super::widgets::{self, Tone};
 use super::{BulkLotState, Confirm, Tab, STALE_PENDING_DAYS};
-use crate::inventory_db::{self, BulkLotSummary, MAX_LOT_PRICE_EUR};
+use crate::inventory_db::{BulkLotSummary, MAX_LOT_PRICE_EUR};
 use crate::ui::state::AppState;
 use crate::ui::style;
 use chrono::NaiveDate;
@@ -298,7 +298,7 @@ fn apply(app_state: &mut AppState, state: &mut BulkLotState, action: RowAction) 
             let Some((id, price)) = state.price_edit.take() else {
                 return;
             };
-            match inventory_db::set_bulk_lot_price(id, price) {
+            match crate::paths::inventory_db().set_bulk_lot_price(id, price) {
                 Ok(()) => app_state.mark_db_changed(),
                 Err(e) => state.history_error = Some(format!("Could not change the price: {e}")),
             }
@@ -308,7 +308,9 @@ fn apply(app_state: &mut AppState, state: &mut BulkLotState, action: RowAction) 
                 Some((open, _)) if *open == id => None,
                 _ => Some((
                     id,
-                    inventory_db::get_bulk_lot_cards(id).map_err(|e| e.to_string()),
+                    crate::paths::inventory_db()
+                        .get_bulk_lot_cards(id)
+                        .map_err(|e| e.to_string()),
                 )),
             };
         }

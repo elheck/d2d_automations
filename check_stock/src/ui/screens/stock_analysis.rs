@@ -67,7 +67,7 @@ impl StockAnalysisScreen {
     }
 
     fn refresh_stats(state: &mut StockAnalysisState) {
-        match crate::inventory_db::get_db_stats(crate::category::DEFAULT_CATEGORY) {
+        match crate::paths::inventory_db().get_db_stats(crate::category::DEFAULT_CATEGORY) {
             Ok(stats) => {
                 state.db_stats = Some(stats);
                 state.db_stats_error = None;
@@ -639,7 +639,7 @@ impl StockAnalysisScreen {
         if let Some(msg) = invalid {
             state.lot_cost_error = Some(msg);
         } else if let Some((lot, cost)) = save {
-            match crate::inventory_db::set_lot_cost(&lot, cost) {
+            match crate::paths::inventory_db().set_lot_cost(&lot, cost) {
                 Ok(()) => {
                     state.lot_cost_error = None;
                     needs_refresh = true;
@@ -647,7 +647,7 @@ impl StockAnalysisScreen {
                 Err(e) => state.lot_cost_error = Some(e.to_string()),
             }
         } else if let Some(lot) = clear {
-            match crate::inventory_db::delete_lot_cost(&lot) {
+            match crate::paths::inventory_db().delete_lot_cost(&lot) {
                 Ok(()) => {
                     state.lot_cost_error = None;
                     needs_refresh = true;

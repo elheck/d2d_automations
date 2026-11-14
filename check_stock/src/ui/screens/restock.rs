@@ -7,7 +7,6 @@
 //! the inventory DB.
 
 use crate::{
-    inventory_db::get_restock_candidates,
     restock::{format_buy_list_csv, rank_candidates, RankedRestock},
     ui::{
         state::{RestockSort, RestockState, Screen},
@@ -270,7 +269,7 @@ impl RestockScreen {
     fn rebuild(state: &mut RestockState) {
         // `None` = all categories: sleeves and other accessories are restock
         // candidates too, and the lot column already spans both.
-        match get_restock_candidates(None) {
+        match crate::paths::inventory_db().get_restock_candidates(None) {
             Ok(candidates) => {
                 state.rows = Some(rank_candidates(candidates, state.min_copies));
                 state.error = None;

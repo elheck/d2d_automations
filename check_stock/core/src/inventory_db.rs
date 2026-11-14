@@ -22,15 +22,13 @@ use crate::category::{canonical_category, DEFAULT_CATEGORY};
 use crate::models::{canonical_condition, Card, Language};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod bulk_lots;
 use bulk_lots::RemovalPlan;
 pub use bulk_lots::{
-    delete_bulk_lot, get_bulk_lot_cards, get_listing_dates, get_pending_bulk_removals,
-    list_bulk_lots, mark_bulk_lot_removed, per_card_share, record_bulk_lot, set_bulk_lot_price,
-    BulkLotCard, BulkLotSummary, BulkLotTotals, PendingRemoval, MAX_LOT_COPIES, MAX_LOT_NAME_CHARS,
-    MAX_LOT_PRICE_EUR,
+    per_card_share, BulkLotCard, BulkLotSummary, BulkLotTotals, PendingRemoval, MAX_LOT_COPIES,
+    MAX_LOT_NAME_CHARS, MAX_LOT_PRICE_EUR,
 };
 
 /// Article key of an inventory CSV row's variant, exactly as the sync keys it
@@ -416,7 +414,7 @@ impl SyncPreview {
 }
 
 /// Result of a guarded sync: either it ran, or the safety check blocked it and
-/// nothing was written (rerun via [`sync_inventory_forced`] to override).
+/// nothing was written (rerun via [`InventoryDb::sync_inventory_forced`] to override).
 #[derive(Debug)]
 pub enum SyncOutcome {
     Synced(SyncStats),
@@ -433,25 +431,48 @@ pub struct DiscardStats {
     pub copies_discarded: i64,
 }
 
-/// Returns the path to the inventory database file.
-fn db_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("d2d_automations")
-        .join("inventory.db")
+/// Where an inventory database lives. The app picks the location (the
+/// desktop app: the platform data dir); this crate never does.
+///
+/// Every operation opens its own connection and brings schema and data up to
+/// date first, so a handle is cheap to clone and to move to a worker thread.
+/// Dated backups (`inventory-YYYY-MM-DD.db.bak`) are written next to the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InventoryDb {
+    path: PathBuf,
 }
 
-/// Opens (or creates) the inventory database and initialises the schema.
-fn open_db() -> DbResult<Connection> {
-    let path = db_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
+impl InventoryDb {
+    /// File name of the database inside the application's data folder.
+    pub const FILE_NAME: &'static str = "inventory.db";
+
+    /// The database file at `path`.
+    pub fn at(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
     }
-    log::info!("Inventory DB: {}", path.display());
-    let mut conn = Connection::open(&path)?;
-    init_schema(&conn)?;
-    repair_data(&mut conn, &path, &today_date())?;
-    Ok(conn)
+
+    /// The database inside the application's data folder (`<dir>/inventory.db`).
+    pub fn in_dir(data_dir: &Path) -> Self {
+        Self::at(data_dir.join(Self::FILE_NAME))
+    }
+
+    /// Path of the database file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Opens (or creates) the database, initialises the schema and repairs the
+    /// data (see `repair_data`).
+    fn open(&self) -> DbResult<Connection> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        log::info!("Inventory DB: {}", self.path.display());
+        let mut conn = Connection::open(&self.path)?;
+        init_schema(&conn)?;
+        repair_data(&mut conn, &self.path, &today_date())?;
+        Ok(conn)
+    }
 }
 
 /// Brings the *data* (as opposed to the schema) up to date on open: folds
@@ -1299,75 +1320,85 @@ fn today_date() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
-/// Syncs a slice of cards (from a freshly loaded inventory CSV) to the local DB,
-/// with two safety layers in front of the write:
-///
-/// 1. A dated backup of the DB file is taken (first write of the day) so a bad
-///    import can always be rolled back.
-/// 2. The change is previewed first; a sync that would record most of the
-///    inventory as sold is blocked and returned as [`SyncOutcome::Blocked`]
-///    with nothing written — the caller decides whether to
-///    [`sync_inventory_forced`].
-///
-/// Sync semantics:
-/// - The sync is scoped to `category`: only rows in that category are read,
-///   updated or zeroed. Loading the Generic export therefore leaves the Magic
-///   inventory completely untouched, and vice versa.
-/// - Cards are pre-aggregated by variant (category + cardmarket_id + condition +
-///   language + foil + signed): quantities across multiple locations are summed
-///   into a single DB row.
-/// - Existing variants are updated; new variants are inserted.
-/// - Variants of this category not in `cards` that have `quantity > 0` are zeroed out.
-/// - Timestamps are only advanced once per day.
-///
-/// Errors are returned to the caller; call sites treat them as non-fatal.
-pub fn sync_inventory(cards: &[Card], category: &str) -> DbResult<SyncOutcome> {
-    let mut conn = open_db()?;
-    backup_db_file(&conn, &today_date());
-    let preview = preview_sync_conn(&conn, cards, category)?;
-    if preview.is_suspicious() {
-        log::warn!(
-            "Inventory sync blocked for category '{}': would record {} of {} copies as sold ({} variants zeroed)",
+impl InventoryDb {
+    /// Syncs a slice of cards (from a freshly loaded inventory CSV) to the local DB,
+    /// with two safety layers in front of the write:
+    ///
+    /// 1. A dated backup of the DB file is taken (first write of the day) so a bad
+    ///    import can always be rolled back.
+    /// 2. The change is previewed first; a sync that would record most of the
+    ///    inventory as sold is blocked and returned as [`SyncOutcome::Blocked`]
+    ///    with nothing written — the caller decides whether to
+    ///    [`InventoryDb::sync_inventory_forced`].
+    ///
+    /// Sync semantics:
+    /// - The sync is scoped to `category`: only rows in that category are read,
+    ///   updated or zeroed. Loading the Generic export therefore leaves the Magic
+    ///   inventory completely untouched, and vice versa.
+    /// - Cards are pre-aggregated by variant (category + cardmarket_id + condition +
+    ///   language + foil + signed): quantities across multiple locations are summed
+    ///   into a single DB row.
+    /// - Existing variants are updated; new variants are inserted.
+    /// - Variants of this category not in `cards` that have `quantity > 0` are zeroed out.
+    /// - Timestamps are only advanced once per day.
+    ///
+    /// Errors are returned to the caller; call sites treat them as non-fatal.
+    pub fn sync_inventory(&self, cards: &[Card], category: &str) -> DbResult<SyncOutcome> {
+        let mut conn = self.open()?;
+        self.backup(&conn, &today_date());
+        let preview = preview_sync_conn(&conn, cards, category)?;
+        if preview.is_suspicious() {
+            log::warn!(
+                "Inventory sync blocked for category '{}': would record {} of {} copies as sold ({} variants zeroed)",
+                category,
+                preview.copies_sold,
+                preview.copies_before,
+                preview.zeroed_variants
+            );
+            return Ok(SyncOutcome::Blocked(preview));
+        }
+        Ok(SyncOutcome::Synced(sync_inventory_conn(
+            &mut conn,
+            cards,
             category,
-            preview.copies_sold,
-            preview.copies_before,
-            preview.zeroed_variants
-        );
-        return Ok(SyncOutcome::Blocked(preview));
+            &today_date(),
+        )?))
     }
-    Ok(SyncOutcome::Synced(sync_inventory_conn(
-        &mut conn,
-        cards,
-        category,
-        &today_date(),
-    )?))
 }
 
-/// Runs the sync without the suspicious-change guard (still takes the daily
-/// backup first). Use only after the user has confirmed a blocked sync.
-pub fn sync_inventory_forced(cards: &[Card], category: &str) -> DbResult<SyncStats> {
-    let mut conn = open_db()?;
-    backup_db_file(&conn, &today_date());
-    sync_inventory_conn(&mut conn, cards, category, &today_date())
+impl InventoryDb {
+    /// Runs the sync without the suspicious-change guard (still takes the daily
+    /// backup first). Use only after the user has confirmed a blocked sync.
+    pub fn sync_inventory_forced(&self, cards: &[Card], category: &str) -> DbResult<SyncStats> {
+        let mut conn = self.open()?;
+        self.backup(&conn, &today_date());
+        sync_inventory_conn(&mut conn, cards, category, &today_date())
+    }
 }
 
-/// Writes off (discards) copies of card variants **without** recording them as
-/// sales.
-///
-/// Each `(card, quantity)` pair reduces the matching DB row's `quantity` by
-/// `quantity`, clamped so it never goes below zero. Crucially, `sold_quantity`
-/// is left untouched — a discard is stock leaving the shelf that was *not* sold,
-/// so it must not inflate tracked revenue. Multiple pairs targeting the same
-/// variant (e.g. the same card picked from two locations) are summed first.
-///
-/// The caller is expected to also export a stock-update CSV of the same copies
-/// and import it into Cardmarket, so the next full inventory sync sees the drop
-/// already reflected in both places and records no phantom sale.
-///
-/// Errors are returned to the caller; call sites treat them as non-fatal.
-pub fn discard_cards(discards: &[(Card, i64)], category: &str) -> DbResult<DiscardStats> {
-    let mut conn = open_db()?;
-    discard_cards_conn(&mut conn, discards, category)
+impl InventoryDb {
+    /// Writes off (discards) copies of card variants **without** recording them as
+    /// sales.
+    ///
+    /// Each `(card, quantity)` pair reduces the matching DB row's `quantity` by
+    /// `quantity`, clamped so it never goes below zero. Crucially, `sold_quantity`
+    /// is left untouched — a discard is stock leaving the shelf that was *not* sold,
+    /// so it must not inflate tracked revenue. Multiple pairs targeting the same
+    /// variant (e.g. the same card picked from two locations) are summed first.
+    ///
+    /// The caller is expected to also export a stock-update CSV of the same copies
+    /// and import it into Cardmarket, so the next full inventory sync sees the drop
+    /// already reflected in both places and records no phantom sale.
+    ///
+    /// Errors are returned to the caller; call sites treat them as non-fatal.
+    pub fn discard_cards(
+        &self,
+        discards: &[(Card, i64)],
+        category: &str,
+    ) -> DbResult<DiscardStats> {
+        let mut conn = self.open()?;
+        discard_cards_conn(&mut conn, discards, category)
+    }
 }
 
 /// Inner discard that accepts an explicit connection — used in tests.
@@ -1473,22 +1504,26 @@ fn discard_cards_conn(
     Ok(stats)
 }
 
-/// Queries aggregate statistics for one category of the local inventory database.
-///
-/// Pass [`DEFAULT_CATEGORY`] for the Magic figures. Breakdowns by rarity,
-/// condition and language are card concepts, so mixing accessories into them
-/// would only add noise.
-pub fn get_db_stats(category: &str) -> DbResult<DbStats> {
-    let conn = open_db()?;
-    get_db_stats_conn(&conn, category, &today_date())
+impl InventoryDb {
+    /// Queries aggregate statistics for one category of the local inventory database.
+    ///
+    /// Pass [`DEFAULT_CATEGORY`] for the Magic figures. Breakdowns by rarity,
+    /// condition and language are card concepts, so mixing accessories into them
+    /// would only add noise.
+    pub fn get_db_stats(&self, category: &str) -> DbResult<DbStats> {
+        let conn = self.open()?;
+        get_db_stats_conn(&conn, category, &today_date())
+    }
 }
 
-/// Returns the distinct categories present in the database, alphabetically.
-///
-/// Lets the UI offer a category switcher without hardcoding the list.
-pub fn get_categories() -> DbResult<Vec<String>> {
-    let conn = open_db()?;
-    get_categories_conn(&conn)
+impl InventoryDb {
+    /// Returns the distinct categories present in the database, alphabetically.
+    ///
+    /// Lets the UI offer a category switcher without hardcoding the list.
+    pub fn get_categories(&self) -> DbResult<Vec<String>> {
+        let conn = self.open()?;
+        get_categories_conn(&conn)
+    }
 }
 
 /// Inner query that accepts an explicit connection — used in tests.
@@ -1498,13 +1533,15 @@ fn get_categories_conn(conn: &Connection) -> DbResult<Vec<String>> {
         .collect()
 }
 
-/// Records (or corrects) the total acquisition cost for a lot, in EUR.
-///
-/// Upserts by lot ID: entering a cost for a lot that already has one overwrites
-/// it, so a mistaken buy price can be fixed. `cost` must be non-negative.
-pub fn set_lot_cost(lot: &str, cost: f64) -> DbResult<()> {
-    let conn = open_db()?;
-    set_lot_cost_conn(&conn, lot, cost, &today_date())
+impl InventoryDb {
+    /// Records (or corrects) the total acquisition cost for a lot, in EUR.
+    ///
+    /// Upserts by lot ID: entering a cost for a lot that already has one overwrites
+    /// it, so a mistaken buy price can be fixed. `cost` must be non-negative.
+    pub fn set_lot_cost(&self, lot: &str, cost: f64) -> DbResult<()> {
+        let conn = self.open()?;
+        set_lot_cost_conn(&conn, lot, cost, &today_date())
+    }
 }
 
 /// Inner upsert that accepts an explicit connection and date — used in tests.
@@ -1522,10 +1559,12 @@ fn set_lot_cost_conn(conn: &Connection, lot: &str, cost: f64, today: &str) -> Db
     Ok(())
 }
 
-/// Removes the recorded acquisition cost for a lot, if any.
-pub fn delete_lot_cost(lot: &str) -> DbResult<()> {
-    let conn = open_db()?;
-    delete_lot_cost_conn(&conn, lot)
+impl InventoryDb {
+    /// Removes the recorded acquisition cost for a lot, if any.
+    pub fn delete_lot_cost(&self, lot: &str) -> DbResult<()> {
+        let conn = self.open()?;
+        delete_lot_cost_conn(&conn, lot)
+    }
 }
 
 /// Inner delete that accepts an explicit connection — used in tests.
@@ -1534,15 +1573,17 @@ fn delete_lot_cost_conn(conn: &Connection, lot: &str) -> DbResult<()> {
     Ok(())
 }
 
-/// Returns every in-stock card variant (quantity > 0) in the given category.
-///
-/// Pass [`DEFAULT_CATEGORY`] for the Magic inventory. Card-analysis features
-/// (mispricing, aging) want a single category: accessories carry no rarity or
-/// set and their prices are unrelated to card prices, so blending them in would
-/// distort the results.
-pub fn get_in_stock_cards(category: &str) -> DbResult<Vec<InStockCard>> {
-    let conn = open_db()?;
-    get_in_stock_cards_conn(&conn, category)
+impl InventoryDb {
+    /// Returns every in-stock card variant (quantity > 0) in the given category.
+    ///
+    /// Pass [`DEFAULT_CATEGORY`] for the Magic inventory. Card-analysis features
+    /// (mispricing, aging) want a single category: accessories carry no rarity or
+    /// set and their prices are unrelated to card prices, so blending them in would
+    /// distort the results.
+    pub fn get_in_stock_cards(&self, category: &str) -> DbResult<Vec<InStockCard>> {
+        let conn = self.open()?;
+        get_in_stock_cards_conn(&conn, category)
+    }
 }
 
 /// Inner query that accepts an explicit connection — used in tests.
@@ -1575,10 +1616,12 @@ fn get_in_stock_cards_conn(conn: &Connection, category: &str) -> DbResult<Vec<In
     .collect()
 }
 
-/// Returns every recorded sold event in the given category, oldest first.
-pub fn get_sold_events(category: &str) -> DbResult<Vec<SoldEvent>> {
-    let conn = open_db()?;
-    get_sold_events_conn(&conn, category)
+impl InventoryDb {
+    /// Returns every recorded sold event in the given category, oldest first.
+    pub fn get_sold_events(&self, category: &str) -> DbResult<Vec<SoldEvent>> {
+        let conn = self.open()?;
+        get_sold_events_conn(&conn, category)
+    }
 }
 
 /// Inner query that accepts an explicit connection — used in tests.
@@ -1602,12 +1645,17 @@ fn get_sold_events_conn(conn: &Connection, category: &str) -> DbResult<Vec<SoldE
     .collect()
 }
 
-/// Sale history per variant of a category, keyed by article key (the key
-/// [`card_variant_key`] builds for a CSV row): `(date, copies)` pairs, oldest
-/// first. Discards and bulk-lot removals never appear (they record no sales).
-pub fn get_sales_by_variant(category: &str) -> DbResult<HashMap<String, Vec<(String, i64)>>> {
-    let conn = open_db()?;
-    sales_by_variant_conn(&conn, category)
+impl InventoryDb {
+    /// Sale history per variant of a category, keyed by article key (the key
+    /// [`card_variant_key`] builds for a CSV row): `(date, copies)` pairs, oldest
+    /// first. Discards and bulk-lot removals never appear (they record no sales).
+    pub fn get_sales_by_variant(
+        &self,
+        category: &str,
+    ) -> DbResult<HashMap<String, Vec<(String, i64)>>> {
+        let conn = self.open()?;
+        sales_by_variant_conn(&conn, category)
+    }
 }
 
 /// Inner query that accepts an explicit connection — used in tests.
@@ -1641,16 +1689,21 @@ fn sales_by_variant_conn(
     Ok(out)
 }
 
-/// Returns every sold-out variant (quantity 0, sold copies > 0) in the given
-/// category, enriched with its sale history — the raw input for the restock
-/// recommendations report.
-///
-/// Pass `None` to span all categories. Restocking is a purchasing decision, and
-/// fast-moving accessories (sleeves, deck boxes) are as worth re-buying as
-/// cards, so the report defaults to everything.
-pub fn get_restock_candidates(category: Option<&str>) -> DbResult<Vec<RestockCandidate>> {
-    let conn = open_db()?;
-    get_restock_candidates_conn(&conn, category)
+impl InventoryDb {
+    /// Returns every sold-out variant (quantity 0, sold copies > 0) in the given
+    /// category, enriched with its sale history — the raw input for the restock
+    /// recommendations report.
+    ///
+    /// Pass `None` to span all categories. Restocking is a purchasing decision, and
+    /// fast-moving accessories (sleeves, deck boxes) are as worth re-buying as
+    /// cards, so the report defaults to everything.
+    pub fn get_restock_candidates(
+        &self,
+        category: Option<&str>,
+    ) -> DbResult<Vec<RestockCandidate>> {
+        let conn = self.open()?;
+        get_restock_candidates_conn(&conn, category)
+    }
 }
 
 /// Reads one value from the app bookkeeping store.
@@ -1691,13 +1744,15 @@ pub struct VisitDigest {
     pub bulk_lots: BulkLotTotals,
 }
 
-/// Builds the since-last-visit digest and records today as the latest visit.
-///
-/// Visits are tracked per day: starting the app again on the same day keeps
-/// the same baseline instead of resetting the digest to empty.
-pub fn visit_digest() -> DbResult<VisitDigest> {
-    let conn = open_db()?;
-    visit_digest_conn(&conn, &today_date())
+impl InventoryDb {
+    /// Builds the since-last-visit digest and records today as the latest visit.
+    ///
+    /// Visits are tracked per day: starting the app again on the same day keeps
+    /// the same baseline instead of resetting the digest to empty.
+    pub fn visit_digest(&self) -> DbResult<VisitDigest> {
+        let conn = self.open()?;
+        visit_digest_conn(&conn, &today_date())
+    }
 }
 
 /// Inner digest that accepts an explicit connection and date — used in tests.
@@ -2563,17 +2618,25 @@ fn sync_lot_stock(
 /// How many daily backups of the inventory DB file to keep.
 const BACKUP_KEEP: usize = 3;
 
-/// Takes a dated snapshot of the inventory DB next to it
-/// (`inventory-YYYY-MM-DD.db.bak`) before the first write of the day, and
-/// prunes old backups. Uses SQLite's `VACUUM INTO` so the snapshot is
-/// consistent regardless of journal mode. Failures are logged, never fatal —
-/// a backup must not block a sync.
-fn backup_db_file(conn: &Connection, today: &str) {
-    let Some(dir) = db_path().parent().map(std::path::Path::to_path_buf) else {
-        return;
-    };
-    if let Err(e) = backup_db_at(conn, &dir, today, BACKUP_KEEP) {
-        log::warn!("Inventory DB backup failed: {e}");
+impl InventoryDb {
+    /// Takes a dated snapshot of the inventory DB next to it
+    /// (`inventory-YYYY-MM-DD.db.bak`) before the first write of the day, and
+    /// prunes old backups. Uses SQLite's `VACUUM INTO` so the snapshot is
+    /// consistent regardless of journal mode. Failures are logged, never fatal —
+    /// a backup must not block a sync.
+    fn backup(&self, conn: &Connection, today: &str) {
+        if let Err(e) = backup_db_at(conn, &self.backup_dir(), today, BACKUP_KEEP) {
+            log::warn!("Inventory DB backup failed: {e}");
+        }
+    }
+
+    /// Folder the dated backups go to: the database's own folder (`.` for a
+    /// bare file name such as `inventory.db`).
+    fn backup_dir(&self) -> PathBuf {
+        match self.path.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+            _ => PathBuf::from("."),
+        }
     }
 }
 

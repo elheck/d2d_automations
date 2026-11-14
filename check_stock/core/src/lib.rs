@@ -1,0 +1,47 @@
+//! Logic and data layer of the MTG stock checker.
+//!
+//! No UI and no platform paths: callers pass every file location in
+//! ([`inventory_db::InventoryDb`], the `cache` types' `in_root`), so the
+//! desktop app and a server can keep their data wherever they need.
+
+pub mod aging;
+pub mod api;
+pub mod bin_consolidation;
+pub mod bulk_lot;
+pub mod buy_helper;
+pub mod cache;
+pub mod card_matching;
+pub mod card_types;
+pub mod category;
+pub mod consistency;
+pub mod deck_fetch;
+pub mod error;
+pub mod formatters;
+pub mod inventory_db;
+pub mod io;
+pub mod mispricing;
+pub mod models;
+pub mod precon_ev;
+pub mod precon_loader;
+pub mod price_trends;
+pub mod repricing;
+pub mod restock;
+pub mod stock_analysis;
+pub mod wantslist;
+
+// Re-export commonly used items
+pub use api::{fetch_card, PriceGuide, ScryfallCard};
+pub use bin_consolidation::{plan_consolidation, ConsolidationPlan, Move as BinMove};
+pub use cache::{fetch_card_cached, CardCache, ImageCache};
+pub use card_matching::{find_matching_cards, MatchedCard};
+pub use category::{canonical_category, detect_category, DEFAULT_CATEGORY, GENERIC_CATEGORY};
+pub use deck_fetch::{fetch_deck, parse_deck_url, DeckSource};
+pub use error::{ApiError, ApiResult};
+pub use formatters::{format_picking_list, format_regular_output};
+pub use inventory_db::InventoryDb;
+pub use io::{load_wantslist, read_csv, read_csv_with_category, read_wantslist};
+pub use models::{Card, Language, WantsEntry};
+pub use precon_ev::{build_rows, DeckEv, PreconData, PreconRow};
+pub use restock::{format_buy_list_csv, rank_candidates, RankedRestock};
+pub use stock_analysis::{format_stock_analysis_with_sort, SortOrder, StockAnalysis, StockStats};
+pub use wantslist::{parse_wantslist, ParsedLine, WantslistParse};

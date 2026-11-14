@@ -650,6 +650,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "check_stock_core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "csv",
+ "lazy_static",
+ "log",
+ "mtg_common",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-test",
+ "wiremock",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -833,6 +853,7 @@ checksum = "96a6ac251f4a2aca6b3f91340350eab87ae57c3f127ffeb585e92bd336717991"
 name = "d2d_automations"
 version = "0.1.0"
 dependencies = [
+ "check_stock_core",
  "chrono",
  "csv",
  "dirs",
@@ -840,20 +861,11 @@ dependencies = [
  "egui_extras",
  "env_logger",
  "image",
- "lazy_static",
  "log",
- "mtg_common",
- "regex",
- "reqwest",
  "rfd",
- "rusqlite",
- "serde",
- "serde_json",
  "tempfile",
  "tokio",
- "tokio-test",
  "winit",
- "wiremock",
 ]
 
 [[package]]

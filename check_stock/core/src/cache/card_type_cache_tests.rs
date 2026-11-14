@@ -79,3 +79,20 @@ fn save_without_changes_writes_nothing() {
     cache.save();
     assert!(!dir.path().join(TYPES_FILE).exists());
 }
+
+#[test]
+fn in_root_keeps_types_in_their_own_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let mut cache = CardTypeCache::in_root(root.path());
+    cache.insert("MH3", "12", "Land");
+    cache.save();
+    assert!(root.path().join("card_types").join(TYPES_FILE).exists());
+    let reloaded = CardTypeCache::in_root(root.path());
+    assert_eq!(reloaded.type_line("mh3", "12"), Some("Land"));
+}
+
+#[test]
+fn folder_name_is_stable() {
+    // Renaming it would orphan every existing type cache.
+    assert_eq!(CardTypeCache::DIR_NAME, "card_types");
+}

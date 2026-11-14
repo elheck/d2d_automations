@@ -31,27 +31,20 @@ struct CachedTypes {
     missing: HashMap<String, String>,
 }
 
-/// Type-line cache under `<cache>/d2d_automations/card_types/`.
+/// Type-line cache under `<cache root>/card_types/`.
 pub struct CardTypeCache {
     files: FileCache,
     data: CachedTypes,
     dirty: bool,
 }
 
-impl Default for CardTypeCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl CardTypeCache {
-    /// Loads the cache from the platform cache directory.
-    pub fn new() -> Self {
-        let dir = dirs::cache_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("d2d_automations")
-            .join("card_types");
-        Self::with_dir(dir)
+    /// Folder of this cache inside the application's cache root.
+    pub const DIR_NAME: &'static str = "card_types";
+
+    /// Loads the type cache inside the application's cache root (`<root>/card_types`).
+    pub fn in_root(cache_root: &std::path::Path) -> Self {
+        Self::with_dir(cache_root.join(Self::DIR_NAME))
     }
 
     /// Loads a cache rooted at the given directory (used by tests).

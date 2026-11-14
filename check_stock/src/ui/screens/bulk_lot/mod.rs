@@ -24,7 +24,7 @@ use crate::bulk_lot::{
 use crate::cache::CardTypeCache;
 use crate::card_types::{lookup_types, LookupOutcome, LookupProgress, Printing};
 use crate::category::DEFAULT_CATEGORY;
-use crate::inventory_db::{self, BulkLotCard, BulkLotSummary, PendingRemoval};
+use crate::inventory_db::{BulkLotCard, BulkLotSummary, PendingRemoval};
 use crate::io::read_csv_with_category;
 use crate::models::Card;
 use crate::ui::components::CardImages;
@@ -176,7 +176,7 @@ pub struct BulkLotState {
 
 impl Default for BulkLotState {
     fn default() -> Self {
-        Self::with_type_cache(CardTypeCache::new())
+        Self::with_type_cache(crate::paths::card_type_cache())
     }
 }
 
@@ -590,7 +590,7 @@ impl BulkLotScreen {
         let generation = app_state.db_generation;
         if state.history_generation != Some(generation) {
             state.history_generation = Some(generation);
-            match inventory_db::list_bulk_lots() {
+            match crate::paths::inventory_db().list_bulk_lots() {
                 Ok(lots) => {
                     state.history = lots;
                     state.history_error = None;
@@ -602,7 +602,9 @@ impl BulkLotScreen {
             if let Some((id, _)) = state.selected_lot {
                 state.selected_lot = Some((
                     id,
-                    inventory_db::get_bulk_lot_cards(id).map_err(|e| e.to_string()),
+                    crate::paths::inventory_db()
+                        .get_bulk_lot_cards(id)
+                        .map_err(|e| e.to_string()),
                 ));
             }
         }
@@ -614,8 +616,8 @@ impl BulkLotScreen {
             && state.candidates_generation != Some(generation)
         {
             state.candidates_generation = Some(generation);
-            let dates = inventory_db::get_listing_dates(DEFAULT_CATEGORY);
-            let pending = inventory_db::get_pending_bulk_removals(DEFAULT_CATEGORY);
+            let dates = crate::paths::inventory_db().get_listing_dates(DEFAULT_CATEGORY);
+            let pending = crate::paths::inventory_db().get_pending_bulk_removals(DEFAULT_CATEGORY);
             match (dates, pending) {
                 (Ok(dates), Ok(pending)) => state.rebuild_candidates(&dates, &pending, today),
                 (Err(e), _) | (_, Err(e)) => {
@@ -806,7 +808,7 @@ impl BulkLotScreen {
         }
         match confirm {
             Confirm::LeavePicking => state.back_to_define(),
-            Confirm::UndoLot(lot) => match inventory_db::delete_bulk_lot(lot.id) {
+            Confirm::UndoLot(lot) => match crate::paths::inventory_db().delete_bulk_lot(lot.id) {
                 Ok(()) => {
                     if state
                         .selected_lot
@@ -819,12 +821,14 @@ impl BulkLotScreen {
                 }
                 Err(e) => state.history_error = Some(format!("Could not undo “{}”: {e}", lot.name)),
             },
-            Confirm::MarkRemoved(lot) => match inventory_db::mark_bulk_lot_removed(lot.id) {
-                Ok(()) => app_state.mark_db_changed(),
-                Err(e) => {
-                    state.history_error = Some(format!("Could not update “{}”: {e}", lot.name))
+            Confirm::MarkRemoved(lot) => {
+                match crate::paths::inventory_db().mark_bulk_lot_removed(lot.id) {
+                    Ok(()) => app_state.mark_db_changed(),
+                    Err(e) => {
+                        state.history_error = Some(format!("Could not update “{}”: {e}", lot.name))
+                    }
                 }
-            },
+            }
         }
     }
 }

@@ -1052,3 +1052,9 @@ fn descriptions_read_naturally() {
         "Keep current price"
     );
 }
+
+#[test]
+fn ruleset_file_name_is_stable() {
+    // Renaming it would lose every saved working ruleset.
+    assert_eq!(RULESET_FILE_NAME, "repricing_ruleset.json");
+}

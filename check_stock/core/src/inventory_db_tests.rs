@@ -3133,3 +3133,79 @@ fn sales_by_variant_is_scoped_to_category() {
         .unwrap()
         .is_empty());
 }
+
+// ── InventoryDb handle (the app passes the location in) ────────────────────
+
+#[test]
+fn handle_paths() {
+    let db = InventoryDb::at("/srv/data/inventory.db");
+    assert_eq!(db.path(), Path::new("/srv/data/inventory.db"));
+    assert_eq!(
+        InventoryDb::in_dir(Path::new("/srv/data")),
+        InventoryDb::at("/srv/data/inventory.db")
+    );
+    // Renaming it would make every app start with an empty database.
+    assert_eq!(InventoryDb::FILE_NAME, "inventory.db");
+}
+
+#[test]
+fn backups_go_next_to_the_database() {
+    assert_eq!(
+        InventoryDb::at("/srv/data/inventory.db").backup_dir(),
+        PathBuf::from("/srv/data")
+    );
+    // A bare file name lives in the working directory, and so do its backups.
+    assert_eq!(
+        InventoryDb::at("inventory.db").backup_dir(),
+        PathBuf::from(".")
+    );
+}
+
+#[test]
+fn handle_creates_the_database_at_its_own_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = InventoryDb::in_dir(&dir.path().join("nested"));
+    assert!(!db.path().exists());
+
+    let mut card = Card::test_default();
+    card.quantity = "3".to_string();
+    let outcome = db.sync_inventory(&[card], CAT).unwrap();
+    assert!(matches!(outcome, SyncOutcome::Synced(_)));
+    assert!(db.path().exists());
+
+    let backups: Vec<String> = std::fs::read_dir(dir.path().join("nested"))
+        .unwrap()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|n| n.starts_with("inventory-") && n.ends_with(".db.bak"))
+        .collect();
+    assert_eq!(backups, [format!("inventory-{}.db.bak", today_date())]);
+
+    let stock = db.get_in_stock_cards(CAT).unwrap();
+    assert_eq!(stock.len(), 1);
+    assert!(db.list_bulk_lots().unwrap().is_empty());
+    assert_eq!(db.get_categories().unwrap(), [CAT]);
+}
+
+#[test]
+fn handle_is_shared_with_worker_threads() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = InventoryDb::in_dir(dir.path());
+    db.sync_inventory(&[Card::test_default()], CAT).unwrap();
+
+    let worker = db.clone();
+    let seen = std::thread::spawn(move || worker.get_in_stock_cards(CAT).unwrap().len())
+        .join()
+        .unwrap();
+    assert_eq!(seen, 1);
+}
+
+#[test]
+fn two_databases_never_mix() {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let db_a = InventoryDb::in_dir(a.path());
+    let db_b = InventoryDb::in_dir(b.path());
+    db_a.sync_inventory(&[Card::test_default()], CAT).unwrap();
+    assert_eq!(db_a.get_in_stock_cards(CAT).unwrap().len(), 1);
+    assert!(db_b.get_in_stock_cards(CAT).unwrap().is_empty());
+}

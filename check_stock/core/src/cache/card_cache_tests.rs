@@ -138,3 +138,58 @@ fn test_serialization_format() {
     // Verify the key format in JSON
     assert!(json.contains("\"lea/1\""));
 }
+
+#[test]
+fn load_in_starts_empty_and_saves_to_its_file() {
+    let root = tempfile::tempdir().unwrap();
+    let mut cache = CardCache::load_in(root.path());
+    assert!(cache.is_empty());
+    cache.insert("lea", "1", create_test_card("Black Lotus", "lea", "1"));
+    cache.save().unwrap();
+    assert!(root.path().join("scryfall_cache.json").exists());
+
+    let reloaded = CardCache::load_in(root.path());
+    assert_eq!(reloaded.len(), 1);
+    assert_eq!(reloaded.get("LEA", "1").unwrap().name, "Black Lotus");
+}
+
+#[test]
+fn file_location_is_not_written_into_the_file() {
+    // The on-disk format stays `{"cards": {...}}`, as written by older versions.
+    let root = tempfile::tempdir().unwrap();
+    let mut cache = CardCache::load_in(root.path());
+    cache.insert("lea", "1", create_test_card("Black Lotus", "lea", "1"));
+    cache.save().unwrap();
+    let json: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.path().join("scryfall_cache.json")).unwrap(),
+    )
+    .unwrap();
+    let keys: Vec<&String> = json.as_object().unwrap().keys().collect();
+    assert_eq!(keys, ["cards"]);
+}
+
+#[test]
+fn unreadable_file_starts_empty_and_is_replaced_on_save() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("scryfall_cache.json");
+    std::fs::write(&file, "not json").unwrap();
+    let mut cache = CardCache::load_in(root.path());
+    assert!(cache.is_empty());
+    cache.insert("lea", "1", create_test_card("Black Lotus", "lea", "1"));
+    cache.save().unwrap();
+    assert_eq!(CardCache::load_from(file).len(), 1);
+}
+
+#[test]
+fn default_cache_is_in_memory_only() {
+    let mut cache = CardCache::default();
+    cache.insert("lea", "1", create_test_card("Black Lotus", "lea", "1"));
+    assert!(cache.save().is_ok());
+    assert!(!std::path::Path::new(CardCache::FILE_NAME).exists());
+}
+
+#[test]
+fn file_name_is_stable() {
+    // Renaming it would orphan every existing Scryfall cache.
+    assert_eq!(CardCache::FILE_NAME, "scryfall_cache.json");
+}

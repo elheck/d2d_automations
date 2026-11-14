@@ -1,6 +1,6 @@
 # Performance Testing for Search Function
 
-This document describes the performance testing suite for the `find_matching_cards` search function in the d2d_automations check_stock module.
+This document describes the performance testing suite for the `find_matching_cards` search function in `check_stock_core` (`check_stock/core/`; run the commands below from `check_stock/` or `check_stock/core/`).
 
 ## Overview
 

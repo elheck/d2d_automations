@@ -212,9 +212,10 @@ impl Card {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Card {
     /// Creates a Card with sensible defaults for testing.
+    /// (`test-support` feature: also available to crates testing against this one.)
     /// Override individual fields as needed: `let mut c = Card::test_default(); c.name = "...".into();`
     pub fn test_default() -> Card {
         Card {

@@ -16,8 +16,8 @@
 //!   never matters whether the Powertools import or the next sync comes first.
 
 use super::{
-    article_key, canonical_condition, card_lot, normalize_flag, normalize_language, open_db,
-    parse_csv_price, today_date, DbResult,
+    article_key, canonical_condition, card_lot, normalize_flag, normalize_language,
+    parse_csv_price, today_date, DbResult, InventoryDb,
 };
 use crate::models::Card;
 use rusqlite::{params, Connection};
@@ -159,17 +159,20 @@ fn validate_price(price: f64) -> DbResult<()> {
     }
 }
 
-/// Records a built lot: books `price` as revenue today and registers every
-/// copy as a pending removal. `cards` are inventory CSV rows with the number
-/// of copies taken from each. Returns the new lot's id.
-pub fn record_bulk_lot(
-    name: &str,
-    price: f64,
-    cards: &[(Card, i64)],
-    category: &str,
-) -> DbResult<i64> {
-    let mut conn = open_db()?;
-    record_bulk_lot_conn(&mut conn, name, price, cards, category, &today_date())
+impl InventoryDb {
+    /// Records a built lot: books `price` as revenue today and registers every
+    /// copy as a pending removal. `cards` are inventory CSV rows with the number
+    /// of copies taken from each. Returns the new lot's id.
+    pub fn record_bulk_lot(
+        &self,
+        name: &str,
+        price: f64,
+        cards: &[(Card, i64)],
+        category: &str,
+    ) -> DbResult<i64> {
+        let mut conn = self.open()?;
+        record_bulk_lot_conn(&mut conn, name, price, cards, category, &today_date())
+    }
 }
 
 /// Inner write that accepts an explicit connection and date — used in tests.
@@ -238,10 +241,12 @@ pub(super) fn record_bulk_lot_conn(
     Ok(lot_id)
 }
 
-/// All built lots, newest first.
-pub fn list_bulk_lots() -> DbResult<Vec<BulkLotSummary>> {
-    let conn = open_db()?;
-    list_bulk_lots_conn(&conn)
+impl InventoryDb {
+    /// All built lots, newest first.
+    pub fn list_bulk_lots(&self) -> DbResult<Vec<BulkLotSummary>> {
+        let conn = self.open()?;
+        list_bulk_lots_conn(&conn)
+    }
 }
 
 pub(super) fn list_bulk_lots_conn(conn: &Connection) -> DbResult<Vec<BulkLotSummary>> {
@@ -269,10 +274,12 @@ pub(super) fn list_bulk_lots_conn(conn: &Connection) -> DbResult<Vec<BulkLotSumm
     .collect()
 }
 
-/// The cards of one lot, in picking order (by location).
-pub fn get_bulk_lot_cards(lot_id: i64) -> DbResult<Vec<BulkLotCard>> {
-    let conn = open_db()?;
-    bulk_lot_cards_conn(&conn, lot_id)
+impl InventoryDb {
+    /// The cards of one lot, in picking order (by location).
+    pub fn get_bulk_lot_cards(&self, lot_id: i64) -> DbResult<Vec<BulkLotCard>> {
+        let conn = self.open()?;
+        bulk_lot_cards_conn(&conn, lot_id)
+    }
 }
 
 pub(super) fn bulk_lot_cards_conn(conn: &Connection, lot_id: i64) -> DbResult<Vec<BulkLotCard>> {
@@ -300,11 +307,13 @@ pub(super) fn bulk_lot_cards_conn(conn: &Connection, lot_id: i64) -> DbResult<Ve
     .collect()
 }
 
-/// Corrects the price a lot sold for. Its per-copy revenue follows, since it
-/// is always derived from the lot price.
-pub fn set_bulk_lot_price(lot_id: i64, price: f64) -> DbResult<()> {
-    let conn = open_db()?;
-    set_bulk_lot_price_conn(&conn, lot_id, price)
+impl InventoryDb {
+    /// Corrects the price a lot sold for. Its per-copy revenue follows, since it
+    /// is always derived from the lot price.
+    pub fn set_bulk_lot_price(&self, lot_id: i64, price: f64) -> DbResult<()> {
+        let conn = self.open()?;
+        set_bulk_lot_price_conn(&conn, lot_id, price)
+    }
 }
 
 pub(super) fn set_bulk_lot_price_conn(conn: &Connection, lot_id: i64, price: f64) -> DbResult<()> {
@@ -318,12 +327,14 @@ pub(super) fn set_bulk_lot_price_conn(conn: &Connection, lot_id: i64, price: f64
     }
 }
 
-/// Declares a lot's removals done without waiting for a sync to see them —
-/// for when the inventory already reflects them but no sync could tell (for
-/// example because the same card was restocked at the same time).
-pub fn mark_bulk_lot_removed(lot_id: i64) -> DbResult<()> {
-    let conn = open_db()?;
-    mark_bulk_lot_removed_conn(&conn, lot_id)
+impl InventoryDb {
+    /// Declares a lot's removals done without waiting for a sync to see them —
+    /// for when the inventory already reflects them but no sync could tell (for
+    /// example because the same card was restocked at the same time).
+    pub fn mark_bulk_lot_removed(&self, lot_id: i64) -> DbResult<()> {
+        let conn = self.open()?;
+        mark_bulk_lot_removed_conn(&conn, lot_id)
+    }
 }
 
 pub(super) fn mark_bulk_lot_removed_conn(conn: &Connection, lot_id: i64) -> DbResult<()> {
@@ -334,11 +345,13 @@ pub(super) fn mark_bulk_lot_removed_conn(conn: &Connection, lot_id: i64) -> DbRe
     Ok(())
 }
 
-/// Deletes a lot with its revenue and pending removals. Copies whose removal
-/// no sync has seen yet count as ordinary stock again.
-pub fn delete_bulk_lot(lot_id: i64) -> DbResult<()> {
-    let mut conn = open_db()?;
-    delete_bulk_lot_conn(&mut conn, lot_id)
+impl InventoryDb {
+    /// Deletes a lot with its revenue and pending removals. Copies whose removal
+    /// no sync has seen yet count as ordinary stock again.
+    pub fn delete_bulk_lot(&self, lot_id: i64) -> DbResult<()> {
+        let mut conn = self.open()?;
+        delete_bulk_lot_conn(&mut conn, lot_id)
+    }
 }
 
 pub(super) fn delete_bulk_lot_conn(conn: &mut Connection, lot_id: i64) -> DbResult<()> {
@@ -356,10 +369,12 @@ pub(super) fn delete_bulk_lot_conn(conn: &mut Connection, lot_id: i64) -> DbResu
     Ok(())
 }
 
-/// Pending removals of one category, oldest lot first.
-pub fn get_pending_bulk_removals(category: &str) -> DbResult<Vec<PendingRemoval>> {
-    let conn = open_db()?;
-    pending_removals_conn(&conn, category)
+impl InventoryDb {
+    /// Pending removals of one category, oldest lot first.
+    pub fn get_pending_bulk_removals(&self, category: &str) -> DbResult<Vec<PendingRemoval>> {
+        let conn = self.open()?;
+        pending_removals_conn(&conn, category)
+    }
 }
 
 pub(super) fn pending_removals_conn(
@@ -393,12 +408,14 @@ pub(super) fn pending_removals_conn(
     .collect()
 }
 
-/// When each variant of a category was listed: `listed_at`, or the first sync
-/// that saw it when Cardmarket's export carries no listing date. Keyed by
-/// article key; used to tell how long a card has sat in stock.
-pub fn get_listing_dates(category: &str) -> DbResult<HashMap<String, String>> {
-    let conn = open_db()?;
-    listing_dates_conn(&conn, category)
+impl InventoryDb {
+    /// When each variant of a category was listed: `listed_at`, or the first sync
+    /// that saw it when Cardmarket's export carries no listing date. Keyed by
+    /// article key; used to tell how long a card has sat in stock.
+    pub fn get_listing_dates(&self, category: &str) -> DbResult<HashMap<String, String>> {
+        let conn = self.open()?;
+        listing_dates_conn(&conn, category)
+    }
 }
 
 pub(super) fn listing_dates_conn(

@@ -55,3 +55,24 @@ fn corrupt_schema_or_window_mismatch_is_ignored() {
         assert!(cache.load("2026-10-17").is_none());
     }
 }
+
+#[test]
+fn in_root_keeps_sales_in_their_own_folder() {
+    let root = tempfile::tempdir().unwrap();
+    SalesCache::in_root(root.path()).store("2026-10-17", &stats());
+    assert!(root
+        .path()
+        .join("precon_sales")
+        .join("sales_stats.json")
+        .exists());
+    assert_eq!(
+        SalesCache::in_root(root.path()).load("2026-10-17"),
+        Some(stats())
+    );
+}
+
+#[test]
+fn folder_name_is_stable() {
+    // Renaming it would orphan every existing sales cache.
+    assert_eq!(SalesCache::DIR_NAME, "precon_sales");
+}

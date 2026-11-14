@@ -8,7 +8,7 @@ use std::io;
 ///
 /// Cardmarket exports one report per category; the category must travel with
 /// the rows so a sync only claims ownership of its own slice of the database
-/// (see [`crate::inventory_db::sync_inventory`]).
+/// (see [`crate::inventory_db::InventoryDb::sync_inventory`]).
 #[derive(Debug, Clone)]
 pub struct InventoryCsv {
     pub cards: Vec<Card>,

@@ -52,7 +52,7 @@ impl CardImages {
             textures: HashMap::new(),
             loading: HashSet::new(),
             failed: HashSet::new(),
-            cache: ImageCache::new(),
+            cache: crate::paths::image_cache(),
             runtime: None,
             tx,
             rx,

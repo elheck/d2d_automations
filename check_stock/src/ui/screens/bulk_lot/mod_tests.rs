@@ -255,7 +255,7 @@ fn copies_promised_to_pending_lots_are_left_out() {
     let pending = vec![PendingRemoval {
         id: 1,
         bulk_lot_id: 1,
-        variant: inventory_db::card_variant_key(&beta, DEFAULT_CATEGORY),
+        variant: crate::inventory_db::card_variant_key(&beta, DEFAULT_CATEGORY),
         purchase_lot: "L1".into(),
         location: "A-0-0-1-L1-R".into(),
         pending: 1,

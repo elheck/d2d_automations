@@ -8,20 +8,13 @@ pub struct ImageCache {
     files: FileCache,
 }
 
-impl Default for ImageCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ImageCache {
-    /// Create a new image cache in the platform cache directory
-    pub fn new() -> Self {
-        let cache_dir = dirs::cache_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("d2d_automations")
-            .join("images");
-        Self::with_dir(cache_dir)
+    /// Folder of this cache inside the application's cache root.
+    pub const DIR_NAME: &'static str = "images";
+
+    /// The image cache inside the application's cache root (`<root>/images`).
+    pub fn in_root(cache_root: &std::path::Path) -> Self {
+        Self::with_dir(cache_root.join(Self::DIR_NAME))
     }
 
     /// Create an image cache rooted at the given directory (used by tests)

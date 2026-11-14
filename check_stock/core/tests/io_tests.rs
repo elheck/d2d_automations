@@ -1,5 +1,5 @@
-use d2d_automations::io::{read_csv, read_csv_with_category, read_wantslist};
-use d2d_automations::models::Card;
+use check_stock_core::io::{read_csv, read_csv_with_category, read_wantslist};
+use check_stock_core::models::Card;
 use std::io::Write;
 use tempfile::NamedTempFile;
 

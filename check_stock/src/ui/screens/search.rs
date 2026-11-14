@@ -428,7 +428,9 @@ impl SearchScreen {
             .iter()
             .map(|sc| (sc.card.clone(), sc.quantity as i64))
             .collect();
-        match crate::inventory_db::discard_cards(&discards, crate::category::DEFAULT_CATEGORY) {
+        match crate::paths::inventory_db()
+            .discard_cards(&discards, crate::category::DEFAULT_CATEGORY)
+        {
             Ok(stats) => {
                 info!(
                     "Discarded {} copies across {} variants",

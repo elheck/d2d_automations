@@ -119,3 +119,19 @@ fn needs_rebuild_rules() {
     other.schema = INDEX_SCHEMA + 1;
     assert!(needs_rebuild(Some(&other), &[1], now));
 }
+
+#[test]
+fn in_root_keeps_decks_in_their_own_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = DeckCache::in_root(root.path());
+    assert_eq!(
+        cache.deck_dir(),
+        root.path().join("mtgjson_v1").join("decks")
+    );
+}
+
+#[test]
+fn folder_name_is_stable() {
+    // Renaming it would orphan every existing MTGJSON cache.
+    assert_eq!(DeckCache::DIR_NAME, "mtgjson_v1");
+}

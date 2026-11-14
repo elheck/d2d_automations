@@ -31,25 +31,18 @@ struct CachedSales {
     stats: SalesMap,
 }
 
-/// Sales-stats cache under `<cache>/d2d_automations/precon_sales/`.
+/// Sales-stats cache under `<cache root>/precon_sales/`.
 pub struct SalesCache {
     files: FileCache,
 }
 
-impl Default for SalesCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SalesCache {
-    /// Create the cache in the platform cache directory.
-    pub fn new() -> Self {
-        let dir = dirs::cache_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("d2d_automations")
-            .join("precon_sales");
-        Self::with_dir(dir)
+    /// Folder of this cache inside the application's cache root.
+    pub const DIR_NAME: &'static str = "precon_sales";
+
+    /// The sales cache inside the application's cache root (`<root>/precon_sales`).
+    pub fn in_root(cache_root: &std::path::Path) -> Self {
+        Self::with_dir(cache_root.join(Self::DIR_NAME))
     }
 
     /// Create a cache rooted at the given directory (used by tests).

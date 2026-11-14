@@ -4,7 +4,7 @@
 //! complete for its own category but says nothing about the others, so a sync
 //! must only ever claim ownership of the rows in its own category — otherwise
 //! loading `inventory-report-Generic.csv` would zero out every Magic card (see
-//! [`crate::inventory_db::sync_inventory`]).
+//! [`crate::inventory_db::InventoryDb::sync_inventory`]).
 //!
 //! Product IDs are namespaced per category too: a sleeve and a Magic card can
 //! both carry `cardmarketId` 716833 while being entirely different products.

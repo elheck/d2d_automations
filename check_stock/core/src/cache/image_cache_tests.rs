@@ -171,3 +171,19 @@ fn test_large_image_data() {
     assert!(retrieved.is_some());
     assert_eq!(retrieved.unwrap(), large_data);
 }
+
+#[test]
+fn in_root_keeps_images_in_their_own_folder() {
+    let root = TempDir::new().unwrap();
+    let cache = ImageCache::in_root(root.path());
+    assert_eq!(cache.cache_dir(), root.path().join("images"));
+    cache.insert("lea", "1", b"jpeg bytes");
+    assert!(root.path().join("images").join("lea_1.jpg").exists());
+    assert_eq!(cache.get("LEA", "1"), Some(b"jpeg bytes".to_vec()));
+}
+
+#[test]
+fn folder_name_is_stable() {
+    // Renaming it would orphan every existing image cache.
+    assert_eq!(ImageCache::DIR_NAME, "images");
+}

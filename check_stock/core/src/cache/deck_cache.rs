@@ -57,26 +57,19 @@ pub fn needs_rebuild(cached: Option<&CachedIndex>, catalog_ids: &[u64], now_unix
     catalog_ids.iter().any(|id| !seen.contains(id))
 }
 
-/// Decklist + sealed-index cache under `<cache>/d2d_automations/mtgjson_v1/`.
+/// Decklist + sealed-index cache under `<cache root>/mtgjson_v1/`.
 pub struct DeckCache {
     index_files: FileCache,
     deck_files: FileCache,
 }
 
-impl Default for DeckCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl DeckCache {
-    /// Create the cache in the platform cache directory.
-    pub fn new() -> Self {
-        let root = dirs::cache_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("d2d_automations")
-            .join("mtgjson_v1");
-        Self::with_dir(root)
+    /// Folder of this cache inside the application's cache root.
+    pub const DIR_NAME: &'static str = "mtgjson_v1";
+
+    /// The MTGJSON cache inside the application's cache root (`<root>/mtgjson_v1`).
+    pub fn in_root(cache_root: &std::path::Path) -> Self {
+        Self::with_dir(cache_root.join(Self::DIR_NAME))
     }
 
     /// Create a cache rooted at the given directory (used by tests).
