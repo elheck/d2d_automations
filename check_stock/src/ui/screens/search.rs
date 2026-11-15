@@ -958,47 +958,22 @@ impl SearchScreen {
     }
 
     fn card_matches(card: &crate::models::Card, search_term: &str, state: &SearchState) -> bool {
-        // Helper function to check a field
-        let check_field = |should_search: bool, field_value: &str| -> bool {
-            if !should_search {
-                return false;
-            }
-            let field_text = if state.search_case_sensitive {
-                field_value.to_string()
-            } else {
-                field_value.to_lowercase()
-            };
-            field_text.contains(search_term)
+        let f = &state.selected_fields;
+        let options = crate::search::SearchOptions {
+            fields: crate::search::SearchFields {
+                name: f.name,
+                set: f.set,
+                condition: f.condition,
+                language: f.language,
+                location: f.location,
+                rarity: f.rarity,
+                price: f.price,
+                comment: f.comment,
+            },
+            case_sensitive: state.search_case_sensitive,
+            all_languages: state.search_in_all_languages,
         };
-
-        // Check main string fields
-        if check_field(state.selected_fields.name, &card.name)
-            || check_field(state.selected_fields.set, &card.set)
-            || check_field(state.selected_fields.condition, &card.condition)
-            || check_field(state.selected_fields.language, &card.language)
-            || check_field(state.selected_fields.rarity, &card.rarity)
-            || check_field(state.selected_fields.price, &card.price)
-            || check_field(state.selected_fields.comment, &card.comment)
-        {
-            return true;
-        }
-
-        // Check location (Option<String>)
-        if state.selected_fields.location {
-            if let Some(location) = &card.location {
-                if check_field(true, location) {
-                    return true;
-                }
-            }
-        }
-
-        // Also match legacy translated names when present (older CSV exports).
-        state.search_in_all_languages
-            && state.selected_fields.name
-            && (check_field(true, &card.name_de)
-                || check_field(true, &card.name_es)
-                || check_field(true, &card.name_fr)
-                || check_field(true, &card.name_it))
+        crate::search::card_matches(card, search_term, &options)
     }
 }
 

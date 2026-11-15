@@ -21,6 +21,10 @@ export const ACTION_LABELS: Record<string, string> = {
   "inventory.imported": "Inventory imported",
   "inventory.import_forced": "Blocked inventory import forced",
   "inventory.restored": "Inventory restored from a backup",
+  "inventory.discarded": "Cards discarded",
+  "bins.list_created": "Bin move list made",
+  "bins.list_discarded": "Bin move list discarded",
+  "picking.created": "Picking list made",
 };
 
 /** Why a login failed, in words. */

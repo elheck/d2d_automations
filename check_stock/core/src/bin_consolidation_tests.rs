@@ -358,3 +358,62 @@ fn variant_defrag_empty_when_nothing_fragmented() {
     assert!(plan.moves.is_empty());
     assert_eq!(plan.fragmented_variants, 0);
 }
+
+#[test]
+fn bin_loads_sum_piles_per_bin_in_shelf_order() {
+    let mut no_location = card_at("9", "", 2);
+    no_location.location = None;
+    let cards = vec![
+        card_at("1", "A-0-0-10-L1-R", 3),
+        card_at("2", "A-0-0-9-L1-R", 5),
+        card_at("3", "A-0-0-10-L2-R", 4),
+        card_at("4", "B-0-0-1", 1),
+        card_at("5", "Shelf by the door", 7),
+        card_at("6", "A-0-0-9-L1-R", 0),
+        no_location,
+    ];
+    let (loads, unplaced) = bin_loads(&cards);
+    let bins: Vec<(&str, i64, usize)> = loads
+        .iter()
+        .map(|b| (b.bin.as_str(), b.cards, b.piles))
+        .collect();
+    assert_eq!(
+        bins,
+        [("A-0-0-9", 5, 1), ("A-0-0-10", 7, 2), ("B-0-0-1", 1, 1)]
+    );
+    assert_eq!(loads[1].free(), BIN_CAPACITY - 7);
+    assert_eq!(
+        unplaced, 2,
+        "the shelf by the door and the card without location"
+    );
+}
+
+#[test]
+fn plans_are_the_same_every_time() {
+    // Many bins and equal candidates: hash-map order must not matter.
+    let mut cards = Vec::new();
+    for bin in 1..=40 {
+        for pile in 0..(bin % 5 + 1) {
+            cards.push(card_at(
+                &format!("{}", bin * 10 + pile),
+                &format!("A-0-{}-{}-L{}-R", bin % 3, bin, pile % 2),
+                (bin % 7 + 1) as i64,
+            ));
+        }
+        // The same card in several bins, for the defrag.
+        cards.push(card_at("999", &format!("A-0-0-{bin}-L1-R"), 1));
+    }
+    let key = |p: &ConsolidationPlan| -> Vec<(String, String, i64)> {
+        p.moves
+            .iter()
+            .map(|m| (m.from_location.clone(), m.to_location.clone(), m.quantity))
+            .collect()
+    };
+    let first = plan_consolidation(&cards, 20);
+    let defrag = plan_variant_defrag(&cards);
+    assert!(!first.moves.is_empty() && !defrag.moves.is_empty());
+    for _ in 0..20 {
+        assert_eq!(key(&plan_consolidation(&cards, 20)), key(&first));
+        assert_eq!(key(&plan_variant_defrag(&cards)), key(&defrag));
+    }
+}

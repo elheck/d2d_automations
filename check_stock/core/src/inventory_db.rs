@@ -1500,6 +1500,66 @@ fn discard_cards_conn(
     discards: &[(Card, i64)],
     category: &str,
 ) -> DbResult<DiscardStats> {
+    let tx = conn.transaction()?;
+    let stats = discard_cards_in_tx(&tx, discards, category)?;
+    tx.commit()?;
+    Ok(stats)
+}
+
+/// The variant key the database uses for a card: product id, condition,
+/// language, foil and signed flags, normalised as by the sync.
+pub fn db_variant_key(card: &Card) -> (String, String, String, String, String) {
+    db_variant_key_of(
+        &card.cardmarket_id,
+        &card.condition,
+        &card.language,
+        &card.is_foil,
+        &card.is_signed,
+    )
+}
+
+/// [`db_variant_key`] from the raw fields.
+pub fn db_variant_key_of(
+    cardmarket_id: &str,
+    condition: &str,
+    language: &str,
+    is_foil: &str,
+    is_signed: &str,
+) -> (String, String, String, String, String) {
+    (
+        cardmarket_id.to_string(),
+        canonical_condition(condition),
+        normalize_language(language),
+        normalize_flag(is_foil),
+        normalize_flag(is_signed),
+    )
+}
+
+/// The stock of the variant with `key` (see [`db_variant_key`]); `None`
+/// when the database has no such variant.
+pub fn variant_quantity_conn(
+    conn: &Connection,
+    key: &(String, String, String, String, String),
+    category: &str,
+) -> DbResult<Option<i64>> {
+    let (id, condition, language, foil, signed) = key;
+    conn.query_row(
+        "SELECT quantity FROM inventory_cards
+         WHERE category = ?6 AND cardmarket_id = ?1 AND condition = ?2 AND language = ?3
+           AND is_foil = ?4 AND is_signed = ?5",
+        params![id, condition, language, foil, signed, category],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+/// The discard of [`InventoryDb::discard_cards`] inside the caller's
+/// transaction (the server checks first and records more in it).
+pub fn discard_cards_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    discards: &[(Card, i64)],
+    category: &str,
+) -> DbResult<DiscardStats> {
     // Aggregate requested copies by the same canonical variant key the sync uses,
     // so two rows for the same variant (different physical locations) collapse into
     // a single UPDATE and clamp against the one merged DB row.
@@ -1519,7 +1579,6 @@ fn discard_cards_conn(
         *agg.entry(key).or_insert(0) += *qty;
     }
 
-    let tx = conn.transaction()?;
     let mut stats = DiscardStats::default();
 
     // Take the copies out of the lot they were picked from as well, so the lot
@@ -1586,7 +1645,6 @@ fn discard_cards_conn(
         stats.copies_discarded += removed;
     }
 
-    tx.commit()?;
     if stats.variants_updated > 0 {
         log::info!(
             "Inventory DB discard: {} copies written off across {} variants (revenue unaffected)",

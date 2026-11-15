@@ -13,6 +13,11 @@ export type NavPath =
   | "/mispricing"
   | "/stock-analysis"
   | "/inventory-import"
+  | "/bins"
+  | "/bin-moves"
+  | "/search"
+  | "/stock-checker"
+  | "/picking"
   | "/users"
   | "/audit";
 
@@ -34,6 +39,24 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Tools",
     items: [
       {
+        to: "/search",
+        label: "Search",
+        permission: "search.use",
+        description: "Find cards in the stock by name, set or location; see price history; discard junk.",
+      },
+      {
+        to: "/stock-checker",
+        label: "Stock Checker",
+        permission: "stock_checker.use",
+        description: "Match a wantslist or deck list against the stock; picking and invoice lists, stock-update CSV.",
+      },
+      {
+        to: "/picking",
+        label: "Picking",
+        permission: "stock_checker.use",
+        description: "Your picking list in shelf order, ticked as you take the cards.",
+      },
+      {
         to: "/singles",
         label: "Singles",
         permission: "listing.use",
@@ -50,6 +73,12 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "Inventory import",
         permission: "inventory.import",
         description: "Upload the Cardmarket inventory export; you see what changes before anything is written.",
+      },
+      {
+        to: "/bin-moves",
+        label: "Bin moves",
+        permission: "bins.use",
+        description: "Work through your move list bin by bin and download the moved piles for Cardmarket.",
       },
       {
         to: "/precon-ev",
@@ -79,6 +108,12 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "Mispricing",
         permission: "mispricing.view",
         description: "Listings priced below or above the market, and what to do about each.",
+      },
+      {
+        to: "/bins",
+        label: "Bin analysis",
+        permission: "analysis.view",
+        description: "How full every bin is, which bins can be emptied and which cards are spread over several bins.",
       },
       {
         to: "/stock-analysis",

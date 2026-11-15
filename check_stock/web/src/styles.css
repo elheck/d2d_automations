@@ -268,6 +268,9 @@ code {
 
 /* Tables */
 .table-wrap {
+  /* Positioned, so screen-reader-only (absolute) cells stay inside the
+     scrolling box instead of widening the page. */
+  position: relative;
   overflow-x: auto;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1076,4 +1079,183 @@ code {
 }
 .digest--stale {
   color: var(--warning);
+}
+
+/* Bin analysis and moves */
+.bins-table {
+  max-width: 34rem;
+  max-height: 32rem;
+  overflow-y: auto;
+}
+.move-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.25rem;
+}
+.move-controls .checkbox {
+  margin: 0;
+  align-items: center;
+  min-height: var(--tap);
+}
+.move-controls__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.move-controls > .small {
+  flex-basis: 100%;
+  margin: 0;
+}
+.move-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.move-progress progress {
+  width: 10rem;
+  height: 0.75rem;
+  accent-color: var(--accent);
+}
+.move-group h2 {
+  margin-top: 1.25rem;
+}
+.move-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.75rem;
+}
+.move-tile {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.move-tile--done {
+  opacity: 0.6;
+}
+.move-tile__image {
+  width: 5.5rem;
+  aspect-ratio: 63 / 88;
+  object-fit: cover;
+  border-radius: 4px;
+  flex: none;
+}
+.move-tile__image--none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.move-tile__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.move-tile__body p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.move-tile__name {
+  font-weight: 600;
+}
+.move-tile__route {
+  font-size: 1.05rem;
+}
+.move-tile__toggle {
+  margin-top: auto;
+  align-self: flex-start;
+}
+
+/* Search */
+.search-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.25rem;
+}
+.search-controls__text {
+  flex: 1 1 16rem;
+}
+.search-controls__text input {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.search-controls__fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1rem;
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+.search-controls__fields legend {
+  float: left;
+  margin-right: 0.75rem;
+  padding-top: 0.6rem;
+}
+.search-controls .checkbox {
+  margin: 0;
+  align-items: center;
+  min-height: var(--tap);
+}
+.search-table__actions {
+  display: flex;
+  gap: 0.35rem;
+}
+.selection-list {
+  list-style: none;
+  margin: 0.25rem 0;
+  padding: 0;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+.selection-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.15rem 0;
+}
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 0.75rem 0;
+}
+
+/* Stock Checker */
+.wantslist {
+  width: 100%;
+  min-height: 9rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-family: ui-monospace, monospace;
+}
+.match-group th {
+  background: var(--bg);
+}
+.output-text {
+  max-height: 24rem;
+  overflow: auto;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-size: 0.85rem;
 }

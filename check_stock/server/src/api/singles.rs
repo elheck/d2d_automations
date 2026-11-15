@@ -285,7 +285,8 @@ async fn cardmarket_prices(state: &AppState, cardmarket_id: Option<u64>) -> Pric
     }
 }
 
-async fn image(
+/// Also the image route of the bin move lists (`api/bins.rs`).
+pub(super) async fn image(
     State(state): State<AppState>,
     Path((set_code, collector_number)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {

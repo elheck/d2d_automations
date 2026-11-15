@@ -12,15 +12,19 @@
 
 mod audit_log;
 mod auth;
+mod bins;
 mod buy_helper;
 mod home;
 mod inventory;
 mod mispricing;
 mod movers;
+mod picking;
 mod precon_ev;
 mod reports;
+mod search;
 mod singles;
 mod stock_analysis;
+mod stock_checker;
 mod users;
 
 use crate::app::AppState;
@@ -151,6 +155,10 @@ fn api(state: AppState) -> Api {
     let api = mispricing::routes(api);
     let api = stock_analysis::routes(api);
     let api = inventory::routes(api);
+    let api = bins::routes(api);
+    let api = search::routes(api);
+    let api = stock_checker::routes(api);
+    let api = picking::routes(api);
     home::routes(api)
 }
 

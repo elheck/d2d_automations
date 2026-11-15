@@ -9,8 +9,9 @@ Status: foundation done (steps 1a–1c: server, login, users with
 fine-grained permissions, audit log, and the [web UI](../web/) built into the
 binary); ported screens: the singles listing (2a), the buy helper (2b),
 precon EV (2c), the reports restock (3a), price movers (3b),
-mispricing (3c) and stock analysis (3d), and the inventory import with the
-start page's digest (4a).
+mispricing (3c), stock analysis (3d) and bin analysis with move lists (3e),
+the inventory import with the start page's digest (4a), and Search with
+discards, the Stock Checker and Picking (4b).
 
 ## Try it locally
 
@@ -108,6 +109,21 @@ standard input; passwords are never command-line arguments.
 | `POST /api/inventory/preview` | Import inventory | `{file_name, csv}` (at most 16 MB, 200,000 rows) → what the import would change: new / updated / gone listings, copies counted as sold, stock before → after, price changes; `blocked` (more than half the stock counted as sold), `unusual` (more than 3× the usual sales for the days since the last import, at least 10 copies), the usual pace, until when it can be confirmed (30 minutes). Keeps the check (file fingerprint, category, inventory version, numbers), not the rows |
 | `POST /api/inventory/confirm` | Import inventory | the same file again (+ `confirm_sold` for a blocked one: the copies counted as sold, typed in) → backup, then sync, version, kept file and audit entry in one transaction. 409 `no_preview` / `preview_expired` / `other_file` / `outdated` (another change of the category since the check) / `changed` (the numbers moved), 422 `confirmation_needed` / `confirmation_wrong`, 503 `backup_failed` |
 | `DELETE /api/inventory/pending` | Import inventory | drops the user's check |
+| `GET /api/bins?min_free=&sort=` | View reports | every bin of the last import's file with cards, piles and free slots (bins with at least `min_free`, `sort=free` or `location`), rows without a bin location; `source: null` before the first import on the server. `/api/bins/export?…` the same as CSV (spreadsheet-safe) |
+| `GET /api/bins/fragmented` | View reports | cards (variant) spread over several bins (first 200 of `total`) and what gathering them takes |
+| `GET /api/bins/consolidation?threshold=` | View reports | what emptying the bins with at most `threshold` (1–60) cards takes: moves, cards, bins freed, walking distance; 409 `no_import` |
+| `GET` / `POST` / `DELETE /api/bins/list` | Bin moves | the user's move list (`null` when none; `outdated` after a newer import: no moves until it is made again); `POST {kind, threshold?}` makes it (again): ticks of moves that are still in it stay (`carried_ticks` / `dropped_ticks`); 422 `no_moves` / `too_many_moves` (over 5,000) |
+| `PUT /api/bins/list/ticks` | Bin moves | `{ids, done}`: marks moves as moved (ids of the current list only; 409 when outdated) |
+| `GET /api/bins/list/export` | Bin moves | the ticked piles with their new location as a Cardmarket stock-update CSV (exact values: Cardmarket imports it); 409 when outdated, 422 `nothing_ticked` |
+| `GET /api/search?q=&fields=&case_sensitive=&all_languages=&page=&per_page=` | Search cards | piles of the stock (last import minus pending discards) matching the text in the chosen fields (`name,set,condition,language,location,rarity,price,comment`), 25/50/100/200 per page; each pile has an `id` |
+| `GET /api/search/history/{product}?foil=` | Search cards | trend-price history (120 days) and 7/30-day change from the tracker, only for products in the stock; 503 when the tracker cannot be reached |
+| `POST /api/inventory/discard` | Discard cards | `{items: [{pile, quantity}]}`: writes the copies off without a sale (backup first; refused when a pile or the database has fewer copies, 409 `not_enough` / `stock_changed`); `value` only with "View revenue and costs" |
+| `GET /api/inventory/discards`, `GET /api/inventory/discards/{id}/csv` | Discard cards | the last 20 discards (settled by a later import or not) and the stock-update CSV of each of them (negative quantities, exact values) |
+| `POST /api/stock-checker/check` | Stock Checker | `{wantslist, language, language_only}` (text, at most 256 KB / 2,000 lines, never stored; deck links refused with 422 `deck_link`): every wanted card with the piles to take, missing copies, unreadable lines |
+| `POST /api/stock-checker/output` | Stock Checker | `{format: picking/invoice/summary, discount, groups}`: the text, built from the server's data for the chosen piles |
+| `POST /api/stock-checker/update-csv` | Stock Checker | `{items}`: stock-update CSV with negative quantities from the current stock (refused when a pile is gone or too small) |
+| `GET` / `POST` / `DELETE /api/picking`, `PUT /api/picking/picked`, `GET /api/picking/image/{set}/{number}` | Stock Checker | the user's picking list (shelf order, `outdated` after an import or discard), ticks, card images |
+| `GET /api/bins/image/{set}/{number}` | Bin moves | card images for the move list (same rules and cache as the singles listing's) |
 | `GET /api/inventory/imports` | Import inventory | the last 20 changes of the inventory data (import, forced import, restore, desktop copy) with who, when and the numbers |
 | `GET /api/restock?min_copies=&sort=&desc=` | View reports | sold-out variants ranked by sell-through speed (first 300; `total`, `copies`); `realized_revenue` / `revenue` only with "View revenue and costs", and `sort=revenue` is refused (403) without it |
 | `GET /api/restock/export?…` | View reports | the same list, all rows, as `restock_buy_list.csv` (the `realizedRevenue` column only with "View revenue and costs"; spreadsheet-safe text) |
@@ -199,6 +215,32 @@ files are out of date.
   confirmed file of the last import per category is kept (for bin analysis,
   3e); a pending check keeps no rows. An import marks the shared market data
   as outdated, so the next report load reads the new stock.
+- **The stock of the screens that need every pile** (`src/stock.rs`: search,
+  Stock Checker, picking, bin analysis) is the file of the last import on the
+  server minus pending discards; each pile has an id (SHA-256 of variant and
+  location). The browser only ever sends pile ids and quantities; every value
+  of a CSV or text output comes from the server's data.
+- **Discards** (`src/discards.rs`, owner-confirmed): a backup before every
+  discard (`inventory.db.discard-<time>.bak`, newest 10; no backup, no
+  discard); refused when the pile or the database has fewer copies than asked
+  for (never quietly fewer); discard, record and audit entry (every pile) in
+  one transaction. Until the next import, restore or desktop copy settles
+  them, discards are taken off the stock of every screen, and an export that
+  still holds them is blocked by the import check (`returning_discards`,
+  typed number to override): it was downloaded before the CSV went into
+  Cardmarket. The CSV of the newest 20 can be downloaded again.
+- **Stock Checker**: no deck links (owner's decision, 2026-11-15: the server
+  never fetches a page a user names); wantslists at most 256 KB / 2,000
+  lines, quantities up to 10,000, never stored.
+- **Bin analysis and move lists** (`src/bins.rs`): only on the file of the
+  last import on the server (the inventory tables merge a card's bins). A
+  move list stores its settings and the ticked move ids, never card rows:
+  the planner is deterministic, so the server plans it again from the same
+  file (parsed file and the last 8 plans cached in memory). After a newer
+  import the list is outdated: no ticks, no export until it is made again on
+  the new file (ticks of the same pile, from and to carry over). So the
+  "moved" CSV, which Cardmarket imports, never carries quantities or prices
+  of an older export; it keeps its values exactly (no spreadsheet escaping).
 - **Money figures** (revenue, margins, lot costs) are only sent to users
   with "View revenue and costs": without it the server leaves them out of
   answers and CSV files and refuses sorting by them (the order would give
@@ -211,7 +253,8 @@ files are out of date.
 - **Audit log:** logins (also failed ones, with address and reason), logouts,
   password changes, every user change with its before/after, desktop copies,
   inventory imports (file name, fingerprint, numbers, backup), forced
-  imports and restores. Written in the same transaction as the change.
+  imports and restores, discards with every pile, move lists made and
+  discarded, picking lists made (ticks are work state and not logged). Written in the same transaction as the change.
 - **One process per data folder.** `serve`, `import-desktop`, `create-admin`,
   `reset-password` and `restore-inventory` hold an OS file lock on
   `<data-dir>/.lock`.
@@ -273,6 +316,10 @@ newer server version is refused.
 | `srv_inventory_versions` | One row per change of the inventory data and category: import, forced import, restore, desktop copy; who (name kept when the user is deleted), file fingerprint and numbers |
 | `srv_pending_imports` | The check of each user's import (one per user, 30 minutes): file SHA-256, category, inventory version, preview numbers; no rows of the file |
 | `srv_inventory_files` | The confirmed file of the last import per category (every pile with its own location, which the inventory tables merge), for bin analysis (3e) |
+| `srv_move_lists` | One bin move list per user: kind, threshold, the import version it was planned on; deleted with the user |
+| `srv_move_list_ticks` | The ticked move ids of each list (16 hex characters of a SHA-256 over card variant, from and to location) |
+| `srv_discards` | Discards: who, when, the piles (id, card, location, copies), the stock-update CSV (newest 20), settled by a later import or not |
+| `srv_picking_sessions` | One picking list per user: card, location, copies, picked, the stock it was made on; deleted with the user |
 | `srv_user_visits` | Last and previous visit day per user, the baseline of the start page's digest; deleted with the user |
 | `srv_user_settings` | Per-user settings of the screens (`src/user_settings.rs`): one JSON value (≤ 16 KiB) per user and setting, deleted with the user; read back through each screen's validation, defaults if it no longer fits |
 

@@ -11,9 +11,11 @@ it works on a copy of the desktop database and asks for a password for your
 local login on the first start. Ported so far: the Magic Singles Listing
 (Cardmarket prices from inventory_sync, set with `--inventory-sync-url`), the
 Card Buy Helper, Precon EV, the reports Restock, Price Movers, Mispricing
-and Stock Analysis (read-only; revenue, costs and margins only for users with
-"View revenue and costs"), and the inventory import (on the test copy only
-until the move: keep importing in the desktop app).
+Stock Analysis and Bin Analysis with move lists (read-only; revenue, costs
+and margins only for users with "View revenue and costs"), the inventory
+import, Search with discards, the Stock Checker and Picking (writes only on
+the test copy until the move: keep importing and discarding in the desktop
+app).
 
 The welcome screen shows a **since-last-visit digest** (copies sold and revenue
 since the previous day the app was opened, new listings, bulk lots built,
@@ -62,6 +64,12 @@ showing exactly what would change before anything is written.
   tick as moved**, so it reflects what you actually did. Read-only — never writes to
   the inventory DB; moves apply when you re-load an updated CSV, and each card keeps
   its lot/side so per-lot revenue is unaffected.
+  Also in the web version (`/bins` under Reports, `/bin-moves` under Tools):
+  it works on the file of the last inventory import on the server (no file
+  to pick), the move list is saved per user (made on the PC, ticked on the
+  phone), and after a newer import it has to be made again before the CSV
+  can be downloaded (ticks of unchanged moves stay), so the CSV never
+  carries quantities or prices of an older export.
 - **Magic Singles Listing** — Card lookup via Scryfall by set code + collector number (`hou120`, or `120` with a default set), with images and Cardmarket prices. Also in the web version (`/singles`), where the server caches Scryfall data and images and the prices come from inventory_sync instead of the 50 MB price guide
 - **Search Cards** — Interactive inventory search with filtering. Each result row
   has a **price-history button (📈)** that opens a floating window with the card's
@@ -77,6 +85,13 @@ showing exactly what would change before anything is written.
   import still contains the cards, brings them back as stock, and their later
   disappearance would count as a sale.
 - **Picking** — Order picking workflow (reached via Stock Checker results)
+- **Web version of Search, Stock Checker and Picking** (`/search`,
+  `/stock-checker`, `/picking`): they work on the last inventory import on the
+  server (no file to load); a discard takes a backup first, is refused when
+  fewer copies are left than asked for, and an export that still holds
+  discarded cards is blocked by the import check; the Stock Checker takes
+  pasted or uploaded lists only (no deck links); picking lists are saved per
+  user (made on the PC, ticked on the phone)
 - **Repricing** — Reprice the whole stock by your own ruleset, review every
   change, and export the result. Three steps:
   1. **Stock** — load the Cardmarket inventory export (it is synced into the

@@ -101,7 +101,10 @@ impl Fixture {
             &db_path,
             importer(user, name),
             file,
-            typed,
+            Typed {
+                copies_sold: typed,
+                returning: None,
+            },
             now,
             today,
         )

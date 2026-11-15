@@ -16,9 +16,10 @@
 use super::{blocking, Access, Api, ApiJson, CurrentUser};
 use crate::app::AppState;
 use crate::http::ApiError;
+use crate::inventory_import::latest_version;
 use crate::inventory_import::{
     self, check, discard_pending, read_file, recent_versions, save_pending, ConfirmError,
-    FileError, ImportFile, ImportNumbers, Importer, InventoryVersion, MAX_IMPORT_BYTES,
+    FileError, ImportFile, ImportNumbers, Importer, InventoryVersion, Typed, MAX_IMPORT_BYTES,
     PENDING_MINUTES,
 };
 use crate::migrations::format_utc;
@@ -83,6 +84,8 @@ pub struct InventoryConfirmRequest {
     /// For an import the safety check blocked: the number of copies that
     /// will count as sold, typed in.
     pub confirm_sold: Option<String>,
+    /// For a file that brings discarded copies back: their number, typed in.
+    pub confirm_returning: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, TS)]
@@ -123,6 +126,9 @@ pub struct InventoryPreview {
     pub pace: Option<SalesPaceView>,
     /// More than 3× the usual sales (a warning).
     pub unusual: Option<UnusualSalesView>,
+    /// Copies discarded since the last import that the file brings back:
+    /// confirming needs this number typed in (`confirm_returning`).
+    pub returning_discards: i64,
     /// Until when the preview can be confirmed (RFC 3339).
     pub expires_at: String,
     pub valid_minutes: i64,
@@ -132,6 +138,8 @@ pub struct InventoryPreview {
 #[ts(export)]
 pub struct InventoryImportResult {
     pub version: i64,
+    /// The data version after the import (as `/api/data-info` reports it).
+    pub data_version: i64,
     pub category: String,
     pub numbers: ImportNumbers,
     /// Imported although the safety check blocked it.
@@ -200,6 +208,18 @@ fn confirm_error(e: ConfirmError) -> ApiError {
             "confirmation_wrong",
             format!("That is not the number of copies that will count as sold ({copies_sold})"),
         ),
+        ConfirmError::NeedsReturningConfirmation { copies } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "returning_confirmation_needed",
+            format!(
+                "This export still holds {copies} discarded copies: it was downloaded before the discard CSV went into Cardmarket. Import a fresh export, or type {copies} to bring them back as stock"
+            ),
+        ),
+        ConfirmError::WrongReturningConfirmation { copies } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "returning_confirmation_wrong",
+            format!("That is not the number of discarded copies the export brings back ({copies})"),
+        ),
         ConfirmError::BackupFailed => ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "backup_failed",
@@ -249,6 +269,7 @@ async fn preview(
             days: p.days,
             last_import: p.last_sync,
         }),
+        returning_discards: checked.returning_discards,
         unusual: checked.unusual.map(|u| UnusualSalesView {
             daily_copies: u.daily_copies,
             days_since_last_import: u.days_since_last_import,
@@ -265,10 +286,12 @@ async fn confirm(
     request: Result<ApiJson<InventoryConfirmRequest>, ApiError>,
 ) -> Result<Json<InventoryImportResult>, ApiError> {
     let request = body(request)?;
-    if request
-        .confirm_sold
-        .as_ref()
-        .is_some_and(|t| t.chars().count() > MAX_CONFIRMATION_CHARS)
+    if [&request.confirm_sold, &request.confirm_returning]
+        .iter()
+        .any(|t| {
+            t.as_ref()
+                .is_some_and(|t| t.chars().count() > MAX_CONFIRMATION_CHARS)
+        })
     {
         return Err(ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -279,7 +302,7 @@ async fn confirm(
     let file = read(request.file_name, request.csv).await?;
     let category = file.category.clone();
     let db_path = state.db.path().to_path_buf();
-    let typed = request.confirm_sold;
+    let (typed_sold, typed_returning) = (request.confirm_sold, request.confirm_returning);
     let (today, now) = (today(), Utc::now());
     let (id, username, display_name) = (user.id, user.username.clone(), user.display_name.clone());
     let result = state
@@ -294,17 +317,25 @@ async fn confirm(
                     display_name: &display_name,
                 },
                 &file,
-                typed.as_deref(),
+                Typed {
+                    copies_sold: typed_sold.as_deref(),
+                    returning: typed_returning.as_deref(),
+                },
                 now,
                 &today,
             )
+            .and_then(|r| match r {
+                Ok(done) => Ok(Ok((done, latest_version(conn)?.0))),
+                Err(e) => Ok(Err(e)),
+            })
         })
         .await?;
-    let done = result.map_err(confirm_error)?;
+    let (done, data_version) = result.map_err(confirm_error)?;
     state.market.stock_changed();
     let n = |v: usize| i64::try_from(v).unwrap_or(i64::MAX);
     Ok(Json(InventoryImportResult {
         version: done.version,
+        data_version,
         category,
         numbers: done.numbers,
         forced: done.forced,

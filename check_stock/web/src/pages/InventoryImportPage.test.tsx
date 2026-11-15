@@ -36,6 +36,7 @@ function preview(overrides: Partial<InventoryPreview> = {}): InventoryPreview {
     blocked: false,
     pace: { daily_copies: 21.6, days: 30, last_import: "2026-11-11" },
     unusual: null,
+    returning_discards: 0,
     expires_at: "2026-11-15T09:00:00Z",
     valid_minutes: 30,
     ...overrides,
@@ -44,6 +45,7 @@ function preview(overrides: Partial<InventoryPreview> = {}): InventoryPreview {
 
 const result: InventoryImportResult = {
   version: 4,
+  data_version: 4,
   category: "Magic",
   numbers: preview().numbers,
   forced: false,
@@ -152,6 +154,29 @@ describe("inventory import", () => {
     await user.click(anyway);
     await waitFor(() => expect(posts(calls, "/api/inventory/confirm")).toHaveLength(1));
     expect(posts(calls, "/api/inventory/confirm")[0]?.body).toMatchObject({ confirm_sold: "20000" });
+  });
+
+  it("blocks an export that brings discarded cards back until their number is typed", async () => {
+    const { calls } = server({ "POST /api/inventory/preview": { body: preview({ returning_discards: 3 }) } });
+    const { user } = renderApp("/inventory-import");
+    await chooseFile(user);
+    const check = await screen.findByRole("region", { name: "Check of the file" });
+    expect(within(check).getByRole("alert")).toHaveTextContent(
+      "Discarded cards come back: this export still holds 3 copies discarded since the last import.",
+    );
+    expect(within(check).queryByLabelText("Copies that will count as sold")).not.toBeInTheDocument();
+    const anyway = within(check).getByRole("button", { name: "Import anyway" });
+    await user.type(within(check).getByLabelText("Discarded copies that come back"), "2");
+    expect(anyway).toBeDisabled();
+    await user.clear(within(check).getByLabelText("Discarded copies that come back"));
+    await user.type(within(check).getByLabelText("Discarded copies that come back"), "3");
+    await user.click(anyway);
+    await waitFor(() => expect(posts(calls, "/api/inventory/confirm")).toHaveLength(1));
+    expect(posts(calls, "/api/inventory/confirm")[0]?.body).toEqual({
+      file_name: "inventory-report-Magic.csv",
+      csv: CSV,
+      confirm_returning: "3",
+    });
   });
 
   it("offers to check again when the data changed meanwhile", async () => {

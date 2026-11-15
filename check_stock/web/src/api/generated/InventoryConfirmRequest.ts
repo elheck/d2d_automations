@@ -8,4 +8,8 @@ export type InventoryConfirmRequest = { file_name: string, csv: string,
  * For an import the safety check blocked: the number of copies that
  * will count as sold, typed in.
  */
-confirm_sold?: string, };
+confirm_sold?: string, 
+/**
+ * For a file that brings discarded copies back: their number, typed in.
+ */
+confirm_returning?: string, };

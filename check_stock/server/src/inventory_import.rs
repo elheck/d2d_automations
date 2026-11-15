@@ -238,6 +238,10 @@ pub struct Checked {
     pub new_category: bool,
     /// The category's inventory version the check was made against.
     pub base_version: i64,
+    /// Copies discarded since the last import that this file would bring
+    /// back (it was downloaded before the discard CSV went into Cardmarket);
+    /// confirming needs this number typed in.
+    pub returning_discards: i64,
 }
 
 /// Previews `file` against the current data (reads only).
@@ -260,6 +264,7 @@ pub fn check(conn: &Connection, file: &ImportFile, today: &str) -> rusqlite::Res
         unusual,
         new_category,
         base_version: category_version(conn, &file.category)?,
+        returning_discards: crate::discards::returning_copies(conn, &file.category, &file.cards)?,
     })
 }
 
@@ -357,7 +362,23 @@ pub enum ConfirmError {
     WrongConfirmation {
         copies_sold: i64,
     },
+    /// The file brings discarded copies back: their number must be typed in.
+    NeedsReturningConfirmation {
+        copies: i64,
+    },
+    WrongReturningConfirmation {
+        copies: i64,
+    },
     BackupFailed,
+}
+
+/// What the user typed to confirm blocked imports.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Typed<'a> {
+    /// The copies counted as sold (more than half the stock).
+    pub copies_sold: Option<&'a str>,
+    /// The discarded copies the file brings back.
+    pub returning: Option<&'a str>,
 }
 
 /// Who imports.
@@ -401,10 +422,11 @@ pub fn confirm(
     db_path: &Path,
     user: Importer<'_>,
     file: &ImportFile,
-    typed_count: Option<&str>,
+    typed: Typed<'_>,
     now: DateTime<Utc>,
     today: &str,
 ) -> rusqlite::Result<Result<Confirmed, ConfirmError>> {
+    let typed_count = typed.copies_sold;
     let Some(pending) = load_pending(conn, user.id)? else {
         return Ok(Err(ConfirmError::NoPreview));
     };
@@ -428,6 +450,22 @@ pub fn confirm(
             None => return Ok(Err(ConfirmError::NeedsConfirmation { copies_sold })),
             Some(text) if parse_typed_count(text) != Some(copies_sold) => {
                 return Ok(Err(ConfirmError::WrongConfirmation { copies_sold }))
+            }
+            Some(_) => {}
+        }
+    }
+    let returning = checked.returning_discards;
+    if returning > 0 {
+        match typed.returning {
+            None => {
+                return Ok(Err(ConfirmError::NeedsReturningConfirmation {
+                    copies: returning,
+                }))
+            }
+            Some(text) if parse_typed_count(text) != Some(returning) => {
+                return Ok(Err(ConfirmError::WrongReturningConfirmation {
+                    copies: returning,
+                }))
             }
             Some(_) => {}
         }
@@ -481,6 +519,8 @@ pub fn confirm(
         params![file.category, version, file.file_name, file.csv.as_bytes()],
     )?;
     discard_pending(&tx, user.id)?;
+    // The export now is the truth: discards up to here are settled.
+    crate::discards::settle(&tx, now)?;
     audit::record(
         &tx,
         now,
@@ -501,6 +541,7 @@ pub fn confirm(
             "rows": file.cards.len(),
             "numbers": checked.numbers,
             "unusual_sales": checked.unusual.is_some(),
+            "returning_discards": returning,
             "backup": backup_name,
         }),
     )?;
@@ -593,21 +634,28 @@ pub fn record_replaced_data(
         )?;
     }
     conn.execute("DELETE FROM srv_pending_imports", [])?;
+    crate::discards::settle(conn, now)?;
     if !keep_files {
         conn.execute("DELETE FROM srv_inventory_files", [])?;
     }
     Ok(categories)
 }
 
-/// Newest version of any category (0 before the first) and when it was made.
+/// The data version (0 before the first change) and when it last changed:
+/// it grows with every import, restore, desktop copy (version rows) and
+/// discard, so open pages notice each of them.
 pub fn latest_version(conn: &Connection) -> rusqlite::Result<(i64, Option<String>)> {
-    conn.query_row(
-        "SELECT id, created_at FROM srv_inventory_versions ORDER BY id DESC LIMIT 1",
-        [],
-        |r| Ok((r.get(0)?, Some(r.get(1)?))),
-    )
-    .optional()
-    .map(|v| v.unwrap_or((0, None)))
+    let (version, version_at) = conn
+        .query_row(
+            "SELECT id, created_at FROM srv_inventory_versions ORDER BY id DESC LIMIT 1",
+            [],
+            |r| Ok((r.get::<_, i64>(0)?, Some(r.get::<_, String>(1)?))),
+        )
+        .optional()?
+        .unwrap_or((0, None));
+    let (discard, discard_at) = crate::discards::latest_id(conn)?;
+    // Both are RFC 3339 UTC strings: the later one sorts last.
+    Ok((version + discard, version_at.max(discard_at)))
 }
 
 #[cfg(test)]

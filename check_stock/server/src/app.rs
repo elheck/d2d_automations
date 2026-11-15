@@ -1,5 +1,6 @@
 //! Starting and stopping the server.
 
+use crate::bins::BinsService;
 use crate::cards::CardLookup;
 use crate::client_ip::TrustedProxies;
 use crate::config::{HostAllowlist, ServeConfig};
@@ -10,6 +11,7 @@ use crate::market::MarketService;
 use crate::password::{self, PasswordError};
 use crate::precon::PreconService;
 use crate::rate_limit::LoginRateLimiter;
+use crate::stock::StockService;
 use axum::Router;
 use check_stock_core::api::inventory_sync::InventorySyncClient;
 use check_stock_core::api::mtgjson::MtgjsonClient;
@@ -38,6 +40,10 @@ pub struct AppState {
     pub market: Arc<MarketService>,
     /// Where the caches live (`<data>/cache`).
     pub cache_root: Arc<PathBuf>,
+    /// The stock of the last import minus pending discards (shared).
+    pub stock: Arc<StockService>,
+    /// The plans of the bin analysis (shared).
+    pub bins: Arc<BinsService>,
 }
 
 impl AppState {
@@ -65,6 +71,8 @@ impl AppState {
             precon: Arc::new(precon),
             market: Arc::new(MarketService::new(None)),
             cache_root: Arc::new(cache_root),
+            stock: Arc::new(StockService::default()),
+            bins: Arc::new(BinsService::default()),
         })
     }
 

@@ -181,6 +181,7 @@ fn concrete(path: &str) -> String {
     path.replace("{id}", "1")
         .replace("{set}", "hou")
         .replace("{number}", "120")
+        .replace("{product}", "101")
 }
 
 const METHODS: [Method; 5] = [

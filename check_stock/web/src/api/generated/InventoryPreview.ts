@@ -25,6 +25,11 @@ blocked: boolean, pace: SalesPaceView | null,
  */
 unusual: UnusualSalesView | null, 
 /**
+ * Copies discarded since the last import that the file brings back:
+ * confirming needs this number typed in (`confirm_returning`).
+ */
+returning_discards: number, 
+/**
  * Until when the preview can be confirmed (RFC 3339).
  */
 expires_at: string, valid_minutes: number, };

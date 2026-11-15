@@ -124,6 +124,63 @@ const MIGRATIONS: &[(u32, &str)] = &[
              prev_visit TEXT
          ) STRICT;",
     ),
+    (
+        5,
+        // Bin consolidation move lists (3e), one per user. Only the settings
+        // are kept: the moves are planned again from the kept import file
+        // (the planner is deterministic) for `version_id`; ticks are move ids.
+        "CREATE TABLE srv_move_lists (
+             user_id    INTEGER PRIMARY KEY REFERENCES srv_users (id) ON DELETE CASCADE,
+             kind       TEXT NOT NULL CHECK (kind IN ('consolidation', 'defrag')),
+             threshold  INTEGER,
+             category   TEXT NOT NULL,
+             version_id INTEGER NOT NULL,
+             created_at TEXT NOT NULL
+         ) STRICT;
+         CREATE TABLE srv_move_list_ticks (
+             user_id INTEGER NOT NULL REFERENCES srv_move_lists (user_id) ON DELETE CASCADE,
+             move_id TEXT NOT NULL,
+             PRIMARY KEY (user_id, move_id)
+         ) STRICT, WITHOUT ROWID;",
+    ),
+    (
+        6,
+        // Discards from Search (4b). Until the next import (or restore or
+        // desktop copy) settles them, they are taken off the kept import
+        // file for every screen that reads it, and an export that still
+        // holds them is refused by the import check. `items` names every
+        // pile (id, card, location, copies); the stock-update CSV is kept
+        // for the newest 20 so it can be downloaded again. Move lists
+        // remember which discards their plan already saw.
+        "CREATE TABLE srv_discards (
+             id           INTEGER PRIMARY KEY,
+             category     TEXT NOT NULL,
+             file_version INTEGER NOT NULL,
+             created_at   TEXT NOT NULL,
+             user_id      INTEGER REFERENCES srv_users (id) ON DELETE SET NULL,
+             user_name    TEXT NOT NULL,
+             copies       INTEGER NOT NULL,
+             variants     INTEGER NOT NULL,
+             items        TEXT NOT NULL CHECK (json_valid(items)),
+             csv          BLOB,
+             settled_at   TEXT
+         ) STRICT;
+         CREATE INDEX srv_discards_pending ON srv_discards (category, settled_at);
+         ALTER TABLE srv_move_lists ADD COLUMN discard_seq INTEGER NOT NULL DEFAULT 0;",
+    ),
+    (
+        7,
+        // One picking list per user (4b): which card, from where, how many,
+        // picked or not, plus the names and prices to show; the stock it was
+        // made on (a later import or discard shows a note).
+        "CREATE TABLE srv_picking_sessions (
+             user_id     INTEGER PRIMARY KEY REFERENCES srv_users (id) ON DELETE CASCADE,
+             created_at  TEXT NOT NULL,
+             version_id  INTEGER NOT NULL,
+             discard_seq INTEGER NOT NULL,
+             items       TEXT NOT NULL CHECK (json_valid(items))
+         ) STRICT;",
+    ),
 ];
 
 /// Newest schema version this build knows.

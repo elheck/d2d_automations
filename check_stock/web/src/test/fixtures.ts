@@ -26,6 +26,23 @@ export const catalog: PermissionInfo[] = [
     requires: [],
   },
   {
+    key: "stock_checker.use",
+    label: "Stock Checker and picking",
+    description:
+      "Match wantslists and deck lists against the stock, pick orders and export picking lists and stock-update CSVs.",
+    group: "daily_work",
+    group_label: "Daily work",
+    requires: [],
+  },
+  {
+    key: "bins.use",
+    label: "Bin moves",
+    description: "Work through bin consolidation move lists and mark moves as done. Never changes the stock.",
+    group: "daily_work",
+    group_label: "Daily work",
+    requires: ["analysis.view"],
+  },
+  {
     key: "inventory.import",
     label: "Import inventory",
     description:
@@ -137,6 +154,12 @@ export const importer: MeResponse = {
   username: "importer",
   display_name: "Importer",
   permissions: ["inventory.import"],
+};
+
+export const mover: MeResponse = {
+  username: "mover",
+  display_name: "Mover",
+  permissions: ["analysis.view", "bins.use"],
 };
 
 export const lister: MeResponse = { username: "lister", display_name: "Lister", permissions: ["listing.use"] };

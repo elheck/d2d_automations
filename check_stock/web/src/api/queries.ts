@@ -5,6 +5,27 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClie
 import { api, ApiError, download } from "./client";
 import type {
   AuditPage,
+  OutputRequest,
+  OutputText,
+  PickedResult,
+  PickingRequest,
+  PickingView,
+  StockCheckRequest,
+  StockCheckView,
+  UpdateCsvRequest,
+  CardHistory,
+  DiscardRequest,
+  DiscardResult,
+  DiscardSummary,
+  SearchView,
+  BinSort,
+  BinsView,
+  FragmentedView,
+  MoveListCreated,
+  MoveListRequest,
+  MoveListView,
+  PlanSummary,
+  TickResult,
   DigestView,
   InventoryConfirmRequest,
   InventoryFileRequest,
@@ -61,6 +82,14 @@ export const keys = {
   mispricing: ["mispricing"] as const,
   stockAnalysis: ["stock-analysis"] as const,
   importHistory: ["import-history"] as const,
+  bins: ["bins"] as const,
+  fragmented: ["bins-fragmented"] as const,
+  consolidation: ["bins-consolidation"] as const,
+  moveList: ["move-list"] as const,
+  search: ["search"] as const,
+  cardHistory: ["card-history"] as const,
+  discards: ["discards"] as const,
+  picking: ["picking"] as const,
   digest: ["digest"] as const,
 };
 
@@ -554,4 +583,250 @@ export function useStockAnalysis() {
 /** Whether the user holds a permission (the server checks again). */
 export function can(me: MeResponse | null | undefined, permission: string): boolean {
   return me?.permissions.includes(permission) ?? false;
+}
+
+export interface BinParams {
+  minFree: number;
+  sort: BinSort;
+}
+
+const binQuery = (p: BinParams) => `min_free=${p.minFree}&sort=${p.sort}`;
+
+/** The bins of the last import with their fill (null parameters: wait). */
+export function useBins(params: BinParams | null) {
+  return useQuery({
+    queryKey: [...keys.bins, params],
+    queryFn: () => {
+      if (!params) throw new Error("no parameters");
+      return api.get<BinsView>(`/api/bins?${binQuery(params)}`);
+    },
+    enabled: params !== null,
+    placeholderData: (previous) => previous,
+  });
+}
+
+/** The bin table as CSV. */
+export function useExportBins() {
+  return useMutation({
+    mutationFn: (params: BinParams) => download(`/api/bins/export?${binQuery(params)}`, undefined, "bin_analysis.csv"),
+  });
+}
+
+/** Variants spread over several bins, with what gathering them takes. */
+export function useFragmented() {
+  return useQuery({
+    queryKey: keys.fragmented,
+    queryFn: () => api.get<FragmentedView>("/api/bins/fragmented"),
+  });
+}
+
+/** What emptying the bins filled up to `threshold` cards would take. */
+export function useConsolidationSummary(threshold: number | null) {
+  return useQuery({
+    queryKey: [...keys.consolidation, threshold],
+    queryFn: () => {
+      if (threshold === null) throw new Error("no threshold");
+      return api.get<PlanSummary>(`/api/bins/consolidation?threshold=${threshold}`);
+    },
+    enabled: threshold !== null,
+    placeholderData: (previous) => previous,
+    retry: false,
+  });
+}
+
+/** The user's move list (`null`: none). */
+export function useMoveList() {
+  return useQuery({
+    queryKey: keys.moveList,
+    queryFn: () => api.get<MoveListView | null>("/api/bins/list"),
+  });
+}
+
+/** Makes (or makes again) the user's move list. */
+export function useCreateMoveList() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: MoveListRequest) => api.post<MoveListCreated>("/api/bins/list", request),
+    onSuccess: (created) => queryClient.setQueryData(keys.moveList, created.list),
+  });
+}
+
+/**
+ * Ticks or unticks moves. The list shows the change at once (walking
+ * through the bins with a phone); a refusal puts the old state back.
+ */
+export function useTickMoves() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: { ids: string[]; done: boolean }) => api.put<TickResult>("/api/bins/list/ticks", request),
+    onMutate: async ({ ids, done }) => {
+      await queryClient.cancelQueries({ queryKey: keys.moveList });
+      const before = queryClient.getQueryData<MoveListView | null>(keys.moveList);
+      if (before) {
+        const changed = new Set(ids);
+        const moves = before.moves.map((m) => (changed.has(m.id) ? { ...m, done } : m));
+        queryClient.setQueryData<MoveListView>(keys.moveList, {
+          ...before,
+          moves,
+          ticked: moves.filter((m) => m.done).length,
+        });
+      }
+      return { before };
+    },
+    onError: (_error, _request, context) => {
+      if (context?.before !== undefined) queryClient.setQueryData(keys.moveList, context.before);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: keys.moveList }),
+  });
+}
+
+export function useDiscardMoveList() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.delete<void>("/api/bins/list"),
+    onSuccess: () => queryClient.setQueryData(keys.moveList, null),
+  });
+}
+
+/** The ticked piles as a Cardmarket stock-update CSV. */
+export function useExportMoves() {
+  return useMutation({
+    mutationFn: (fallbackName: string) => download("/api/bins/list/export", undefined, fallbackName),
+  });
+}
+
+export type SearchField = "name" | "set" | "condition" | "language" | "location" | "rarity" | "price" | "comment";
+
+export interface SearchParams {
+  q: string;
+  fields: SearchField[];
+  caseSensitive: boolean;
+  allLanguages: boolean;
+  page: number;
+  perPage: number;
+}
+
+export function searchQuery(p: SearchParams): string {
+  const query = new URLSearchParams({
+    q: p.q,
+    fields: p.fields.join(","),
+    case_sensitive: String(p.caseSensitive),
+    all_languages: String(p.allLanguages),
+    page: String(p.page),
+    per_page: String(p.perPage),
+  });
+  return query.toString();
+}
+
+/** Piles of the stock matching the search. */
+export function useSearch(params: SearchParams) {
+  return useQuery({
+    queryKey: [...keys.search, params],
+    queryFn: () => api.get<SearchView>(`/api/search?${searchQuery(params)}`),
+    placeholderData: (previous) => previous,
+  });
+}
+
+/** Price history of a card (`null`: closed). */
+export function useCardHistory(card: { product: number; foil: boolean } | null) {
+  return useQuery({
+    queryKey: [...keys.cardHistory, card],
+    queryFn: () => {
+      if (!card) throw new Error("no card");
+      return api.get<CardHistory>(`/api/search/history/${card.product}?foil=${card.foil}`);
+    },
+    enabled: card !== null,
+    retry: false,
+  });
+}
+
+/** Writes piles off; every page's data changes. */
+export function useDiscard() {
+  return useMutation({
+    mutationFn: (request: DiscardRequest) => api.post<DiscardResult>("/api/inventory/discard", request),
+  });
+}
+
+/** The latest discards. */
+export function useDiscardHistory(enabled: boolean) {
+  return useQuery({
+    queryKey: keys.discards,
+    queryFn: () => api.get<DiscardSummary[]>("/api/inventory/discards"),
+    enabled,
+  });
+}
+
+/** The stock-update CSV of discard `id`. */
+export function downloadDiscardCsv(id: number) {
+  return download(`/api/inventory/discards/${id}/csv`, undefined, `discarded_cards_${id}.csv`);
+}
+
+/** Matches a wantslist against the stock. */
+export function useStockCheck() {
+  return useMutation({
+    mutationFn: (request: StockCheckRequest) => api.post<StockCheckView>("/api/stock-checker/check", request),
+  });
+}
+
+/** Picking list, invoice list or summary of the chosen piles, as text. */
+export function useStockOutput() {
+  return useMutation({
+    mutationFn: (request: OutputRequest) => api.post<OutputText>("/api/stock-checker/output", request),
+  });
+}
+
+/** The stock-update CSV that takes the chosen piles off Cardmarket. */
+export function useStockUpdateCsv() {
+  return useMutation({
+    mutationFn: (request: UpdateCsvRequest) => download("/api/stock-checker/update-csv", request, "stock_update.csv"),
+  });
+}
+
+/** The user's picking list (`null`: none). */
+export function usePicking() {
+  return useQuery({
+    queryKey: keys.picking,
+    queryFn: () => api.get<PickingView | null>("/api/picking"),
+  });
+}
+
+export function useCreatePicking() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: PickingRequest) => api.post<PickingView>("/api/picking", request),
+    onSuccess: (list) => queryClient.setQueryData(keys.picking, list),
+  });
+}
+
+/** Marks cards as picked at once; a refusal puts the old state back. */
+export function useSetPicked() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: { piles: string[]; picked: boolean }) =>
+      api.put<PickedResult>("/api/picking/picked", request),
+    onMutate: async ({ piles, picked }) => {
+      await queryClient.cancelQueries({ queryKey: keys.picking });
+      const before = queryClient.getQueryData<PickingView | null>(keys.picking);
+      if (before) {
+        const changed = new Set(piles);
+        queryClient.setQueryData<PickingView>(keys.picking, {
+          ...before,
+          items: before.items.map((i) => (changed.has(i.pile) ? { ...i, picked } : i)),
+        });
+      }
+      return { before };
+    },
+    onError: (_error, _request, context) => {
+      if (context?.before !== undefined) queryClient.setQueryData(keys.picking, context.before);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: keys.picking }),
+  });
+}
+
+export function useDiscardPicking() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.delete<void>("/api/picking"),
+    onSuccess: () => queryClient.setQueryData(keys.picking, null),
+  });
 }

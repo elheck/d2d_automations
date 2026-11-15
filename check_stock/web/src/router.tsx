@@ -14,9 +14,14 @@ import { MoversPage } from "./pages/MoversPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { PreconEvPage } from "./pages/PreconEvPage";
 import { PreconProductPage } from "./pages/PreconProductPage";
+import { BinAnalysisPage } from "./pages/BinAnalysisPage";
+import { BinMovesPage } from "./pages/BinMovesPage";
 import { InventoryImportPage } from "./pages/InventoryImportPage";
+import { PickingPage } from "./pages/PickingPage";
 import { RestockPage } from "./pages/RestockPage";
+import { SearchPage } from "./pages/SearchPage";
 import { StockAnalysisPage } from "./pages/StockAnalysisPage";
+import { StockCheckerPage } from "./pages/StockCheckerPage";
 import { SinglesPage } from "./pages/SinglesPage";
 import { UsersPage } from "./pages/UsersPage";
 
@@ -128,6 +133,56 @@ const mispricingRoute = createRoute({
   ),
 });
 
+const stockCheckerRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/stock-checker",
+  component: () => (
+    <RequirePermission permission="stock_checker.use">
+      <StockCheckerPage />
+    </RequirePermission>
+  ),
+});
+
+const pickingRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/picking",
+  component: () => (
+    <RequirePermission permission="stock_checker.use">
+      <PickingPage />
+    </RequirePermission>
+  ),
+});
+
+const searchRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/search",
+  component: () => (
+    <RequirePermission permission="search.use">
+      <SearchPage />
+    </RequirePermission>
+  ),
+});
+
+const binsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/bins",
+  component: () => (
+    <RequirePermission permission="analysis.view">
+      <BinAnalysisPage />
+    </RequirePermission>
+  ),
+});
+
+const binMovesRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/bin-moves",
+  component: () => (
+    <RequirePermission permission="bins.use">
+      <BinMovesPage />
+    </RequirePermission>
+  ),
+});
+
 const inventoryImportRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/inventory-import",
@@ -187,6 +242,11 @@ const routeTree = rootRoute.addChildren([
     mispricingRoute,
     stockAnalysisRoute,
     inventoryImportRoute,
+    binsRoute,
+    binMovesRoute,
+    searchRoute,
+    stockCheckerRoute,
+    pickingRoute,
     usersRoute,
     auditRoute,
     accountRoute,

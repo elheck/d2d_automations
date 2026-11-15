@@ -20,6 +20,11 @@ import {
 } from "./inventoryImport";
 import { formatTime } from "./UsersPage";
 
+interface TypedNumbers {
+  sold: string;
+  returning: string;
+}
+
 interface ChosenFile {
   name: string;
   csv: string;
@@ -33,11 +38,11 @@ export function InventoryImportPage() {
   const queryClient = useQueryClient();
   const [file, setFile] = useState<ChosenFile | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
-  const [typed, setTyped] = useState("");
+  const [typed, setTyped] = useState<TypedNumbers>({ sold: "", returning: "" });
   const [done, setDone] = useState<InventoryImportResult | null>(null);
 
   function check(chosen: ChosenFile) {
-    setTyped("");
+    setTyped({ sold: "", returning: "" });
     confirm.reset();
     preview.mutate({ file_name: chosen.name, csv: chosen.csv });
   }
@@ -66,13 +71,18 @@ export function InventoryImportPage() {
     }
   }
 
-  function importNow(confirmSold?: string) {
+  function importNow(numbers?: Partial<TypedNumbers>) {
     if (!file) return;
     confirm.mutate(
-      { file_name: file.name, csv: file.csv, ...(confirmSold === undefined ? {} : { confirm_sold: confirmSold }) },
+      {
+        file_name: file.name,
+        csv: file.csv,
+        ...(numbers?.sold === undefined ? {} : { confirm_sold: numbers.sold }),
+        ...(numbers?.returning === undefined ? {} : { confirm_returning: numbers.returning }),
+      },
       {
         onSuccess: (result) => {
-          markSeen(result.version);
+          markSeen(result.data_version);
           setDone(result);
           setFile(null);
           preview.reset();
@@ -171,14 +181,18 @@ function Preview({
   onCancel,
 }: {
   preview: InventoryPreview;
-  typed: string;
-  onTyped: (value: string) => void;
+  typed: TypedNumbers;
+  onTyped: (value: TypedNumbers) => void;
   busy: boolean;
-  onImport: (confirmSold?: string) => void;
+  onImport: (numbers?: Partial<TypedNumbers>) => void;
   onCancel: () => void;
 }) {
   const n = p.numbers;
-  const typedRight = typedCount(typed) === n.copies_sold;
+  const returning = p.returning_discards;
+  const blocked = p.blocked || returning > 0;
+  const soldRight = !p.blocked || typedCount(typed.sold) === n.copies_sold;
+  const returningRight = returning === 0 || typedCount(typed.returning) === returning;
+  const typedRight = soldRight && returningRight;
   const rows: [string, string, string?][] = [
     ["Listings in the file", formatCount(p.rows)],
     ["Copies in the file", formatCount(p.copies_in_file)],
@@ -216,30 +230,62 @@ function Preview({
         </p>
       )}
 
-      {p.blocked ? (
+      {blocked ? (
         <div className="notice notice--danger" role="alert">
-          <p>
-            <strong>Blocked:</strong> this import would count {formatCount(n.copies_sold)} of{" "}
-            {formatCount(n.copies_before)} copies, more than half the stock, as sold. That usually means a cut-off or
-            wrong file. Only if the stock really dropped this much, type {formatCount(n.copies_sold)} below to import it
-            anyway.
-          </p>
+          {p.blocked && (
+            <p>
+              <strong>Blocked:</strong> this import would count {formatCount(n.copies_sold)} of{" "}
+              {formatCount(n.copies_before)} copies, more than half the stock, as sold. That usually means a cut-off or
+              wrong file. Only if the stock really dropped this much, type {formatCount(n.copies_sold)} below to import
+              it anyway.
+            </p>
+          )}
+          {returning > 0 && (
+            <p>
+              <strong>Discarded cards come back:</strong> this export still holds {formatCount(returning)}{" "}
+              {returning === 1 ? "copy" : "copies"} discarded since the last import. It was downloaded before the
+              discard CSV went into Cardmarket; importing it brings them back as stock, and when they disappear later
+              they count as sold. Import the discard CSV into Cardmarket, download a fresh export and import that
+              instead. Only if the copies really are back, type {formatCount(returning)} below.
+            </p>
+          )}
           <form
             className="import-force"
             onSubmit={(event) => {
               event.preventDefault();
-              if (typedRight) onImport(typed);
+              if (typedRight)
+                onImport({
+                  ...(p.blocked ? { sold: typed.sold } : {}),
+                  ...(returning > 0 ? { returning: typed.returning } : {}),
+                });
             }}
           >
-            <label htmlFor="import-force-count">Copies that will count as sold</label>
-            <input
-              id="import-force-count"
-              className="input"
-              inputMode="numeric"
-              autoComplete="off"
-              value={typed}
-              onChange={(event) => onTyped(event.target.value)}
-            />
+            {p.blocked && (
+              <span className="inline-field">
+                <label htmlFor="import-force-count">Copies that will count as sold</label>
+                <input
+                  id="import-force-count"
+                  className="input"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  value={typed.sold}
+                  onChange={(event) => onTyped({ ...typed, sold: event.target.value })}
+                />
+              </span>
+            )}
+            {returning > 0 && (
+              <span className="inline-field">
+                <label htmlFor="import-returning-count">Discarded copies that come back</label>
+                <input
+                  id="import-returning-count"
+                  className="input"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  value={typed.returning}
+                  onChange={(event) => onTyped({ ...typed, returning: event.target.value })}
+                />
+              </span>
+            )}
             <button type="submit" className="button button--danger" disabled={!typedRight || busy}>
               Import anyway
             </button>

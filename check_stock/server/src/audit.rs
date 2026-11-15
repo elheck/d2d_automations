@@ -65,6 +65,13 @@ pub mod action {
     pub const INVENTORY_IMPORT_FORCED: &str = "inventory.import_forced";
     /// The inventory was restored from a backup (`restore-inventory`).
     pub const INVENTORY_RESTORED: &str = "inventory.restored";
+    /// Copies written off from Search (target: the category).
+    pub const INVENTORY_DISCARDED: &str = "inventory.discarded";
+    /// A user made (or made again) their bin move list (target: the kind).
+    pub const BINS_LIST_CREATED: &str = "bins.list_created";
+    pub const BINS_LIST_DISCARDED: &str = "bins.list_discarded";
+    /// A user made a picking list (target: number of piles).
+    pub const PICKING_CREATED: &str = "picking.created";
 }
 
 /// Adds an entry.

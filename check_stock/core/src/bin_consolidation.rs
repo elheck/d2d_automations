@@ -359,6 +359,54 @@ fn is_better(a: &ConsolidationPlan, b: &ConsolidationPlan) -> bool {
     }
 }
 
+/// How full one bin is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BinLoad {
+    /// The bin: the first four parts of the location (`A-0-0-25`).
+    pub bin: String,
+    /// Copies in it.
+    pub cards: i64,
+    /// Piles (rows) in it.
+    pub piles: usize,
+}
+
+impl BinLoad {
+    /// Room left (negative when overfull).
+    pub fn free(&self) -> i64 {
+        BIN_CAPACITY - self.cards
+    }
+}
+
+/// Every bin holding stock, in shelf order (aisle, shelf, row, column as
+/// numbers, so `A-0-0-9` comes before `A-0-0-10`), plus the number of
+/// in-stock rows without a recognisable bin location.
+pub fn bin_loads(cards: &[Card]) -> (Vec<BinLoad>, usize) {
+    let mut loads: HashMap<String, BinLoad> = HashMap::new();
+    for p in build_placements(cards) {
+        let entry = loads.entry(p.bin.clone()).or_insert_with(|| BinLoad {
+            bin: p.bin.clone(),
+            cards: 0,
+            piles: 0,
+        });
+        entry.cards += p.qty;
+        entry.piles += 1;
+    }
+    let unplaced = cards
+        .iter()
+        .filter(|c| c.quantity.trim().parse::<i64>().is_ok_and(|q| q > 0))
+        .filter(|c| {
+            c.location
+                .as_deref()
+                .map(str::trim)
+                .and_then(split_location)
+                .is_none()
+        })
+        .count();
+    let mut out: Vec<BinLoad> = loads.into_values().collect();
+    out.sort_by_cached_key(|b| (parse_location_code(&b.bin), b.bin.clone()));
+    (out, unplaced)
+}
+
 /// One card variant that is currently split across more than one bin.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FragmentedVariant {
