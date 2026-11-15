@@ -25,6 +25,7 @@ pub mod db;
 pub mod http;
 pub mod import;
 pub mod jobs;
+pub mod market;
 pub mod migrations;
 pub mod password;
 pub mod permissions;

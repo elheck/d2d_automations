@@ -12,7 +12,7 @@
 
 use crate::{
     api::inventory_sync::InventorySyncClient,
-    price_trends::{build_stock_movers, SnapshotSet, StockMover},
+    price_trends::{build_stock_movers, filter_movers, sort_movers, SnapshotSet, StockMover},
     ui::{
         components::InventorySyncBar,
         state::{AppState, InventoryPriceSource, MoverDirection, MoverSort, MoversState, Screen},
@@ -191,33 +191,8 @@ impl MoversScreen {
     }
 
     fn show_table(ui: &mut egui::Ui, state: &mut MoversState) {
-        let mut rows: Vec<&StockMover> = state.movers.iter().collect();
-
-        let cmp_opt =
-            |a: Option<f64>, b: Option<f64>| a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal);
-        rows.sort_by(|a, b| {
-            let ord = match state.sort {
-                MoverSort::Change7 => cmp_opt(a.change.pct_7d, b.change.pct_7d),
-                MoverSort::Change30 => cmp_opt(a.change.pct_30d, b.change.pct_30d),
-                MoverSort::Age => a.age_days.cmp(&b.age_days),
-                MoverSort::Current => cmp_opt(a.change.current, b.change.current),
-                MoverSort::Listed => cmp_opt(Some(a.card.price), Some(b.card.price)),
-                MoverSort::Name => a.card.name.cmp(&b.card.name),
-                MoverSort::Set => a
-                    .card
-                    .set_code
-                    .cmp(&b.card.set_code)
-                    .then_with(|| a.card.name.cmp(&b.card.name)),
-                MoverSort::Quantity => a.card.quantity.cmp(&b.card.quantity),
-                MoverSort::Location => a.card.location.cmp(&b.card.location),
-            };
-            if state.sort_desc {
-                ord.reverse()
-            } else {
-                ord
-            }
-        });
-
+        let mut rows: Vec<StockMover> = state.movers.clone();
+        sort_movers(&mut rows, state.sort, state.sort_desc);
         let total = rows.len();
         let shown = total.min(MAX_ROWS);
         ui.label(
@@ -404,27 +379,13 @@ impl MoversScreen {
     /// Rejoins cards × snapshots with the current parameters.
     fn rebuild(state: &mut MoversState) {
         let today = chrono::Local::now().date_naive();
-        let mut movers = build_stock_movers(
+        let movers = build_stock_movers(
             &state.cards,
             &state.snapshots,
             state.field,
             today,
             state.min_price,
         );
-        movers.retain(|m| {
-            if m.age_days < state.min_age_days {
-                return false;
-            }
-            match state.direction {
-                MoverDirection::All => true,
-                MoverDirection::Risers => {
-                    m.change.pct_7d.unwrap_or(0.0) > 0.0 || m.change.pct_30d.unwrap_or(0.0) > 0.0
-                }
-                MoverDirection::Fallers => {
-                    m.change.pct_7d.unwrap_or(0.0) < 0.0 || m.change.pct_30d.unwrap_or(0.0) < 0.0
-                }
-            }
-        });
-        state.movers = movers;
+        state.movers = filter_movers(movers, state.min_age_days, state.direction);
     }
 }

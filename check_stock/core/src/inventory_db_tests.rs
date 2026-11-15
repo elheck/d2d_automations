@@ -3222,3 +3222,19 @@ fn open_gives_a_ready_connection_for_callers_with_their_own_connections() {
     sync_inventory_conn(&mut writer, &[Card::test_default()], &today_date()).unwrap();
     assert_eq!(get_in_stock_cards_conn(&conn).unwrap().len(), 1);
 }
+
+#[test]
+fn last_sync_date_is_the_newest_import_day() {
+    let mut conn = test_conn();
+    assert_eq!(last_sync_date_conn(&conn).unwrap(), None);
+    sync_inventory_conn(&mut conn, &[make_card("1", "Bolt", "3")], "2026-01-01").unwrap();
+    assert_eq!(
+        last_sync_date_conn(&conn).unwrap().as_deref(),
+        Some("2026-01-01")
+    );
+    sync_inventory_conn(&mut conn, &[make_card("1", "Bolt", "2")], "2026-01-05").unwrap();
+    assert_eq!(
+        last_sync_date_conn(&conn).unwrap().as_deref(),
+        Some("2026-01-05")
+    );
+}

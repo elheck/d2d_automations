@@ -211,6 +211,100 @@ pub fn build_stock_movers(
         .collect()
 }
 
+/// Which movers to show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MoverDirection {
+    #[default]
+    All,
+    /// Rose over 7 or 30 days.
+    Risers,
+    /// Fell over 7 or 30 days.
+    Fallers,
+}
+
+impl MoverDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MoverDirection::All => "All",
+            MoverDirection::Risers => "Risers",
+            MoverDirection::Fallers => "Fallers",
+        }
+    }
+}
+
+/// Columns the movers table can be sorted by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MoverSort {
+    /// Market movement over the last 7 days.
+    #[default]
+    Change7,
+    /// Market movement over the last 30 days.
+    Change30,
+    /// Days since the card was listed.
+    Age,
+    /// Current market value of the reference field.
+    Current,
+    Listed,
+    Name,
+    Set,
+    Quantity,
+    Location,
+}
+
+/// Movers listed at least `min_age_days` ago that moved in `direction`.
+pub fn filter_movers(
+    movers: Vec<StockMover>,
+    min_age_days: i64,
+    direction: MoverDirection,
+) -> Vec<StockMover> {
+    movers
+        .into_iter()
+        .filter(|m| {
+            if m.age_days < min_age_days {
+                return false;
+            }
+            let (d7, d30) = (
+                m.change.pct_7d.unwrap_or(0.0),
+                m.change.pct_30d.unwrap_or(0.0),
+            );
+            match direction {
+                MoverDirection::All => true,
+                MoverDirection::Risers => d7 > 0.0 || d30 > 0.0,
+                MoverDirection::Fallers => d7 < 0.0 || d30 < 0.0,
+            }
+        })
+        .collect()
+}
+
+/// Sorts movers by `sort`, descending when `desc` (missing changes count as
+/// equal to each other).
+pub fn sort_movers(rows: &mut [StockMover], sort: MoverSort, desc: bool) {
+    let cmp_opt =
+        |a: Option<f64>, b: Option<f64>| a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal);
+    rows.sort_by(|a, b| {
+        let ord = match sort {
+            MoverSort::Change7 => cmp_opt(a.change.pct_7d, b.change.pct_7d),
+            MoverSort::Change30 => cmp_opt(a.change.pct_30d, b.change.pct_30d),
+            MoverSort::Age => a.age_days.cmp(&b.age_days),
+            MoverSort::Current => cmp_opt(a.change.current, b.change.current),
+            MoverSort::Listed => cmp_opt(Some(a.card.price), Some(b.card.price)),
+            MoverSort::Name => a.card.name.cmp(&b.card.name),
+            MoverSort::Set => a
+                .card
+                .set_code
+                .cmp(&b.card.set_code)
+                .then_with(|| a.card.name.cmp(&b.card.name)),
+            MoverSort::Quantity => a.card.quantity.cmp(&b.card.quantity),
+            MoverSort::Location => a.card.location.cmp(&b.card.location),
+        };
+        if desc {
+            ord.reverse()
+        } else {
+            ord
+        }
+    });
+}
+
 #[cfg(test)]
 #[path = "price_trends_tests.rs"]
 mod tests;

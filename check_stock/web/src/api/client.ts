@@ -109,9 +109,12 @@ export function downloadFileName(header: string | null, fallback: string): strin
   return /^[A-Za-z0-9._-]{1,100}$/.test(name) && !name.startsWith(".") ? name : fallback;
 }
 
-/** POSTs `body` and returns the file the server answers with. */
+/**
+ * Fetches a file the server answers with: POST with `body`, or GET when
+ * `body` is `undefined` (e.g. a report export with its query string).
+ */
 export async function download(path: string, body: unknown, fallbackName: string): Promise<Download> {
-  const response = await send("POST", path, body, "*/*");
+  const response = await send(body === undefined ? "GET" : "POST", path, body, "*/*");
   return {
     blob: await response.blob(),
     fileName: downloadFileName(response.headers.get("Content-Disposition"), fallbackName),

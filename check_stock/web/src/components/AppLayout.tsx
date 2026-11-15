@@ -3,22 +3,8 @@
 
 import { Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
-import { can, useLogout, useMe } from "../api/queries";
-
-export interface NavItem {
-  to: "/" | "/singles" | "/buy-helper" | "/precon-ev" | "/users" | "/audit";
-  label: string;
-  permission?: string;
-}
-
-export const NAV_ITEMS: NavItem[] = [
-  { to: "/", label: "Home" },
-  { to: "/singles", label: "Singles", permission: "listing.use" },
-  { to: "/buy-helper", label: "Buy helper", permission: "buy_helper.use" },
-  { to: "/precon-ev", label: "Precon EV", permission: "precon_ev.use" },
-  { to: "/users", label: "Users", permission: "users.manage" },
-  { to: "/audit", label: "Audit log", permission: "audit.view" },
-];
+import { useLogout, useMe } from "../api/queries";
+import { groupIsActive, visibleGroups, type NavGroup } from "../navigation";
 
 export function AppLayout() {
   const { data: me, isPending, error } = useMe();
@@ -62,16 +48,16 @@ export function AppLayout() {
           check_stock
         </Link>
         <nav aria-label="Main" className="app-nav">
-          {NAV_ITEMS.filter((item) => !item.permission || can(me, item.permission)).map((item) => (
-            <Link
-              key={item.to}
-              to={item.to}
-              className="app-nav__link"
-              activeOptions={{ exact: item.to === "/" }}
-              activeProps={{ className: "app-nav__link app-nav__link--active" }}
-            >
-              {item.label}
-            </Link>
+          <Link
+            to="/"
+            className="app-nav__link"
+            activeOptions={{ exact: true }}
+            activeProps={{ className: "app-nav__link app-nav__link--active" }}
+          >
+            Home
+          </Link>
+          {visibleGroups(me).map((group) => (
+            <NavMenu key={group.label} group={group} path={location.pathname} />
           ))}
         </nav>
         <div className="app-header__user">
@@ -99,5 +85,55 @@ export function AppLayout() {
         <Outlet />
       </main>
     </div>
+  );
+}
+
+/**
+ * A group of the navigation as a drop-down (`<details>`): closes when one of
+ * its links is followed, on a click elsewhere and on Escape.
+ */
+function NavMenu({ group, path }: { group: NavGroup; path: string }) {
+  const menu = useRef<HTMLDetailsElement>(null);
+
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      const element = menu.current;
+      if (element?.open && !element.contains(event.target as Node)) element.open = false;
+    };
+    const onKey = (event: KeyboardEvent) => {
+      const element = menu.current;
+      if (event.key === "Escape" && element?.open) {
+        element.open = false;
+        element.querySelector("summary")?.focus();
+      }
+    };
+    document.addEventListener("click", onClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
+  const active = groupIsActive(group, path);
+  return (
+    <details className="nav-menu" ref={menu}>
+      <summary className={active ? "app-nav__link app-nav__link--active" : "app-nav__link"}>{group.label}</summary>
+      <div className="nav-menu__panel">
+        {group.items.map((item) => (
+          <Link
+            key={item.to}
+            to={item.to}
+            className="nav-menu__link"
+            activeProps={{ className: "nav-menu__link nav-menu__link--active" }}
+            onClick={() => {
+              if (menu.current) menu.current.open = false;
+            }}
+          >
+            {item.label}
+          </Link>
+        ))}
+      </div>
+    </details>
   );
 }

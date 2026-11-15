@@ -9,9 +9,13 @@ import { AuditPage } from "./pages/AuditPage";
 import { BuyHelperPage } from "./pages/BuyHelperPage";
 import { HomePage } from "./pages/HomePage";
 import { LoginPage } from "./pages/LoginPage";
+import { MispricingPage } from "./pages/MispricingPage";
+import { MoversPage } from "./pages/MoversPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { PreconEvPage } from "./pages/PreconEvPage";
 import { PreconProductPage } from "./pages/PreconProductPage";
+import { RestockPage } from "./pages/RestockPage";
+import { StockAnalysisPage } from "./pages/StockAnalysisPage";
 import { SinglesPage } from "./pages/SinglesPage";
 import { UsersPage } from "./pages/UsersPage";
 
@@ -93,6 +97,46 @@ const preconProductRoute = createRoute({
   ),
 });
 
+const restockRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/restock",
+  component: () => (
+    <RequirePermission permission="analysis.view">
+      <RestockPage />
+    </RequirePermission>
+  ),
+});
+
+const moversRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/movers",
+  component: () => (
+    <RequirePermission permission="analysis.view">
+      <MoversPage />
+    </RequirePermission>
+  ),
+});
+
+const mispricingRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/mispricing",
+  component: () => (
+    <RequirePermission permission="mispricing.view">
+      <MispricingPage />
+    </RequirePermission>
+  ),
+});
+
+const stockAnalysisRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/stock-analysis",
+  component: () => (
+    <RequirePermission permission="analysis.view">
+      <StockAnalysisPage />
+    </RequirePermission>
+  ),
+});
+
 const usersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/users",
@@ -127,6 +171,10 @@ const routeTree = rootRoute.addChildren([
     buyHelperRoute,
     preconRoute,
     preconProductRoute,
+    restockRoute,
+    moversRoute,
+    mispricingRoute,
+    stockAnalysisRoute,
     usersRoute,
     auditRoute,
     accountRoute,

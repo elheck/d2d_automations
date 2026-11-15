@@ -860,3 +860,151 @@ code {
 .chart__key.chart-series--top5 .chart__swatch {
   background: var(--series-top5);
 }
+
+/* Navigation groups (drop-downs) */
+.nav-menu {
+  position: relative;
+}
+.nav-menu summary {
+  list-style: none;
+  cursor: pointer;
+}
+.nav-menu summary::-webkit-details-marker {
+  display: none;
+}
+.nav-menu summary::after {
+  content: " ⏷";
+  font-size: 0.75em;
+}
+.nav-menu__panel {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  min-width: 12rem;
+  display: flex;
+  flex-direction: column;
+  padding: 0.35rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
+}
+.nav-menu__link {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: 0 0.75rem;
+  border-radius: calc(var(--radius) - 2px);
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.nav-menu__link:hover,
+.nav-menu__link--active {
+  background: var(--bg);
+}
+.nav-menu__link--active {
+  font-weight: 600;
+}
+
+/* "Data as of" banner of the reports */
+.data-as-of {
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--accent);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+/* Price changes */
+.change--up {
+  color: var(--success);
+}
+.change--down {
+  color: var(--danger);
+}
+
+/* Segmented buttons (one of a few choices) */
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.segmented__button {
+  min-height: var(--tap);
+  padding: 0 0.9rem;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.segmented__button:last-child {
+  border-right: none;
+}
+.segmented__button--on {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+/* Mispricing */
+.verdict--underpriced {
+  color: var(--success);
+}
+.verdict--overpriced {
+  color: var(--danger);
+}
+.verdict--fair,
+.verdict--no_market_data {
+  color: var(--muted);
+}
+.action--up {
+  color: var(--success);
+}
+.action--down {
+  color: var(--danger);
+}
+.action--now {
+  font-weight: 700;
+}
+.consistency {
+  margin: 0.5rem 0 1rem;
+}
+.consistency summary {
+  cursor: pointer;
+  min-height: var(--tap);
+  display: flex;
+  align-items: center;
+  font-weight: 600;
+}
+.report-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin: 0.5rem 0;
+}
+
+/* Stock analysis */
+.analysis-narrow {
+  max-width: 36rem;
+}
+.analysis-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 0 2rem;
+}
+.top-list {
+  margin: 0;
+  padding-left: 1.5rem;
+}
+.top-list li {
+  padding: 0.25rem 0;
+}
+.top-list li span:first-child {
+  margin-right: 0.75rem;
+}

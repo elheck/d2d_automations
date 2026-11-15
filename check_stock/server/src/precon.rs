@@ -15,7 +15,7 @@
 //! - history charts are fetched one at a time and the last
 //!   [`HISTORY_CACHE_PRODUCTS`] are kept (until the next load).
 
-use crate::jobs::{Job, JobRun, JobStatus};
+use crate::jobs::{public_message, Job, JobRun, JobStatus};
 use check_stock_core::api::inventory_sync::InventorySyncClient;
 use check_stock_core::api::mtgjson::MtgjsonClient;
 use check_stock_core::cache::{DeckCache, SalesCache};
@@ -82,22 +82,6 @@ pub struct PreconService {
     cooldown: Duration,
     /// Held while a history is fetched (one at a time), then the cache.
     history: tokio::sync::Mutex<HistoryCache>,
-}
-
-/// The part of a loader error that is meant for people: `"Catalog fetch
-/// failed: error sending request for url (http://…)"` → `"Catalog fetch
-/// failed."`. The full text (addresses, causes) only goes to the log.
-pub fn public_message(error: &str) -> String {
-    let head = error
-        .split_once(": ")
-        .map_or(error, |(head, _)| head)
-        .trim();
-    let head = head.trim_end_matches('.');
-    if head.is_empty() {
-        "The load failed.".to_string()
-    } else {
-        format!("{head}.")
-    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

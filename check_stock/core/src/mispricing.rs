@@ -22,10 +22,12 @@
 //! - **Priority score** — one transparent number to sort "what to fix first".
 
 use crate::aging::age_days;
+use crate::api::inventory_sync::{LatestPrice, PriceField, PriceFields};
 use crate::inventory_db::InStockCard;
 use crate::models::canonical_condition;
-use crate::price_trends::pct_change;
+use crate::price_trends::{pct_change, SnapshotSet, TrendChange};
 use chrono::NaiveDate;
+use std::collections::HashMap;
 
 /// Momentum windows smaller than this (in %) count as flat market.
 pub const MOMENTUM_THRESHOLD_PCT: f64 = 3.0;
@@ -476,6 +478,167 @@ where
     }
 
     report
+}
+
+/// Resolves the full [`MarketData`] for one card from any row carrying the
+/// standard 12 Cardmarket price columns (`field` = the reference column).
+pub fn market_data_of<P: PriceFields>(
+    row: &P,
+    field: PriceField,
+    is_foil: bool,
+    price_date: Option<NaiveDate>,
+    volatility_pct: Option<f64>,
+) -> MarketData {
+    MarketData {
+        reference: row.price_for(field, is_foil),
+        low: row.price_for(PriceField::Low, is_foil),
+        avg1: row.price_for(PriceField::Avg1, is_foil),
+        avg7: row.price_for(PriceField::Avg7, is_foil),
+        avg30: row.price_for(PriceField::Avg30, is_foil),
+        price_date,
+        volatility_pct,
+    }
+}
+
+/// The report from the tracker's latest prices (`latest`, by product id)
+/// and its snapshots (volatility), with `field` as the reference column.
+pub fn report_from_tracker(
+    cards: &[InStockCard],
+    latest: &HashMap<u64, LatestPrice>,
+    snapshots: &SnapshotSet,
+    field: PriceField,
+    threshold_pct: f64,
+    today: NaiveDate,
+) -> MispricingReport {
+    build_report(cards, threshold_pct, today, |c: &InStockCard| {
+        let Ok(id) = c.cardmarket_id.trim().parse::<u64>() else {
+            return MarketData::default();
+        };
+        let Some(row) = latest.get(&id) else {
+            return MarketData::default();
+        };
+        let price_date = NaiveDate::parse_from_str(&row.price_date, "%Y-%m-%d").ok();
+        market_data_of(
+            row,
+            field,
+            c.is_foil,
+            price_date,
+            snapshots.volatility_pct(id, field, c.is_foil),
+        )
+    })
+}
+
+/// Which rows of the report to show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VerdictFilter {
+    #[default]
+    All,
+    Underpriced,
+    Overpriced,
+    NoData,
+}
+
+impl VerdictFilter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VerdictFilter::All => "All",
+            VerdictFilter::Underpriced => "Underpriced",
+            VerdictFilter::Overpriced => "Overpriced",
+            VerdictFilter::NoData => "No data",
+        }
+    }
+
+    pub fn matches(self, verdict: PriceVerdict) -> bool {
+        match self {
+            VerdictFilter::All => true,
+            VerdictFilter::Underpriced => verdict == PriceVerdict::Underpriced,
+            VerdictFilter::Overpriced => verdict == PriceVerdict::Overpriced,
+            VerdictFilter::NoData => verdict == PriceVerdict::NoMarketData,
+        }
+    }
+}
+
+/// Columns the report table can be sorted by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MispricingSort {
+    /// Combined "what to fix first" score (impact × urgency × confidence) —
+    /// see [`priority_score`].
+    #[default]
+    Priority,
+    /// Absolute money impact of the mispricing: |delta_abs| × quantity.
+    Impact,
+    DeltaPct,
+    Listed,
+    Market,
+    /// Market movement over the last 7 days (from the snapshots).
+    Change7,
+    /// Market movement over the last 30 days (from the snapshots).
+    Change30,
+    /// Days since the card was listed.
+    Age,
+    Name,
+    Set,
+    Quantity,
+    /// Verdict rank (underpriced → overpriced → fair → no data).
+    Verdict,
+}
+
+/// Each row with its market movement (`field`, foil-aware), for display.
+pub fn with_changes(
+    rows: Vec<MispricedCard>,
+    snapshots: &SnapshotSet,
+    field: PriceField,
+) -> Vec<(MispricedCard, TrendChange)> {
+    rows.into_iter()
+        .map(|c| {
+            let change = c
+                .cardmarket_id
+                .trim()
+                .parse::<u64>()
+                .map(|id| snapshots.change(id, field, c.is_foil))
+                .unwrap_or_default();
+            (c, change)
+        })
+        .collect()
+}
+
+/// |delta_abs| × quantity: the money a mispricing is about.
+pub fn impact(card: &MispricedCard) -> f64 {
+    card.delta_abs.abs() * card.quantity as f64
+}
+
+/// Sorts rows by `sort`, descending when `desc`.
+pub fn sort_mispriced(rows: &mut [(MispricedCard, TrendChange)], sort: MispricingSort, desc: bool) {
+    let cmp_f = |a: f64, b: f64| a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal);
+    // Missing values sort below any present value.
+    let cmp_opt =
+        |a: Option<f64>, b: Option<f64>| a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal);
+    rows.sort_by(|(a, ca), (b, cb)| {
+        let ord = match sort {
+            MispricingSort::Priority => cmp_f(a.priority, b.priority),
+            MispricingSort::Age => a.age_days.cmp(&b.age_days),
+            MispricingSort::Impact => cmp_f(impact(a), impact(b)),
+            MispricingSort::DeltaPct => cmp_f(a.delta_pct, b.delta_pct),
+            MispricingSort::Listed => cmp_f(a.listed_price, b.listed_price),
+            MispricingSort::Market => {
+                cmp_f(a.market_price.unwrap_or(0.0), b.market_price.unwrap_or(0.0))
+            }
+            MispricingSort::Change7 => cmp_opt(ca.pct_7d, cb.pct_7d),
+            MispricingSort::Change30 => cmp_opt(ca.pct_30d, cb.pct_30d),
+            MispricingSort::Name => a.name.cmp(&b.name),
+            MispricingSort::Set => a
+                .set_code
+                .cmp(&b.set_code)
+                .then_with(|| a.name.cmp(&b.name)),
+            MispricingSort::Quantity => a.quantity.cmp(&b.quantity),
+            MispricingSort::Verdict => a.verdict.cmp(&b.verdict),
+        };
+        if desc {
+            ord.reverse()
+        } else {
+            ord
+        }
+    });
 }
 
 #[path = "mispricing_tests.rs"]

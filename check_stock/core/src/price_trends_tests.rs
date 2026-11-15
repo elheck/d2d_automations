@@ -284,3 +284,88 @@ fn roc_from_history_skips_rows_without_values() {
     // Falls back to the older 07-01 row for the baseline.
     assert_eq!(roc_from_history(&history, 7, false), Some(50.0));
 }
+
+fn mover(
+    name: &str,
+    age_days: i64,
+    pct_7d: Option<f64>,
+    pct_30d: Option<f64>,
+    price: f64,
+) -> StockMover {
+    StockMover {
+        card: InStockCard {
+            cardmarket_id: "1".to_string(),
+            name: name.to_string(),
+            set_code: "TST".to_string(),
+            cn: "1".to_string(),
+            condition: "NM".to_string(),
+            language: "English".to_string(),
+            is_foil: false,
+            rarity: "common".to_string(),
+            quantity: 1,
+            price,
+            location: String::new(),
+            effective_date: "2026-01-01".to_string(),
+        },
+        change: TrendChange {
+            current: Some(price),
+            pct_7d,
+            pct_30d,
+        },
+        age_days,
+    }
+}
+
+fn mover_names(rows: &[StockMover]) -> Vec<String> {
+    rows.iter().map(|m| m.card.name.clone()).collect()
+}
+
+#[test]
+fn movers_are_filtered_by_age_and_direction() {
+    let rows = || {
+        vec![
+            mover("Up", 40, Some(10.0), None, 1.0),
+            mover("Down", 5, None, Some(-20.0), 2.0),
+            mover("Flat", 90, Some(0.0), Some(0.0), 3.0),
+            mover("Mixed", 60, Some(-5.0), Some(5.0), 4.0),
+        ]
+    };
+    assert_eq!(
+        mover_names(&filter_movers(rows(), 0, MoverDirection::All)).len(),
+        4
+    );
+    assert_eq!(
+        mover_names(&filter_movers(rows(), 0, MoverDirection::Risers)),
+        ["Up", "Mixed"]
+    );
+    assert_eq!(
+        mover_names(&filter_movers(rows(), 0, MoverDirection::Fallers)),
+        ["Down", "Mixed"]
+    );
+    assert_eq!(
+        mover_names(&filter_movers(rows(), 30, MoverDirection::All)),
+        ["Up", "Flat", "Mixed"]
+    );
+    assert_eq!(MoverDirection::default(), MoverDirection::All);
+    assert_eq!(MoverDirection::Fallers.as_str(), "Fallers");
+}
+
+#[test]
+fn movers_sort_by_any_column() {
+    let mut rows = vec![
+        mover("B", 40, Some(10.0), Some(1.0), 1.0),
+        mover("A", 5, Some(-3.0), Some(30.0), 2.0),
+        mover("C", 90, None, Some(-5.0), 3.0),
+    ];
+    sort_movers(&mut rows, MoverSort::Change7, true);
+    assert_eq!(mover_names(&rows), ["B", "A", "C"]);
+    sort_movers(&mut rows, MoverSort::Change30, true);
+    assert_eq!(mover_names(&rows), ["A", "B", "C"]);
+    sort_movers(&mut rows, MoverSort::Age, false);
+    assert_eq!(mover_names(&rows), ["A", "B", "C"]);
+    sort_movers(&mut rows, MoverSort::Listed, true);
+    assert_eq!(mover_names(&rows), ["C", "A", "B"]);
+    sort_movers(&mut rows, MoverSort::Name, false);
+    assert_eq!(mover_names(&rows), ["A", "B", "C"]);
+    assert_eq!(MoverSort::default(), MoverSort::Change7);
+}

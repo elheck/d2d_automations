@@ -30,15 +30,16 @@ npm run test:watch
 
 ## Layout
 
-| Path                 | Content                                                                                                                                                                                                                                                     |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/api/client.ts`  | `fetch` wrapper: same origin, CSRF header on changing requests, `ApiError` with the server's code and message, 401 → back to the login                                                                                                                      |
-| `src/api/queries.ts` | TanStack Query hooks per endpoint                                                                                                                                                                                                                           |
-| `src/api/generated/` | TypeScript types generated from the Rust structs by `cargo test` (ts-rs). **Never edit**: change the Rust struct, run `cargo test`, commit the result. CI fails if they are out of date                                                                     |
-| `src/router.tsx`     | Pages (TanStack Router); everything but `/login` is inside the app layout, which sends visitors without a session to the login                                                                                                                              |
-| `src/components/`    | Layout, permission picker, dialog, error message, `LineChart` (small SVG chart, no chart library)                                                                                                                                                           |
-| `src/pages/`         | Login, start page, singles listing (`singles.ts`: input rules and price texts), buy helper (`buyHelper.ts`: settings form, file checks, saving downloads), precon EV ranking and product (`preconEv.ts`: labels, sorting, texts), users, audit log, account |
-| `src/test/`          | Fake server for `fetch`, fixtures, `renderApp` (whole app at a path)                                                                                                                                                                                        |
+| Path                 | Content                                                                                                                                                                                                                                                                                                        |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/api/client.ts`  | `fetch` wrapper: same origin, CSRF header on changing requests, `ApiError` with the server's code and message, 401 → back to the login                                                                                                                                                                         |
+| `src/api/queries.ts` | TanStack Query hooks per endpoint                                                                                                                                                                                                                                                                              |
+| `src/api/generated/` | TypeScript types generated from the Rust structs by `cargo test` (ts-rs). **Never edit**: change the Rust struct, run `cargo test`, commit the result. CI fails if they are out of date                                                                                                                        |
+| `src/navigation.ts`  | The sections in their groups (Tools, Reports, Admin) with permission and start-page text; the navigation menus and the start page are built from it                                                                                                                                                            |
+| `src/router.tsx`     | Pages (TanStack Router); everything but `/login` is inside the app layout, which sends visitors without a session to the login                                                                                                                                                                                 |
+| `src/components/`    | Layout with the grouped navigation, permission picker, dialog, error message, `LineChart` (small SVG chart, no chart library), `DataAsOf` (how current the data of a report is)                                                                                                                                |
+| `src/pages/`         | Login, start page, singles listing (`singles.ts`: input rules and price texts), buy helper (`buyHelper.ts`: settings form, file checks, saving downloads), precon EV ranking and product (`preconEv.ts`: labels, sorting, texts), restock, price movers, mispricing, stock analysis, users, audit log, account |
+| `src/test/`          | Fake server for `fetch`, fixtures, `renderApp` (whole app at a path)                                                                                                                                                                                                                                           |
 
 ## Rules
 
@@ -68,6 +69,10 @@ npm run test:watch
   themselves shortly after the last change, right away when the user moves
   to another page, and with a `keepalive` request when the tab is closed or
   reloaded, so no change is lost (`useAutoSave`).
+- **Money figures** come only from the server: pages show revenue, margins
+  and costs when the answer contains them (the server leaves them out for
+  users without "View revenue and costs") and hide the matching columns.
+- **Reports** show `DataAsOf` on top (how current the inventory data is).
 - **Background jobs** (precon load): the page polls the status about once a
   second while a job runs, and refetches its data when the loaded `version`
   changes.

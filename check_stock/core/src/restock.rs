@@ -8,6 +8,7 @@
 //! candidates (listing date → last sale date).
 
 use crate::inventory_db::RestockCandidate;
+use crate::spreadsheet::spreadsheet_safe;
 use chrono::NaiveDate;
 
 /// A restock candidate with its derived sell-through metrics, ready to display.
@@ -70,15 +71,70 @@ pub fn rank_candidates(candidates: Vec<RestockCandidate>, min_copies: i64) -> Ve
     ranked
 }
 
+/// Which column a restock list is sorted by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RestockSort {
+    /// Copies sold per week over the sell-through window.
+    #[default]
+    Velocity,
+    SoldCopies,
+    Revenue,
+    Days,
+    Price,
+    Name,
+    /// Source lot extracted from the last known location.
+    Lot,
+}
+
+fn compare(a: &RankedRestock, b: &RankedRestock, sort: RestockSort) -> std::cmp::Ordering {
+    let eq = std::cmp::Ordering::Equal;
+    match sort {
+        RestockSort::Velocity => a.copies_per_week.partial_cmp(&b.copies_per_week),
+        RestockSort::Revenue => a
+            .candidate
+            .realized_revenue
+            .partial_cmp(&b.candidate.realized_revenue),
+        RestockSort::Price => a.candidate.last_price.partial_cmp(&b.candidate.last_price),
+        RestockSort::SoldCopies => Some(a.candidate.sold_copies.cmp(&b.candidate.sold_copies)),
+        RestockSort::Days => Some(a.days_to_sell_out.cmp(&b.days_to_sell_out)),
+        RestockSort::Name => Some(a.candidate.name.cmp(&b.candidate.name)),
+        // Option<String> orders None first, then lexicographically — good
+        // enough for lot labels of the same width; ties broken by name.
+        RestockSort::Lot => Some(
+            a.candidate
+                .lot
+                .cmp(&b.candidate.lot)
+                .then_with(|| a.candidate.name.cmp(&b.candidate.name)),
+        ),
+    }
+    .unwrap_or(eq)
+}
+
+/// Sorts ranked rows by `sort`, descending when `desc` (stable: equal rows
+/// keep their ranking order).
+pub fn sort_ranked(rows: &mut [RankedRestock], sort: RestockSort, desc: bool) {
+    rows.sort_by(|a, b| {
+        let ord = compare(a, b, sort);
+        if desc {
+            ord.reverse()
+        } else {
+            ord
+        }
+    });
+}
+
 /// Formats ranked candidates as a buy-list CSV (comma-separated, headers first).
 ///
 /// Column names follow the camelCase convention of the other CSV exports. The
 /// list is written in the order given, so callers export exactly what they see.
-pub fn format_buy_list_csv(rows: &[RankedRestock]) -> String {
+/// `include_revenue` adds the `realizedRevenue` column (a money figure that
+/// not every web user may see). Text cells are [spreadsheet-safe](spreadsheet_safe):
+/// people open this list in a spreadsheet, and it is never imported again.
+pub fn format_buy_list_csv(rows: &[RankedRestock], include_revenue: bool) -> String {
     use csv::WriterBuilder;
 
     let mut wtr = WriterBuilder::new().has_headers(true).from_writer(vec![]);
-    let _ = wtr.write_record([
+    let mut header = vec![
         "name",
         "setCode",
         "cn",
@@ -91,26 +147,32 @@ pub fn format_buy_list_csv(rows: &[RankedRestock]) -> String {
         "copiesPerWeek",
         "daysToSellOut",
         "lastPrice",
-        "realizedRevenue",
-    ]);
+    ];
+    if include_revenue {
+        header.push("realizedRevenue");
+    }
+    let _ = wtr.write_record(&header);
 
     for r in rows {
         let c = &r.candidate;
-        let _ = wtr.write_record([
-            c.name.as_str(),
-            c.set_code.as_str(),
-            c.cn.as_str(),
-            c.condition.as_str(),
-            c.language.as_str(),
-            if c.is_foil { "1" } else { "" },
-            c.rarity.as_str(),
-            c.lot.as_deref().unwrap_or(""),
-            &c.sold_copies.to_string(),
-            &format!("{:.2}", r.copies_per_week),
-            &r.days_to_sell_out.to_string(),
-            &format!("{:.2}", c.last_price),
-            &format!("{:.2}", c.realized_revenue),
-        ]);
+        let mut record: Vec<String> = vec![
+            spreadsheet_safe(&c.name).into_owned(),
+            spreadsheet_safe(&c.set_code).into_owned(),
+            spreadsheet_safe(&c.cn).into_owned(),
+            spreadsheet_safe(&c.condition).into_owned(),
+            spreadsheet_safe(&c.language).into_owned(),
+            if c.is_foil { "1" } else { "" }.to_string(),
+            spreadsheet_safe(&c.rarity).into_owned(),
+            spreadsheet_safe(c.lot.as_deref().unwrap_or("")).into_owned(),
+            c.sold_copies.to_string(),
+            format!("{:.2}", r.copies_per_week),
+            r.days_to_sell_out.to_string(),
+            format!("{:.2}", c.last_price),
+        ];
+        if include_revenue {
+            record.push(format!("{:.2}", c.realized_revenue));
+        }
+        let _ = wtr.write_record(&record);
     }
 
     String::from_utf8(wtr.into_inner().unwrap_or_default()).unwrap_or_default()

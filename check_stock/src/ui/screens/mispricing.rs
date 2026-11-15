@@ -12,10 +12,13 @@
 
 use crate::{
     api::cardmarket::PriceGuide,
-    api::inventory_sync::{InventorySyncClient, PriceFields},
+    api::inventory_sync::InventorySyncClient,
     inventory_db::InStockCard,
-    mispricing::{build_report, Action, MarketData, MispricingReport, PriceVerdict},
-    price_trends::{SnapshotSet, TrendChange},
+    mispricing::{
+        build_report, market_data_of, report_from_tracker, sort_mispriced, with_changes, Action,
+        MarketData, MispricingReport, PriceVerdict,
+    },
+    price_trends::SnapshotSet,
     ui::{
         components::InventorySyncBar,
         state::{
@@ -420,69 +423,14 @@ impl MispricingScreen {
         ui.add_space(4.0);
 
         // Filter, join each row with its market movement, then sort.
-        let ref_source = state.ref_source;
-        let change_of = |c: &crate::mispricing::MispricedCard| -> TrendChange {
-            c.cardmarket_id
-                .parse::<u64>()
-                .map(|id| state.snapshots.change(id, ref_source, c.is_foil))
-                .unwrap_or_default()
-        };
-        let mut rows: Vec<(&crate::mispricing::MispricedCard, TrendChange)> = report
+        let filtered: Vec<crate::mispricing::MispricedCard> = report
             .rows
             .iter()
-            .filter(|c| match state.filter {
-                VerdictFilter::All => true,
-                VerdictFilter::Underpriced => c.verdict == PriceVerdict::Underpriced,
-                VerdictFilter::Overpriced => c.verdict == PriceVerdict::Overpriced,
-                VerdictFilter::NoData => c.verdict == PriceVerdict::NoMarketData,
-            })
-            .map(|c| (c, change_of(c)))
+            .filter(|c| state.filter.matches(c.verdict))
+            .cloned()
             .collect();
-
-        let impact = |c: &crate::mispricing::MispricedCard| c.delta_abs.abs() * c.quantity as f64;
-        let cmp_opt = |a: Option<f64>, b: Option<f64>| {
-            // Missing values sort below any present value.
-            a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal)
-        };
-        rows.sort_by(|(a, ca), (b, cb)| {
-            let ord = match state.sort {
-                MispricingSort::Priority => a
-                    .priority
-                    .partial_cmp(&b.priority)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-                MispricingSort::Age => a.age_days.cmp(&b.age_days),
-                MispricingSort::Impact => impact(a)
-                    .partial_cmp(&impact(b))
-                    .unwrap_or(std::cmp::Ordering::Equal),
-                MispricingSort::DeltaPct => a
-                    .delta_pct
-                    .partial_cmp(&b.delta_pct)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-                MispricingSort::Listed => a
-                    .listed_price
-                    .partial_cmp(&b.listed_price)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-                MispricingSort::Market => a
-                    .market_price
-                    .unwrap_or(0.0)
-                    .partial_cmp(&b.market_price.unwrap_or(0.0))
-                    .unwrap_or(std::cmp::Ordering::Equal),
-                MispricingSort::Change7 => cmp_opt(ca.pct_7d, cb.pct_7d),
-                MispricingSort::Change30 => cmp_opt(ca.pct_30d, cb.pct_30d),
-                MispricingSort::Name => a.name.cmp(&b.name),
-                MispricingSort::Set => a
-                    .set_code
-                    .cmp(&b.set_code)
-                    .then_with(|| a.name.cmp(&b.name)),
-                MispricingSort::Quantity => a.quantity.cmp(&b.quantity),
-                MispricingSort::Verdict => a.verdict.cmp(&b.verdict),
-            };
-            if state.sort_desc {
-                ord.reverse()
-            } else {
-                ord
-            }
-        });
+        let mut rows = with_changes(filtered, &state.snapshots, state.ref_source);
+        sort_mispriced(&mut rows, state.sort, state.sort_desc);
 
         let total = rows.len();
         let shown = total.min(MAX_ROWS);
@@ -832,47 +780,18 @@ impl MispricingScreen {
                 if state.inventory_prices.is_empty() {
                     return;
                 }
-                build_report(&cards, state.threshold_pct, today, |c: &InStockCard| {
-                    let Ok(id) = c.cardmarket_id.parse::<u64>() else {
-                        return MarketData::default();
-                    };
-                    let Some(row) = state.inventory_prices.get(&id) else {
-                        return MarketData::default();
-                    };
-                    let price_date =
-                        chrono::NaiveDate::parse_from_str(&row.price_date, "%Y-%m-%d").ok();
-                    market_data_of(
-                        row,
-                        src,
-                        c.is_foil,
-                        price_date,
-                        snapshots.volatility_pct(id, src, c.is_foil),
-                    )
-                })
+                report_from_tracker(
+                    &cards,
+                    &state.inventory_prices,
+                    snapshots,
+                    src,
+                    state.threshold_pct,
+                    today,
+                )
             }
         };
         state.error = None;
         state.report = Some(report);
-    }
-}
-
-/// Resolves the full [`MarketData`] for one card from any row carrying the
-/// standard 12 Cardmarket price columns.
-fn market_data_of<P: PriceFields>(
-    row: &P,
-    src: InventoryPriceSource,
-    is_foil: bool,
-    price_date: Option<chrono::NaiveDate>,
-    volatility_pct: Option<f64>,
-) -> MarketData {
-    MarketData {
-        reference: row.price_for(src, is_foil),
-        low: row.price_for(InventoryPriceSource::Low, is_foil),
-        avg1: row.price_for(InventoryPriceSource::Avg1, is_foil),
-        avg7: row.price_for(InventoryPriceSource::Avg7, is_foil),
-        avg30: row.price_for(InventoryPriceSource::Avg30, is_foil),
-        price_date,
-        volatility_pct,
     }
 }
 

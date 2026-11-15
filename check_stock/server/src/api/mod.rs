@@ -13,8 +13,12 @@
 mod audit_log;
 mod auth;
 mod buy_helper;
+mod mispricing;
+mod movers;
 mod precon_ev;
+mod reports;
 mod singles;
+mod stock_analysis;
 mod users;
 
 use crate::app::AppState;
@@ -139,7 +143,11 @@ fn api(state: AppState) -> Api {
     let api = audit_log::routes(api);
     let api = singles::routes(api);
     let api = buy_helper::routes(api);
-    precon_ev::routes(api)
+    let api = precon_ev::routes(api);
+    let api = reports::routes(api);
+    let api = movers::routes(api);
+    let api = mispricing::routes(api);
+    stock_analysis::routes(api)
 }
 
 /// The API router with CSRF check and body limit.

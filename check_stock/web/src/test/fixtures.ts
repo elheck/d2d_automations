@@ -58,6 +58,30 @@ export const catalog: PermissionInfo[] = [
     requires: ["repricing.view"],
   },
   {
+    key: "analysis.view",
+    label: "View reports",
+    description: "See stock analysis, aging, bin analysis, restock and price movers.",
+    group: "reports",
+    group_label: "Reports and money",
+    requires: [],
+  },
+  {
+    key: "financials.view",
+    label: "View revenue and costs",
+    description: "See revenue, margins, purchase-lot costs and money totals wherever they appear.",
+    group: "reports",
+    group_label: "Reports and money",
+    requires: [],
+  },
+  {
+    key: "mispricing.view",
+    label: "Mispricing report",
+    description: "See listings priced below or above the market.",
+    group: "reports",
+    group_label: "Reports and money",
+    requires: [],
+  },
+  {
     key: "precon_ev.use",
     label: "Precon EV",
     description: "Rank Commander precons by the value of their singles against the sealed price.",
@@ -95,6 +119,10 @@ export const helper: MeResponse = { username: "helper", display_name: "Helper", 
 export const buyer: MeResponse = { username: "buyer", display_name: "Buyer", permissions: ["buy_helper.use"] };
 
 export const analyst: MeResponse = { username: "analyst", display_name: "Analyst", permissions: ["precon_ev.use"] };
+
+export const reporter: MeResponse = { username: "reporter", display_name: "Reporter", permissions: ["analysis.view"] };
+
+export const pricer: MeResponse = { username: "pricer", display_name: "Pricer", permissions: ["mispricing.view"] };
 
 export const lister: MeResponse = { username: "lister", display_name: "Lister", permissions: ["listing.use"] };
 

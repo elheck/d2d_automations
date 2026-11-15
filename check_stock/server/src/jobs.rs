@@ -213,6 +213,22 @@ impl Drop for JobRun {
     }
 }
 
+/// The part of a loader or tracker error that is meant for people: `"Catalog fetch
+/// failed: error sending request for url (http://…)"` → `"Catalog fetch
+/// failed."`. The full text (addresses, causes) only goes to the log.
+pub fn public_message(error: &str) -> String {
+    let head = error
+        .split_once(": ")
+        .map_or(error, |(head, _)| head)
+        .trim();
+    let head = head.trim_end_matches('.');
+    if head.is_empty() {
+        "The load failed.".to_string()
+    } else {
+        format!("{head}.")
+    }
+}
+
 #[cfg(test)]
 #[path = "jobs_tests.rs"]
 mod tests;

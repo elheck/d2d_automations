@@ -99,6 +99,17 @@ describe("api client", () => {
     expect(calls.map((c) => c.keepalive)).toEqual([true, false]);
   });
 
+  it("downloads with GET when there is no body", async () => {
+    const fetchMock = vi.fn(async () => new Response("a\n", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const file = await download("/api/report/export?x=1", undefined, "report.csv");
+    expect(file.fileName).toBe("report.csv");
+    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect(init.method).toBe("GET");
+    expect(init.body).toBeUndefined();
+    expect((init.headers as Record<string, string>)[CSRF_HEADER]).toBeUndefined();
+  });
+
   it("refuses odd download file names", () => {
     expect(downloadFileName('attachment; filename="offer-1.csv"', "f.csv")).toBe("offer-1.csv");
     for (const header of [

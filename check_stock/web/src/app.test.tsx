@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { admin, catalog, helper } from "./test/fixtures";
 import { renderApp } from "./test/renderApp";
@@ -112,5 +112,44 @@ describe("app", () => {
     fakeServer({ "GET /api/auth/me": { body: admin } });
     renderApp("/no/such/page");
     expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();
+  });
+});
+
+describe("navigation menus", () => {
+  it("groups the sections and closes after choosing one", async () => {
+    fakeServer({
+      "GET /api/auth/me": { body: admin },
+      "GET /api/users": { body: [] },
+      "GET /api/permissions": { body: catalog },
+    });
+    const { user, router } = renderApp("/");
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    const admins = within(nav).getByText("Admin").closest("details") as HTMLDetailsElement;
+    expect(admins.open).toBe(false);
+    await user.click(within(nav).getByText("Admin"));
+    expect(admins.open).toBe(true);
+    await user.click(within(admins).getByRole("link", { name: "Users" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/users"));
+    expect(admins.open).toBe(false);
+    expect(within(nav).getByText("Admin")).toHaveClass("app-nav__link--active");
+
+    // Escape and a click elsewhere close an open menu too.
+    await user.click(within(nav).getByText("Tools"));
+    const tools = within(nav).getByText("Tools").closest("details") as HTMLDetailsElement;
+    expect(tools.open).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(tools.open).toBe(false);
+    await user.click(within(nav).getByText("Tools"));
+    await user.click(document.body);
+    expect(tools.open).toBe(false);
+  });
+
+  it("shows the start page in the same groups", async () => {
+    fakeServer({ "GET /api/auth/me": { body: admin } });
+    renderApp("/");
+    expect(await screen.findByRole("heading", { name: "Tools" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Reports" })).toBeInTheDocument();
+    const reports = screen.getByRole("region", { name: "Reports" });
+    expect(within(reports).getByRole("link", { name: /Restock/ })).toHaveAttribute("href", "/restock");
   });
 });

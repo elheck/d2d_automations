@@ -561,30 +561,8 @@ impl BuyHelperState {
 
 // ── Mispricing screen ─────────────────────────────────────────────────────────
 
-/// Which column the mispricing table is sorted by.
-#[derive(Clone, Copy, PartialEq, Default)]
-pub enum MispricingSort {
-    /// Combined "what to fix first" score (impact × urgency × confidence) —
-    /// see [`crate::mispricing::priority_score`].
-    #[default]
-    Priority,
-    /// Absolute money impact of the mispricing: |delta_abs| × quantity.
-    Impact,
-    DeltaPct,
-    Listed,
-    Market,
-    /// Market movement over the last 7 days (from inventory_sync snapshots).
-    Change7,
-    /// Market movement over the last 30 days (from inventory_sync snapshots).
-    Change30,
-    /// Days since the card was listed.
-    Age,
-    Name,
-    Set,
-    Quantity,
-    /// Verdict rank (underpriced → overpriced → fair → no data).
-    Verdict,
-}
+/// Mispricing table filter and sort columns (live in core).
+pub use crate::mispricing::{MispricingSort, VerdictFilter};
 
 /// Where the mispricing market reference prices come from.
 #[derive(Clone, Copy, PartialEq, Default)]
@@ -624,27 +602,6 @@ pub type MispricingSyncData = (
     Vec<crate::api::inventory_sync::PriceSnapshot>,
     crate::price_trends::SnapshotDates,
 );
-
-/// Verdict filter applied to the mispricing table.
-#[derive(Clone, Copy, PartialEq, Default)]
-pub enum VerdictFilter {
-    #[default]
-    All,
-    Underpriced,
-    Overpriced,
-    NoData,
-}
-
-impl VerdictFilter {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            VerdictFilter::All => "All",
-            VerdictFilter::Underpriced => "Underpriced",
-            VerdictFilter::Overpriced => "Overpriced",
-            VerdictFilter::NoData => "No data",
-        }
-    }
-}
 
 /// State for the read-only Mispricing / Margin report screen.
 pub struct MispricingState {
@@ -713,43 +670,8 @@ impl Default for MispricingState {
 
 // ── Price Movers screen ───────────────────────────────────────────────────────
 
-/// Direction filter for the movers table.
-#[derive(Clone, Copy, PartialEq, Default)]
-pub enum MoverDirection {
-    #[default]
-    All,
-    Risers,
-    Fallers,
-}
-
-impl MoverDirection {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            MoverDirection::All => "All",
-            MoverDirection::Risers => "Risers",
-            MoverDirection::Fallers => "Fallers",
-        }
-    }
-}
-
-/// Which column the movers table is sorted by.
-#[derive(Clone, Copy, PartialEq, Default)]
-pub enum MoverSort {
-    /// Market movement over the last 7 days.
-    #[default]
-    Change7,
-    /// Market movement over the last 30 days.
-    Change30,
-    /// Days since the card was listed.
-    Age,
-    /// Current market value of the reference field.
-    Current,
-    Listed,
-    Name,
-    Set,
-    Quantity,
-    Location,
-}
+/// Direction filter and sort columns of the movers table (live in core).
+pub use crate::price_trends::{MoverDirection, MoverSort};
 
 /// Payload of a successful background snapshot fetch for the movers screen:
 /// raw snapshot rows plus the three dates they were requested for.
@@ -806,20 +728,8 @@ impl Default for MoversState {
 
 // ── Restock screen ────────────────────────────────────────────────────────────
 
-/// Which column the restock table is sorted by.
-#[derive(Clone, Copy, PartialEq, Default)]
-pub enum RestockSort {
-    /// Copies sold per week over the sell-through window.
-    #[default]
-    Velocity,
-    SoldCopies,
-    Revenue,
-    Days,
-    Price,
-    Name,
-    /// Source lot extracted from the last known location.
-    Lot,
-}
+/// Which column the restock table is sorted by (lives in core).
+pub use crate::restock::RestockSort;
 
 /// State for the read-only Restock Recommendations screen.
 pub struct RestockState {

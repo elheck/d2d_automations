@@ -10,7 +10,9 @@ web version locally with `./dev.sh` (needs Node.js 24; see the server README):
 it works on a copy of the desktop database and asks for a password for your
 local login on the first start. Ported so far: the Magic Singles Listing
 (Cardmarket prices from inventory_sync, set with `--inventory-sync-url`), the
-Card Buy Helper and Precon EV.
+Card Buy Helper, Precon EV and the reports Restock, Price Movers, Mispricing
+and Stock Analysis (read-only; revenue, costs and margins only for users with
+"View revenue and costs").
 
 The welcome screen shows a **since-last-visit digest** (copies sold and revenue
 since the previous day the app was opened, new listings, bulk lots built,
@@ -40,6 +42,10 @@ showing exactly what would change before anything is written.
   the bulk lot's price (hover a lot's Sold/Revenue cell for the split); sales
   velocity revenue includes bulk-lot prices, its copy counts are single sales
   only.
+  Also in the web version (`/stock-analysis`, read-only): money figures (stock
+  value, revenue, capital per age bucket, lot value/cost/margin/payback) only
+  for users with "View revenue and costs"; lot costs are still entered here in
+  the desktop app.
 - **Bin Analysis** — Bin capacity utilization and free-slot analysis, plus two
   consolidation tools:
   - **Consolidation suggestions** — empties sparse bins into fuller ones (preferring

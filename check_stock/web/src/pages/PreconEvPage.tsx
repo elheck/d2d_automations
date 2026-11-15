@@ -13,8 +13,9 @@ import {
   useSavePreconSettings,
   useStartPreconLoad,
 } from "../api/queries";
-import type { JobStatus, PreconSettings, PreconSettingsView, PreconStatusView, RankingRow } from "../api/types";
+import type { PreconSettings, PreconSettingsView, PreconStatusView, RankingRow } from "../api/types";
 import { ErrorMessage } from "../components/ErrorMessage";
+import { JobProgress } from "../components/JobProgress";
 import { formatEuro } from "../format";
 import { useAutoSave } from "../useAutoSave";
 import { useDebounced } from "../useDebounced";
@@ -22,7 +23,6 @@ import { parseDecimal } from "./buyHelper";
 import {
   coverageText,
   formatRatio,
-  jobText,
   lowCoverage,
   nextSort,
   PRICE_COLUMNS,
@@ -42,19 +42,6 @@ export function PreconEvPage() {
       {status.data && <LoadPanel status={status.data} />}
       {settings.data && status.data && <Ranking initial={settings.data} status={status.data} />}
     </section>
-  );
-}
-
-export function JobProgress({ status }: { status: JobStatus }) {
-  if (status.state !== "running") return null;
-  return (
-    <span className="job-progress" role="status">
-      <span className="spinner" aria-hidden="true" />
-      <span>{jobText(status)}</span>
-      {status.done !== null && status.total !== null && status.total > 0 && (
-        <progress value={status.done} max={status.total} />
-      )}
-    </span>
   );
 }
 

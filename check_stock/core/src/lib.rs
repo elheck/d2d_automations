@@ -44,6 +44,6 @@ pub use inventory_db::InventoryDb;
 pub use io::{load_wantslist, read_csv, read_csv_with_category, read_wantslist};
 pub use models::{Card, Language, WantsEntry};
 pub use precon_ev::{build_rows, DeckEv, PreconData, PreconRow};
-pub use restock::{format_buy_list_csv, rank_candidates, RankedRestock};
+pub use restock::{format_buy_list_csv, rank_candidates, sort_ranked, RankedRestock, RestockSort};
 pub use stock_analysis::{format_stock_analysis_with_sort, SortOrder, StockAnalysis, StockStats};
 pub use wantslist::{parse_wantslist, ParsedLine, WantslistParse};

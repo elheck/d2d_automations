@@ -5,6 +5,18 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClie
 import { api, ApiError, download } from "./client";
 import type {
   AuditPage,
+  StockAnalysisView,
+  MispricingSortKey,
+  MispricingView,
+  VerdictFilterKey,
+  MarketStatusView,
+  MoverDirectionKey,
+  MoverSortKey,
+  MoversView,
+  PriceColumn,
+  DataInfo,
+  RestockSortKey,
+  RestockView,
   EvHistory,
   LoadRequest,
   PreconSettings,
@@ -36,6 +48,12 @@ export const keys = {
   preconStatus: ["precon-status"] as const,
   preconSettings: ["precon-settings"] as const,
   precon: ["precon"] as const,
+  dataInfo: ["data-info"] as const,
+  restock: ["restock"] as const,
+  marketStatus: ["market-status"] as const,
+  movers: ["movers"] as const,
+  mispricing: ["mispricing"] as const,
+  stockAnalysis: ["stock-analysis"] as const,
 };
 
 /** The logged-in user; `null` when not logged in. */
@@ -345,6 +363,137 @@ export function usePreconHistory(id: number, settings: PreconSettings | null, ve
     placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[2] === id ? previous : undefined),
     staleTime: Infinity,
     retry: false,
+  });
+}
+
+// ── Reports ──────────────────────────────────────────────────────────────
+
+/** How current the inventory data is (shown above the reports). */
+export function useDataInfo() {
+  return useQuery({
+    queryKey: keys.dataInfo,
+    queryFn: () => api.get<DataInfo>("/api/data-info"),
+    staleTime: 60_000,
+  });
+}
+
+export interface RestockParams {
+  minCopies: number;
+  sort: RestockSortKey;
+  desc: boolean;
+}
+
+export function restockQuery(p: RestockParams): string {
+  return new URLSearchParams({ min_copies: String(p.minCopies), sort: p.sort, desc: String(p.desc) }).toString();
+}
+
+/** The restock list; nothing is asked while `params` is `null` (invalid input). */
+export function useRestock(params: RestockParams | null) {
+  return useQuery({
+    queryKey: [...keys.restock, params],
+    queryFn: () => {
+      if (!params) throw new Error("no parameters");
+      return api.get<RestockView>(`/api/restock?${restockQuery(params)}`);
+    },
+    enabled: params !== null,
+    placeholderData: (previous) => previous,
+  });
+}
+
+/** The restock list as a buy-list CSV. */
+export function useExportRestock() {
+  return useMutation({
+    mutationFn: (params: RestockParams) =>
+      download(`/api/restock/export?${restockQuery(params)}`, undefined, "restock_buy_list.csv"),
+  });
+}
+
+/** Each report reaches the shared market data through its own routes (its own permission). */
+export type MarketBase = "/api/movers" | "/api/mispricing";
+
+/** The shared market data: job and what is loaded; polled while it loads. */
+export function useMarketStatus(base: MarketBase) {
+  return useQuery({
+    queryKey: [...keys.marketStatus, base],
+    queryFn: () => api.get<MarketStatusView>(`${base}/status`),
+    refetchInterval: (query) => (query.state.data?.job.state === "running" ? PRECON_POLL_MS : false),
+  });
+}
+
+export function useStartMarketLoad(base: MarketBase) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (refresh: boolean) => api.post<MarketStatusView>(`${base}/load`, { refresh }),
+    onSuccess: (status) => queryClient.setQueryData([...keys.marketStatus, base], status),
+  });
+}
+
+export interface MoversParams {
+  field: PriceColumn;
+  minPrice: number;
+  minAge: number;
+  direction: MoverDirectionKey;
+  sort: MoverSortKey;
+  desc: boolean;
+}
+
+/** The movers for `params`; `version` = loaded market data (null: nothing loaded). */
+export function useMovers(params: MoversParams | null, version: number | null) {
+  return useQuery({
+    queryKey: [...keys.movers, version, params],
+    queryFn: () => {
+      if (!params) throw new Error("no parameters");
+      const query = new URLSearchParams({
+        field: params.field,
+        min_price: String(params.minPrice),
+        min_age: String(params.minAge),
+        direction: params.direction,
+        sort: params.sort,
+        desc: String(params.desc),
+      });
+      return api.get<MoversView>(`/api/movers?${query.toString()}`);
+    },
+    enabled: params !== null && version !== null,
+    placeholderData: (previous) => previous,
+    staleTime: Infinity,
+  });
+}
+
+export interface MispricingParams {
+  field: PriceColumn;
+  threshold: number;
+  filter: VerdictFilterKey;
+  sort: MispricingSortKey;
+  desc: boolean;
+}
+
+/** The mispricing report for `params`; `version` = loaded market data (null: nothing loaded). */
+export function useMispricing(params: MispricingParams | null, version: number | null) {
+  return useQuery({
+    queryKey: [...keys.mispricing, version, params],
+    queryFn: () => {
+      if (!params) throw new Error("no parameters");
+      const query = new URLSearchParams({
+        field: params.field,
+        threshold: String(params.threshold),
+        filter: params.filter,
+        sort: params.sort,
+        desc: String(params.desc),
+      });
+      return api.get<MispricingView>(`/api/mispricing?${query.toString()}`);
+    },
+    enabled: params !== null && version !== null,
+    placeholderData: (previous) => previous,
+    staleTime: Infinity,
+  });
+}
+
+/** The stock analysis (money figures only when the server sends them). */
+export function useStockAnalysis() {
+  return useQuery({
+    queryKey: keys.stockAnalysis,
+    queryFn: () => api.get<StockAnalysisView>("/api/stock-analysis"),
+    staleTime: 60_000,
   });
 }
 

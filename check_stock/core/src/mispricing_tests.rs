@@ -396,3 +396,108 @@ fn report_age_days_and_recently_listed() {
     assert_eq!(r.rows[1].age_days, 0);
     assert!(r.rows[1].recently_listed());
 }
+
+fn latest(id: u64, trend: f64, trend_foil: Option<f64>, date: &str) -> LatestPrice {
+    LatestPrice {
+        id_product: id,
+        price_date: date.to_string(),
+        avg: None,
+        low: Some(trend * 0.8),
+        trend: Some(trend),
+        avg1: None,
+        avg7: None,
+        avg30: None,
+        avg_foil: None,
+        low_foil: None,
+        trend_foil,
+        avg1_foil: None,
+        avg7_foil: None,
+        avg30_foil: None,
+    }
+}
+
+#[test]
+fn market_data_reads_the_reference_and_the_other_columns_foil_aware() {
+    let row = latest(1, 10.0, Some(30.0), "2026-07-17");
+    let m = market_data_of(&row, PriceField::Trend, false, None, Some(12.0));
+    assert_eq!(m.reference, Some(10.0));
+    assert_eq!(m.low, Some(8.0));
+    assert_eq!(m.volatility_pct, Some(12.0));
+    let foil = market_data_of(&row, PriceField::Trend, true, None, None);
+    assert_eq!(foil.reference, Some(30.0));
+    assert_eq!(foil.low, None);
+}
+
+#[test]
+fn the_tracker_report_classifies_every_card() {
+    let cards = vec![
+        card("1", 5.0, 2, false),
+        card("2", 20.0, 1, false),
+        card("3", 1.0, 1, false),
+        card("x", 1.0, 1, false),
+    ];
+    let mut prices = HashMap::new();
+    prices.insert(1, latest(1, 10.0, None, "2026-07-17"));
+    prices.insert(2, latest(2, 10.0, None, "2026-07-01"));
+    let report = report_from_tracker(
+        &cards,
+        &prices,
+        &SnapshotSet::default(),
+        PriceField::Trend,
+        15.0,
+        today(),
+    );
+    assert_eq!(report.rows.len(), 4);
+    assert_eq!(report.rows[0].verdict, PriceVerdict::Underpriced);
+    assert_eq!(report.rows[1].verdict, PriceVerdict::Overpriced);
+    assert!(report.rows[1].stale, "price row 17 days old");
+    assert_eq!(report.rows[2].verdict, PriceVerdict::NoMarketData);
+    assert_eq!(report.rows[3].verdict, PriceVerdict::NoMarketData);
+    assert_eq!(report.underpriced_upside, 10.0);
+}
+
+#[test]
+fn filters_and_sorting() {
+    assert!(VerdictFilter::All.matches(PriceVerdict::Fair));
+    assert!(VerdictFilter::Underpriced.matches(PriceVerdict::Underpriced));
+    assert!(!VerdictFilter::Underpriced.matches(PriceVerdict::Overpriced));
+    assert!(VerdictFilter::NoData.matches(PriceVerdict::NoMarketData));
+    assert_eq!(VerdictFilter::NoData.as_str(), "No data");
+    assert_eq!(VerdictFilter::default(), VerdictFilter::All);
+    assert_eq!(MispricingSort::default(), MispricingSort::Priority);
+
+    let cards = vec![
+        card("1", 5.0, 4, false),
+        card("2", 20.0, 1, false),
+        card("3", 9.0, 1, false),
+    ];
+    let mut prices = HashMap::new();
+    for id in 1..=3 {
+        prices.insert(id, latest(id, 10.0, None, "2026-07-17"));
+    }
+    let report = report_from_tracker(
+        &cards,
+        &prices,
+        &SnapshotSet::default(),
+        PriceField::Trend,
+        15.0,
+        today(),
+    );
+    let mut rows = with_changes(report.rows, &SnapshotSet::default(), PriceField::Trend);
+    assert!(rows.iter().all(|(_, change)| change.pct_7d.is_none()));
+    let ids = |rows: &[(MispricedCard, TrendChange)]| {
+        rows.iter()
+            .map(|(c, _)| c.cardmarket_id.clone())
+            .collect::<Vec<_>>()
+    };
+    // Impact: |5 - 10| × 4 = 20, |20 - 10| × 1 = 10, |9 - 10| × 1 = 1.
+    assert_eq!(impact(&rows[0].0), 20.0);
+    sort_mispriced(&mut rows, MispricingSort::Impact, true);
+    assert_eq!(ids(&rows), ["1", "2", "3"]);
+    sort_mispriced(&mut rows, MispricingSort::Listed, false);
+    assert_eq!(ids(&rows), ["1", "3", "2"]);
+    sort_mispriced(&mut rows, MispricingSort::DeltaPct, true);
+    assert_eq!(ids(&rows)[0], "2");
+    sort_mispriced(&mut rows, MispricingSort::Verdict, false);
+    assert_eq!(rows[0].0.verdict, PriceVerdict::Underpriced);
+}

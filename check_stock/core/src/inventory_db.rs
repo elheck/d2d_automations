@@ -1547,7 +1547,7 @@ impl InventoryDb {
 }
 
 /// Inner upsert that accepts an explicit connection and date — used in tests.
-fn set_lot_cost_conn(conn: &Connection, lot: &str, cost: f64, today: &str) -> DbResult<()> {
+pub fn set_lot_cost_conn(conn: &Connection, lot: &str, cost: f64, today: &str) -> DbResult<()> {
     if !cost.is_finite() || cost < 0.0 {
         return Err(rusqlite::Error::ToSqlConversionFailure(
             format!("lot cost must be a finite, non-negative amount, got {cost}").into(),
@@ -1589,7 +1589,7 @@ impl InventoryDb {
 }
 
 /// Inner query that accepts an explicit connection — used in tests.
-fn get_in_stock_cards_conn(conn: &Connection, category: &str) -> DbResult<Vec<InStockCard>> {
+pub fn get_in_stock_cards_conn(conn: &Connection, category: &str) -> DbResult<Vec<InStockCard>> {
     conn.prepare(
         "SELECT cardmarket_id, name, set_code, cn, condition, language,
                 (is_foil = '1' OR LOWER(is_foil) = 'true') AS foil,
@@ -1726,6 +1726,14 @@ fn set_meta(conn: &Connection, key: &str, value: &str) -> DbResult<()> {
     Ok(())
 }
 
+/// Most recent day any variant was synced: the date of the last inventory
+/// import, i.e. how current the data is. `None` for an empty database.
+pub fn last_sync_date_conn(conn: &Connection) -> DbResult<Option<String>> {
+    conn.query_row("SELECT MAX(last_synced_at) FROM inventory_cards", [], |r| {
+        r.get(0)
+    })
+}
+
 /// What changed since the previous visit — shown on the welcome screen.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct VisitDigest {
@@ -1795,10 +1803,7 @@ fn visit_digest_conn(conn: &Connection, today: &str) -> DbResult<VisitDigest> {
         )?;
         digest.bulk_lots = bulk_lots::totals_between(conn, Some(since), None)?;
     }
-    digest.last_sync =
-        conn.query_row("SELECT MAX(last_synced_at) FROM inventory_cards", [], |r| {
-            r.get(0)
-        })?;
+    digest.last_sync = last_sync_date_conn(conn)?;
     // Same rule as the restock report: variants that went into a bulk lot are
     // dumped stock, not sell-outs worth buying again.
     digest.restock_candidates = conn.query_row(
@@ -1827,7 +1832,7 @@ fn visit_digest_conn(conn: &Connection, today: &str) -> DbResult<VisitDigest> {
 ///
 /// Variants that went into a bulk lot are left out: they were dumped as bulk,
 /// so selling out says nothing about demand.
-fn get_restock_candidates_conn(
+pub fn get_restock_candidates_conn(
     conn: &Connection,
     category: Option<&str>,
 ) -> DbResult<Vec<RestockCandidate>> {
@@ -2058,7 +2063,7 @@ fn lot_breakdown_from(conn: &Connection) -> DbResult<Vec<LotBreakdown>> {
 /// Inner stats query that accepts an explicit connection and reference date —
 /// used in tests. `today` (as `YYYY-MM-DD`) anchors the dead-stock aging report.
 /// Every figure is scoped to `category`.
-fn get_db_stats_conn(conn: &Connection, category: &str, today: &str) -> DbResult<DbStats> {
+pub fn get_db_stats_conn(conn: &Connection, category: &str, today: &str) -> DbResult<DbStats> {
     let (total_articles, in_stock_articles, total_copies, total_value): (i64, i64, i64, f64) = conn
         .query_row(
             "SELECT
@@ -2673,6 +2678,18 @@ fn backup_db_at(
 }
 
 /// Inner sync that accepts an explicit connection and date — used in tests.
+/// [`sync_inventory_conn`] on a given day, for other crates' tests
+/// (`test-support` feature; inventory history needs fixed dates).
+#[cfg(any(test, feature = "test-support"))]
+pub fn sync_inventory_on_conn(
+    conn: &mut Connection,
+    cards: &[Card],
+    category: &str,
+    today: &str,
+) -> DbResult<SyncStats> {
+    sync_inventory_conn(conn, cards, category, today)
+}
+
 fn sync_inventory_conn(
     conn: &mut Connection,
     cards: &[Card],

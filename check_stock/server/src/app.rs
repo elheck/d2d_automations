@@ -6,6 +6,7 @@ use crate::config::{HostAllowlist, ServeConfig};
 use crate::data_dir::{DataDirLock, LockError};
 use crate::db::{Db, DbError};
 use crate::http;
+use crate::market::MarketService;
 use crate::password::{self, PasswordError};
 use crate::precon::PreconService;
 use crate::rate_limit::LoginRateLimiter;
@@ -33,6 +34,8 @@ pub struct AppState {
     pub inventory_sync: Option<Arc<InventorySyncClient>>,
     /// Precon EV data and its background jobs (shared by all users).
     pub precon: Arc<PreconService>,
+    /// Market data of the stock (price movers, mispricing), shared by all.
+    pub market: Arc<MarketService>,
     /// Where the caches live (`<data>/cache`).
     pub cache_root: Arc<PathBuf>,
 }
@@ -60,6 +63,7 @@ impl AppState {
             cards: Arc::new(cards),
             inventory_sync: None,
             precon: Arc::new(precon),
+            market: Arc::new(MarketService::new(None)),
             cache_root: Arc::new(cache_root),
         })
     }
@@ -77,9 +81,16 @@ impl AppState {
         self.inventory_sync = client.clone().map(Arc::new);
         self.precon = Arc::new(PreconService::new(
             &self.cache_root,
-            client,
+            client.clone(),
             MtgjsonClient::default(),
         ));
+        self.market = Arc::new(MarketService::new(client));
+        self
+    }
+
+    /// Uses `market` for the market data (tests: a fake tracker).
+    pub fn with_market(mut self, market: MarketService) -> Self {
+        self.market = Arc::new(market);
         self
     }
 
@@ -190,10 +201,11 @@ where
         config.allowed_hosts.hosts().join(", ")
     );
     on_ready(addr);
-    let precon = state.precon.clone();
+    let (precon, market) = (state.precon.clone(), state.market.clone());
     serve(listener, http::router(state), shutdown).await?;
     // Background jobs stop at their next check; `main` waits only briefly.
     precon.shutdown();
+    market.shutdown();
     log::info!("Stopped");
     Ok(())
 }

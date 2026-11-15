@@ -96,7 +96,7 @@ fn buy_list_csv_has_header_and_rows_in_given_order() {
         ],
         1,
     );
-    let csv = format_buy_list_csv(&ranked);
+    let csv = format_buy_list_csv(&ranked, true);
     let lines: Vec<&str> = csv.lines().collect();
     assert_eq!(lines.len(), 3);
     assert!(lines[0].starts_with("name,setCode,cn,condition,language,isFoil,rarity,lot,soldCopies"));
@@ -109,7 +109,66 @@ fn buy_list_csv_empty_lot_stays_empty() {
     let mut c = candidate("Bolt", 2, "2026-01-01", "2026-01-08", 1.0);
     c.lot = None;
     let ranked = rank_candidates(vec![c], 1);
-    let csv = format_buy_list_csv(&ranked);
+    let csv = format_buy_list_csv(&ranked, true);
     let lines: Vec<&str> = csv.lines().collect();
     assert!(lines[1].starts_with("Bolt,TST,1,NM,English,,Common,,2,"));
+}
+
+#[test]
+fn buy_list_csv_can_leave_out_revenue() {
+    let ranked = rank_candidates(
+        vec![candidate("Bolt", 2, "2026-01-01", "2026-01-08", 1.0)],
+        1,
+    );
+    let csv = format_buy_list_csv(&ranked, false);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert!(lines[0].ends_with(",lastPrice"), "{}", lines[0]);
+    assert!(!csv.contains("realizedRevenue"));
+    assert!(lines[1].ends_with(",1.00"), "{}", lines[1]);
+}
+
+#[test]
+fn buy_list_csv_text_cannot_become_a_formula() {
+    let mut c = candidate(
+        "=HYPERLINK(\"http://x\")",
+        2,
+        "2026-01-01",
+        "2026-01-08",
+        1.0,
+    );
+    c.set_code = "+cmd".to_string();
+    let ranked = rank_candidates(vec![c], 1);
+    let csv = format_buy_list_csv(&ranked, true);
+    assert!(csv.contains("'=HYPERLINK"));
+    assert!(csv.contains(",'+cmd,"));
+}
+
+#[test]
+fn sorting_by_any_column_and_direction() {
+    let mut rows = rank_candidates(
+        vec![
+            candidate("Fast", 4, "2026-01-01", "2026-01-08", 1.5),
+            candidate("Slow", 2, "2026-01-01", "2026-01-15", 5.0),
+            candidate("Mid", 3, "2026-01-01", "2026-01-11", 3.0),
+        ],
+        1,
+    );
+    let names = |rows: &[RankedRestock]| {
+        rows.iter()
+            .map(|r| r.candidate.name.clone())
+            .collect::<Vec<_>>()
+    };
+    sort_ranked(&mut rows, RestockSort::Price, true);
+    assert_eq!(names(&rows), ["Slow", "Mid", "Fast"]);
+    sort_ranked(&mut rows, RestockSort::Price, false);
+    assert_eq!(names(&rows), ["Fast", "Mid", "Slow"]);
+    sort_ranked(&mut rows, RestockSort::Name, false);
+    assert_eq!(names(&rows), ["Fast", "Mid", "Slow"]);
+    sort_ranked(&mut rows, RestockSort::Velocity, true);
+    assert_eq!(names(&rows), ["Fast", "Mid", "Slow"]);
+    sort_ranked(&mut rows, RestockSort::Days, true);
+    assert_eq!(names(&rows)[0], "Slow");
+    sort_ranked(&mut rows, RestockSort::SoldCopies, true);
+    assert_eq!(names(&rows)[0], "Fast");
+    assert_eq!(RestockSort::default(), RestockSort::Velocity);
 }

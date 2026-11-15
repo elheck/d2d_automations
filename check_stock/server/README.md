@@ -7,8 +7,9 @@ and admin commands.
 
 Status: foundation done (steps 1a–1c: server, login, users with
 fine-grained permissions, audit log, and the [web UI](../web/) built into the
-binary); ported screens: the singles listing (step 2a), the buy helper
-(step 2b) and precon EV (step 2c).
+binary); ported screens: the singles listing (2a), the buy helper (2b),
+precon EV (2c) and the reports restock (3a), price movers (3b),
+mispricing (3c) and stock analysis (3d).
 
 ## Try it locally
 
@@ -90,6 +91,15 @@ standard input; passwords are never command-line arguments.
 | `GET /api/precon-ev/ranking?field=&sealed_field=&cutoff=&foil_needs_sales=&sort=&desc=&filter=&hide_no_decklist=` | Precon EV | one row per precon (EV, ratio, Liquid EV, Top 5, coverage, notes), sorted and filtered by core; 409 `not_loaded` before the first load |
 | `GET /api/precon-ev/products/{id}?field=&sealed_field=&cutoff=&foil_needs_sales=` | Precon EV | the product's figures and every card line (rank, Top 5, unit and line price, sales days, note) per deck |
 | `GET /api/precon-ev/products/{id}/history?…` | Precon EV | weekly EV, sealed price and Top 5 since the release (at most 52 weeks) |
+| `GET /api/data-info` | logged in | how current the inventory data is: `copy_taken_at` (when the desktop copy was taken) and `last_import` (day of the last inventory import) |
+| `GET /api/restock?min_copies=&sort=&desc=` | View reports | sold-out variants ranked by sell-through speed (first 300; `total`, `copies`); `realized_revenue` / `revenue` only with "View revenue and costs", and `sort=revenue` is refused (403) without it |
+| `GET /api/restock/export?…` | View reports | the same list, all rows, as `restock_buy_list.csv` (the `realizedRevenue` column only with "View revenue and costs"; spreadsheet-safe text) |
+| `GET /api/movers/status` | View reports | the shared market data job and what is loaded (`day`, `cards`, `products`, `version`) |
+| `POST /api/movers/load` | View reports | `{refresh}` → loads today's market data for everyone (202 with the status; does nothing when today's data is there unless `refresh`); 429 `too_soon` within 30 s after the last load ended |
+| `GET /api/movers?field=&min_price=&min_age=&direction=&sort=&desc=` | View reports | cards in stock whose market price moved over 7/30 days (first 300 of `total`); 409 `not_loaded` before the first load |
+| `GET /api/mispricing/status`, `POST /api/mispricing/load` | Mispricing report | the shared market data, as `/api/movers/status` and `/load` |
+| `GET /api/mispricing?field=&threshold=&filter=&sort=&desc=` | Mispricing report | every listing against the market (verdict, flags, momentum, action, 7/30-day change; first 300 of `total`), counts over all listings, the internal consistency conflicts (first 100 of `conflicts_total`); the money totals (`upside`, `excess`, `listed_value`, `market_value`) only with "View revenue and costs" |
+| `GET /api/stock-analysis` | View reports | stock overview, sales velocity, dead-stock aging, top lists, longest unsold, breakdowns and the purchase-lot table; `money` says whether the money figures (stock value, revenue, value per age bucket, lot value/revenue/cost/margin/payback, bulk-lot revenue) are in the answer: only with "View revenue and costs". Listing prices of single cards are always shown |
 | `GET` / `PUT /api/precon-ev/settings` | Precon EV | the user's price columns, cutoff, foil option, sorting and "hide without decklist" plus the `defaults` |
 
 State-changing requests (anything but `GET`) need the header
@@ -157,6 +167,10 @@ files are out of date.
   of CSV, 50,000 rows, quantities and prices up to 1,000,000; checked only
   after the session, so anonymous callers cannot make the server read a large
   body. Errors about a file name the line, never the file's content.
+- **Money figures** (revenue, margins, lot costs) are only sent to users
+  with "View revenue and costs": without it the server leaves them out of
+  answers and CSV files and refuses sorting by them (the order would give
+  them away). The pages only hide what the server already left out.
 - **Spreadsheet-safe reports:** text from an uploaded file that could start a
   spreadsheet formula (`=`, `+`, `-`, `@`, also full-width or after spaces) is
   exported with a leading `'` (`check_stock_core::spreadsheet`). Only for
@@ -176,6 +190,13 @@ files are out of date.
   time; pages poll its status. A replaced run is cancelled and can no longer
   change the status. On Ctrl-C / SIGTERM running jobs are cancelled and the
   process waits at most 3 s for them.
+- **Market data** (`src/market.rs`): latest prices and the prices 0/7/14/30/60/90
+  days back for every card in stock, loaded from inventory_sync once a day
+  for all users (price movers, mispricing). The history is fetched in
+  portions of 1,000 products (the tracker holds one database lock per
+  request; one request for the whole stock took over 30 s and was sometimes
+  cut off), each retried once, with progress; errors are shortened like the
+  precon ones.
 - **Precon EV** (`src/precon.rs`): MTGJSON only at its fixed address (deck
   file names checked by core), inventory_sync only at the configured one. A
   new load is refused within 30 s after the last load ended; weekly histories are
