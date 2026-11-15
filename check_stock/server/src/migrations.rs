@@ -65,6 +65,18 @@ const MIGRATIONS: &[(u32, &str)] = &[
              details       TEXT NOT NULL DEFAULT '{}'
          ) STRICT;",
     ),
+    (
+        3,
+        // Per-user settings of the screens (e.g. the buy helper's rules), one
+        // JSON value per user and setting; gone with the user.
+        "CREATE TABLE srv_user_settings (
+             user_id    INTEGER NOT NULL REFERENCES srv_users (id) ON DELETE CASCADE,
+             key        TEXT NOT NULL,
+             value      TEXT NOT NULL CHECK (json_valid(value)),
+             updated_at TEXT NOT NULL,
+             PRIMARY KEY (user_id, key)
+         ) STRICT, WITHOUT ROWID;",
+    ),
 ];
 
 /// Newest schema version this build knows.

@@ -24,8 +24,7 @@ up" number the aging report already shows into cash and free bin space.
 
 When valuing an offer, flag each card with what you already know: current
 copies in stock, its sales velocity (from the sold-events log), and dead-stock risk
-(you hold 12 copies that haven't moved in 6 months). Optionally auto-price
-singles from the price-guide trend instead of the seller's CSV prices.
+(you hold 12 copies that haven't moved in 6 months).
 
 **Decision it enables:** avoid paying singles rates for cards that will rot in
 a bin, and bid confidently on cards your own history proves sell fast.

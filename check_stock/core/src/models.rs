@@ -207,8 +207,14 @@ impl Card {
     }
 
     /// Parse the price as f64, returning 0.0 if parsing fails
+    /// The price as a number; 0 when missing, unparseable or not finite
+    /// (`NaN`, `inf` would otherwise poison every sum it enters).
     pub fn price_f64(&self) -> f64 {
-        self.price.parse::<f64>().unwrap_or(0.0)
+        self.price
+            .parse::<f64>()
+            .ok()
+            .filter(|p| p.is_finite())
+            .unwrap_or(0.0)
     }
 }
 

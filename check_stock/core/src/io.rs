@@ -27,18 +27,66 @@ pub fn read_csv_with_category(path: &str) -> Result<InventoryCsv, Box<dyn std::e
 
 pub fn read_csv(path: &str) -> Result<Vec<Card>, Box<dyn std::error::Error>> {
     info!("Reading inventory CSV from: {}", path);
+    let file = std::fs::File::open(path)?;
+    Ok(read_cards(file, None)?)
+}
 
+/// Why an inventory CSV could not be read.
+#[derive(Debug)]
+pub enum CsvReadError {
+    /// Malformed CSV, a missing column or invalid UTF-8.
+    Csv(csv::Error),
+    /// More rows than the caller allows (counted before rows are skipped).
+    TooManyRows { max: usize },
+}
+
+impl CsvReadError {
+    /// Line of the offending row, if known.
+    pub fn line(&self) -> Option<u64> {
+        match self {
+            CsvReadError::Csv(e) => e.position().map(|p| p.line()),
+            CsvReadError::TooManyRows { .. } => None,
+        }
+    }
+}
+
+impl std::fmt::Display for CsvReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CsvReadError::Csv(e) => write!(f, "{e}"),
+            CsvReadError::TooManyRows { max } => write!(f, "more than {max} rows"),
+        }
+    }
+}
+
+impl std::error::Error for CsvReadError {}
+
+/// Parses an inventory CSV that is already in memory (an upload), with the
+/// same rules as [`read_csv`]; stops with [`CsvReadError::TooManyRows`] after
+/// `max_rows` rows, so a huge upload is never fully turned into cards.
+pub fn parse_csv(data: &[u8], max_rows: usize) -> Result<Vec<Card>, CsvReadError> {
+    read_cards(data, Some(max_rows))
+}
+
+/// Reads inventory rows: rows without price or quantity, and rows with
+/// quantity 0, are skipped.
+fn read_cards<R: io::Read>(source: R, max_rows: Option<usize>) -> Result<Vec<Card>, CsvReadError> {
     let mut rdr = csv::ReaderBuilder::new()
         .flexible(true)
         .trim(csv::Trim::All)
-        .from_path(path)?;
+        .from_reader(source);
 
     let mut cards = Vec::new();
     let mut skipped_empty = 0;
     let mut skipped_zero = 0;
 
-    for result in rdr.deserialize() {
-        let card: Card = result?;
+    for (index, result) in rdr.deserialize().enumerate() {
+        if max_rows.is_some_and(|max| index >= max) {
+            return Err(CsvReadError::TooManyRows {
+                max: max_rows.unwrap_or_default(),
+            });
+        }
+        let card: Card = result.map_err(CsvReadError::Csv)?;
         if card.price.trim().is_empty() || card.quantity.trim().is_empty() {
             skipped_empty += 1;
             continue;

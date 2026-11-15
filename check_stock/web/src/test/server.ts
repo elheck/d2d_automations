@@ -8,6 +8,7 @@ export interface Call {
   url: string;
   headers: Record<string, string>;
   body: unknown;
+  keepalive: boolean;
 }
 
 export interface Reply {
@@ -24,7 +25,7 @@ export function fakeServer(routes: Record<string, Route>) {
     const method = init?.method ?? "GET";
     const headers = { ...(init?.headers as Record<string, string> | undefined) };
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-    const call = { method, url, headers, body };
+    const call = { method, url, headers, body, keepalive: init?.keepalive ?? false };
     calls.push(call);
     const route = routes[`${method} ${url}`] ?? routes[`${method} ${url.split("?")[0]}`];
     const reply: Reply = route

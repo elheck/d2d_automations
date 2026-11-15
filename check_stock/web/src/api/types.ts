@@ -3,6 +3,12 @@
 export type { ApiErrorBody } from "./generated/ApiErrorBody";
 export type { AuditEntry } from "./generated/AuditEntry";
 export type { AuditPage } from "./generated/AuditPage";
+export type { BuyHelperSettings } from "./generated/BuyHelperSettings";
+export type { BuyOffer } from "./generated/BuyOffer";
+export type { BuyOfferParams } from "./generated/BuyOfferParams";
+export type { BuyOfferRequest } from "./generated/BuyOfferRequest";
+export type { BuyOfferSingle } from "./generated/BuyOfferSingle";
+export type { BuyOfferSummary } from "./generated/BuyOfferSummary";
 export type { ChangePasswordRequest } from "./generated/ChangePasswordRequest";
 export type { CreateUserRequest } from "./generated/CreateUserRequest";
 export type { LoginRequest } from "./generated/LoginRequest";

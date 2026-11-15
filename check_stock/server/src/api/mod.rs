@@ -12,6 +12,7 @@
 
 mod audit_log;
 mod auth;
+mod buy_helper;
 mod singles;
 mod users;
 
@@ -135,7 +136,8 @@ fn api(state: AppState) -> Api {
     let api = auth::routes(api);
     let api = users::routes(api);
     let api = audit_log::routes(api);
-    singles::routes(api)
+    let api = singles::routes(api);
+    buy_helper::routes(api)
 }
 
 /// The API router with CSRF check and body limit.

@@ -228,7 +228,34 @@ fn export_escapes_names_with_commas() {
 fn export_contains_summary_rows() {
     let cards = vec![card("Rare", "1.00", "1")];
     let csv = export_csv(&cards, &BuyParams::default()).unwrap();
-    assert!(csv.contains("=== SINGLES ==="));
-    assert!(csv.contains("=== BULK ==="));
-    assert!(csv.contains("=== TOTAL ==="));
+    assert!(csv.contains("*** SINGLES ***"));
+    assert!(csv.contains("*** BULK ***"));
+    assert!(csv.contains("*** TOTAL ***"));
+}
+
+#[test]
+fn export_never_contains_formulas() {
+    let mut evil = card("rare", "5.00", "1");
+    evil.name = "=HYPERLINK(\"http://evil.example\",\"click\")".to_string();
+    evil.set = "+cmd".to_string();
+    evil.set_code = "@SUM(1)".to_string();
+    evil.cn = "-2+3".to_string();
+    evil.condition = "\t=1".to_string();
+    evil.language = "＝1".to_string();
+    evil.rarity = "=rare".to_string();
+    let csv = export_csv(&[evil], &BuyParams::default()).unwrap();
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .from_reader(csv.as_bytes());
+    for record in reader.records() {
+        for cell in record.unwrap().iter() {
+            let first = cell.trim_start().chars().next();
+            assert!(
+                !first.is_some_and(|c| "=+-@＝".contains(c)) && !cell.starts_with('\t'),
+                "formula cell {cell:?}"
+            );
+        }
+    }
+    assert!(csv.contains("'=HYPERLINK"));
 }

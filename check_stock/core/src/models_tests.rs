@@ -312,6 +312,15 @@ fn test_card_price_f64_invalid() {
 }
 
 #[test]
+fn test_card_price_f64_not_finite_is_zero() {
+    let mut card = create_test_card();
+    for weird in ["NaN", "nan", "inf", "-inf", "infinity", "1e999"] {
+        card.price = weird.to_string();
+        assert_eq!(card.price_f64(), 0.0, "{weird}");
+    }
+}
+
+#[test]
 fn test_card_price_f64_empty() {
     let mut card = create_test_card();
     card.price = "".to_string();

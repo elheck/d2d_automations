@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_SET_KEY,
-  formatEuro,
   isCardmarketUrl,
   loadDefaultSet,
   parseCardInput,
@@ -38,12 +37,6 @@ describe("card input", () => {
 });
 
 describe("price texts", () => {
-  it("formats euros", () => {
-    expect(formatEuro(0.25)).toBe("0.25 €");
-    expect(formatEuro(12)).toBe("12.00 €");
-    expect(formatEuro(null)).toBe("—");
-  });
-
   it("explains missing prices", () => {
     expect(priceStatusText({ status: "not_tracked" })).toMatch(/no prices/);
     expect(priceStatusText({ status: "unavailable" })).toMatch(/did not answer/);

@@ -6,6 +6,7 @@ import { AppLayout } from "./components/AppLayout";
 import { RequirePermission } from "./components/RequirePermission";
 import { AccountPage } from "./pages/AccountPage";
 import { AuditPage } from "./pages/AuditPage";
+import { BuyHelperPage } from "./pages/BuyHelperPage";
 import { HomePage } from "./pages/HomePage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
@@ -60,6 +61,16 @@ const singlesRoute = createRoute({
   ),
 });
 
+const buyHelperRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/buy-helper",
+  component: () => (
+    <RequirePermission permission="buy_helper.use">
+      <BuyHelperPage />
+    </RequirePermission>
+  ),
+});
+
 const usersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/users",
@@ -88,7 +99,7 @@ const accountRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  appRoute.addChildren([homeRoute, singlesRoute, usersRoute, auditRoute, accountRoute]),
+  appRoute.addChildren([homeRoute, singlesRoute, buyHelperRoute, usersRoute, auditRoute, accountRoute]),
 ]);
 
 export function createAppRouter(history?: RouterHistory) {

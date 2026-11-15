@@ -38,11 +38,6 @@ export function resolveCardInput(input: string, defaultSet: string): CardRef | n
   return parseCardInput(text);
 }
 
-/** `0.25` → `0.25 €`; no price → `—`. */
-export function formatEuro(value: number | null): string {
-  return value === null ? "—" : `${value.toFixed(2)} €`;
-}
-
 export const PRICE_ROWS: { key: keyof PriceSet; label: string }[] = [
   { key: "trend", label: "Trend" },
   { key: "low", label: "Low" },

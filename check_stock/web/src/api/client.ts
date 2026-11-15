@@ -19,7 +19,7 @@ export class ApiError extends Error {
   }
 }
 
-type Method = "GET" | "POST" | "PATCH" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 let onUnauthenticated: () => void = () => {};
 
@@ -39,8 +39,21 @@ function isErrorBody(value: unknown): value is ApiErrorBody {
   );
 }
 
-export async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = { Accept: "application/json" };
+/** Extra fetch options. */
+export interface RequestOptions {
+  /** Let the browser finish the request even if the page is closing (small bodies only). */
+  keepalive?: boolean;
+}
+
+/** Sends a request; resolves with the response if it succeeded, else throws {@link ApiError}. */
+async function send(
+  method: Method,
+  path: string,
+  body: unknown,
+  accept: string,
+  options: RequestOptions = {},
+): Promise<Response> {
+  const headers: Record<string, string> = { Accept: accept };
   if (method !== "GET") headers[CSRF_HEADER] = "1";
   if (body !== undefined) headers["Content-Type"] = "application/json";
 
@@ -51,34 +64,64 @@ export async function request<T>(method: Method, path: string, body?: unknown): 
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
       credentials: "same-origin",
+      keepalive: options.keepalive ?? false,
     });
   } catch {
     throw new ApiError(0, "network", "The server cannot be reached.");
   }
+  if (response.ok) return response;
 
+  const data = parseJson(await response.text());
+  const error = isErrorBody(data)
+    ? new ApiError(response.status, data.error.code, data.error.message)
+    : new ApiError(response.status, "http_error", `Request failed (${response.status}).`);
+  if (error.status === 401 && error.code === "unauthenticated") onUnauthenticated();
+  throw error;
+}
+
+function parseJson(text: string): unknown {
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+export async function request<T>(method: Method, path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+  const response = await send(method, path, body, "application/json", options);
   if (response.status === 204) return undefined as T;
-  const text = await response.text();
-  let data: unknown = undefined;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = undefined;
-    }
-  }
-  if (!response.ok) {
-    const error = isErrorBody(data)
-      ? new ApiError(response.status, data.error.code, data.error.message)
-      : new ApiError(response.status, "http_error", `Request failed (${response.status}).`);
-    if (error.status === 401 && error.code === "unauthenticated") onUnauthenticated();
-    throw error;
-  }
-  return data as T;
+  return parseJson(await response.text()) as T;
+}
+
+/** A file the server sent for download. */
+export interface Download {
+  blob: Blob;
+  fileName: string;
+}
+
+/**
+ * The file name from a `Content-Disposition` header: only letters, digits,
+ * `.`, `_` and `-` (anything else falls back to `fallback`).
+ */
+export function downloadFileName(header: string | null, fallback: string): string {
+  const name = header?.match(/filename="([^"]*)"/)?.[1] ?? "";
+  return /^[A-Za-z0-9._-]{1,100}$/.test(name) && !name.startsWith(".") ? name : fallback;
+}
+
+/** POSTs `body` and returns the file the server answers with. */
+export async function download(path: string, body: unknown, fallbackName: string): Promise<Download> {
+  const response = await send("POST", path, body, "*/*");
+  return {
+    blob: await response.blob(),
+    fileName: downloadFileName(response.headers.get("Content-Disposition"), fallbackName),
+  };
 }
 
 export const api = {
   get: <T>(path: string) => request<T>("GET", path),
   post: <T>(path: string, body?: unknown) => request<T>("POST", path, body ?? {}),
+  put: <T>(path: string, body: unknown, options?: RequestOptions) => request<T>("PUT", path, body, options),
   patch: <T>(path: string, body: unknown) => request<T>("PATCH", path, body),
   delete: <T>(path: string) => request<T>("DELETE", path),
 };

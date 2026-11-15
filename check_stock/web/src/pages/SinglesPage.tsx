@@ -6,8 +6,8 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useSingleCard, type SingleLookup } from "../api/queries";
 import type { SingleCard } from "../api/types";
 import { ErrorMessage } from "../components/ErrorMessage";
+import { formatEuro } from "../format";
 import {
-  formatEuro,
   isCardmarketUrl,
   loadDefaultSet,
   PRICE_ROWS,

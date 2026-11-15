@@ -9,7 +9,8 @@ built on top of core, with its browser interface in [`web/`](web/). Try the
 web version locally with `./dev.sh` (needs Node.js 24; see the server README):
 it works on a copy of the desktop database and asks for a password for your
 local login on the first start. Ported so far: the Magic Singles Listing
-(Cardmarket prices from inventory_sync, set with `--inventory-sync-url`).
+(Cardmarket prices from inventory_sync, set with `--inventory-sync-url`) and
+the Card Buy Helper.
 
 The welcome screen shows a **since-last-visit digest** (copies sold and revenue
 since the previous day the app was opened, new listings, bulk lots built,
@@ -106,7 +107,7 @@ showing exactly what would change before anything is written.
   CSV with the inventory export's columns and the new prices, plus an
   `_undo.csv` with the current prices to roll back. Check the import with a few
   cards first.
-- **Card Buy Helper** — Value a purchase offer from a card export CSV: split cards into individually-priced singles (by rarity and/or price threshold) versus bulk (flat rate per N cards), see the total offer, and export a breakdown CSV. Strictly read-only — never writes to the inventory database.
+- **Card Buy Helper** — Value a purchase offer from a card export CSV: split cards into individually-priced singles (by rarity and/or price threshold) versus bulk (flat rate per N cards), see the total offer, and export a breakdown CSV. Values are the prices in the seller's file. Text from the seller's file that could run as a spreadsheet formula (`=…`, `+…`, `-…`, `@…`) is exported with a leading `'`. Strictly read-only — never writes to the inventory database. Also in the web version (`/buy-helper`), where each user's split rules and rates are saved on the server; the card list itself is never stored
 - **Mispricing Report** — Compare every in-stock listing against a market
   reference (trend/avg/low, foil-aware) to surface under- and over-priced
   cards, the revenue upside of repricing, and capital stuck above market. The

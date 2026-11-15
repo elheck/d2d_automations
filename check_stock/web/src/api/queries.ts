@@ -2,9 +2,12 @@
 // changed; logging in or out resets everything.
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { api, ApiError } from "./client";
+import { api, ApiError, download } from "./client";
 import type {
   AuditPage,
+  BuyHelperSettings,
+  BuyOffer,
+  BuyOfferParams,
   ChangePasswordRequest,
   CreateUserRequest,
   LoginRequest,
@@ -21,6 +24,8 @@ export const keys = {
   users: ["users"] as const,
   audit: ["audit"] as const,
   singles: ["singles"] as const,
+  buyHelperSettings: ["buy-helper-settings"] as const,
+  buyOffer: ["buy-offer"] as const,
 };
 
 /** The logged-in user; `null` when not logged in. */
@@ -153,6 +158,71 @@ export function useSingleCard(lookup: SingleLookup | null) {
     enabled: lookup !== null,
     // Prices change once a day; a few minutes avoid asking again while listing.
     staleTime: 5 * 60_000,
+  });
+}
+
+/** The user's buy helper settings (stored on the server) and the defaults. */
+export function useBuyHelperSettings() {
+  return useQuery({
+    queryKey: keys.buyHelperSettings,
+    queryFn: () => api.get<BuyHelperSettings>(BUY_HELPER_SETTINGS),
+    staleTime: Infinity,
+  });
+}
+
+const BUY_HELPER_SETTINGS = "/api/buy-helper/settings";
+
+/**
+ * Saves settings while the page is closing (`keepalive`: the browser finishes
+ * the request after the page is gone). Errors cannot be shown any more.
+ */
+export function saveBuyHelperSettingsOnExit(params: BuyOfferParams): void {
+  void api.put(BUY_HELPER_SETTINGS, params, { keepalive: true }).catch(() => undefined);
+}
+
+export function useSaveBuyHelperSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (params: BuyOfferParams) => api.put<BuyHelperSettings>(BUY_HELPER_SETTINGS, params),
+    onSuccess: async (settings) => {
+      queryClient.setQueryData(keys.buyHelperSettings, settings);
+      await queryClient.invalidateQueries({ queryKey: keys.audit });
+    },
+  });
+}
+
+/** A card list loaded in the browser; `version` changes with every new file. */
+export interface CardListFile {
+  name: string;
+  csv: string;
+  version: number;
+}
+
+/**
+ * The offer for `file` under `params` (nothing is asked while either is
+ * missing). The file's text is not part of the cache key, only its version.
+ */
+export function useBuyOffer(file: CardListFile | null, params: BuyOfferParams | null) {
+  return useQuery({
+    queryKey: [...keys.buyOffer, file?.version, params],
+    queryFn: () => {
+      if (!file || !params) throw new Error("no card list");
+      return api.post<BuyOffer>("/api/buy-helper/offer", { csv: file.csv, params });
+    },
+    enabled: file !== null && params !== null,
+    // While new settings are being valued, keep showing the last offer for
+    // the same file (never one of a previous file).
+    placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[1] === file?.version ? previous : undefined),
+    staleTime: Infinity,
+    gcTime: 60_000,
+  });
+}
+
+/** The offer as a CSV file. */
+export function useExportOffer() {
+  return useMutation({
+    mutationFn: ({ file, params }: { file: CardListFile; params: BuyOfferParams }) =>
+      download("/api/buy-helper/export", { csv: file.csv, params }, "buy_offer.csv"),
   });
 }
 

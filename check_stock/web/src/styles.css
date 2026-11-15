@@ -457,3 +457,137 @@ code {
 .table td.num {
   text-align: right;
 }
+
+/* Panels (a framed block on a page) */
+.panel {
+  padding: 1rem;
+  margin: 1rem 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.panel .field {
+  margin-bottom: 0;
+}
+.panel > p {
+  margin: 0.5rem 0 0;
+}
+.panel > .panel__title {
+  margin: 0 0 0.5rem;
+}
+
+/* Hidden from view, still there for keyboards and screen readers. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* File input shown as a button (the native one cannot be styled) */
+.file-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+.file-picker .button {
+  display: inline-flex;
+  align-items: center;
+}
+.file-picker input:focus-visible + .button {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Number input with its unit and error */
+.number-field {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.number-field__input {
+  width: 6.5rem;
+  min-height: var(--tap);
+  padding: 0 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: right;
+}
+.number-field__input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.number-field__input:disabled {
+  opacity: 0.55;
+}
+.number-field__error {
+  flex-basis: 100%;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+/* Buy helper */
+.buy-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: 0 1.5rem;
+}
+.buy-settings__group {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.buy-settings__group legend {
+  font-weight: 600;
+  padding: 0;
+  margin-bottom: 0.25rem;
+}
+.buy-settings__group > p {
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
+}
+.buy-settings__rarities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.25rem;
+}
+.buy-settings__rarities .checkbox,
+.buy-settings__row .checkbox {
+  align-items: center;
+  min-height: var(--tap);
+}
+.buy-settings__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: 0.4rem 0;
+}
+.buy-settings__actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+.offer__summary {
+  max-width: 40rem;
+}
+.offer--updating .offer__summary {
+  opacity: 0.6;
+}
+.offer__total th,
+.offer__total td {
+  font-weight: 700;
+}

@@ -767,6 +767,7 @@ dependencies = [
  "check_stock_core",
  "chrono",
  "clap",
+ "csv",
  "env_logger",
  "getrandom 0.4.3",
  "http-body-util",

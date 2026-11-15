@@ -29,5 +29,6 @@ pub mod password;
 pub mod permissions;
 pub mod rate_limit;
 pub mod sessions;
+pub mod user_settings;
 pub mod users;
 pub mod web;

@@ -92,3 +92,4 @@ Status last checked 2026-10-29.
 | M7 | inventory_sync | No graceful shutdown | Open |
 | M8 | inventory_sync | Unbounded image cache can fill disk | Open |
 | M9 | inventory_sync | CDN script without SRI hash | Open |
+| M10 | check_stock | CSV formula injection: card names from a seller's list (e.g. `=HYPERLINK(…)`) copied into the buy helper's offer CSV run as formulas in Excel/LibreOffice | **Fixed** — every text cell from the seller's file that could start a formula gets a leading `'` (`check_stock_core::spreadsheet`), desktop and web; CSVs that are re-imported (repricing, bulk lots) are left exact |

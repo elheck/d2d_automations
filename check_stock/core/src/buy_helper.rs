@@ -10,6 +10,7 @@
 //! * **Bulk** — everything else, bought at a flat bulk rate (euros per N cards).
 
 use crate::models::Card;
+use crate::spreadsheet::spreadsheet_safe;
 
 /// User-adjustable parameters controlling how cards are split into individually
 /// valued "singles" versus "bulk", and how each bucket is priced into an offer.
@@ -183,15 +184,17 @@ pub fn export_csv(cards: &[Card], params: &BuyParams) -> Result<String, String> 
             ),
             CardClass::Bulk => (CardClass::Bulk.as_str(), per_bulk_card_offer * qty as f64),
         };
+        // Every value from the seller's file is shown as text, never run as
+        // a formula ([`spreadsheet_safe`]).
         wtr.write_record([
-            card.name.as_str(),
-            card.set.as_str(),
-            card.set_code.as_str(),
-            card.cn.as_str(),
-            card.condition.as_str(),
-            card.language.as_str(),
+            &*spreadsheet_safe(&card.name),
+            &*spreadsheet_safe(&card.set),
+            &*spreadsheet_safe(&card.set_code),
+            &*spreadsheet_safe(&card.cn),
+            &*spreadsheet_safe(&card.condition),
+            &*spreadsheet_safe(&card.language),
             if card.is_foil_card() { "1" } else { "0" },
-            card.rarity.as_str(),
+            &*spreadsheet_safe(&card.rarity),
             &qty.to_string(),
             &format!("{unit:.2}"),
             &format!("{value:.2}"),
@@ -203,26 +206,27 @@ pub fn export_csv(cards: &[Card], params: &BuyParams) -> Result<String, String> 
 
     // Blank spacer, then labelled summary rows. These are NOT card rows — the
     // leading marker in the `name` column keeps them from being confused with
-    // per-card data if the file is loaded into a spreadsheet.
+    // per-card data if the file is loaded into a spreadsheet. (`*`, not `=`:
+    // a spreadsheet would take `=== … ===` for a formula.)
     let empty = || [""; 13];
     wtr.write_record(empty()).map_err(|e| e.to_string())?;
     write_summary_row(
         &mut wtr,
-        "=== SINGLES ===",
+        "*** SINGLES ***",
         summary.single_cards,
         summary.single_market_value,
         summary.single_offer,
     )?;
     write_summary_row(
         &mut wtr,
-        "=== BULK ===",
+        "*** BULK ***",
         summary.bulk_cards,
         summary.bulk_market_value,
         summary.bulk_offer,
     )?;
     write_summary_row(
         &mut wtr,
-        "=== TOTAL ===",
+        "*** TOTAL ***",
         summary.single_cards + summary.bulk_cards,
         summary.single_market_value + summary.bulk_market_value,
         summary.total_offer,

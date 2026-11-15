@@ -120,7 +120,7 @@ permissions! {
     PreconEvUse = "precon_ev.use", Tools, "Precon EV", [],
         "Rank Commander precons by the value of their singles against the sealed price.";
     BuyHelperUse = "buy_helper.use", Tools, "Buy Helper", [],
-        "Value a purchase offer from a card list. Nothing is saved.";
+        "Value a purchase offer from a seller's card list. The list itself is never saved; each user's split rules and rates are.";
     ListingUse = "listing.use", Tools, "Singles listing", [],
         "Look up cards by set and collector number, with images and prices.";
 }

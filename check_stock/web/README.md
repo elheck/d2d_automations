@@ -37,7 +37,7 @@ npm run test:watch
 | `src/api/generated/` | TypeScript types generated from the Rust structs by `cargo test` (ts-rs). **Never edit**: change the Rust struct, run `cargo test`, commit the result. CI fails if they are out of date |
 | `src/router.tsx`     | Pages (TanStack Router); everything but `/login` is inside the app layout, which sends visitors without a session to the login                                                          |
 | `src/components/`    | Layout, permission picker, dialog, error message                                                                                                                                        |
-| `src/pages/`         | Login, start page, singles listing (`singles.ts`: input rules and price texts), users, audit log, account                                                                               |
+| `src/pages/`         | Login, start page, singles listing (`singles.ts`: input rules and price texts), buy helper (`buyHelper.ts`: settings form, file checks, saving downloads), users, audit log, account    |
 | `src/test/`          | Fake server for `fetch`, fixtures, `renderApp` (whole app at a path)                                                                                                                    |
 
 ## Rules
@@ -64,3 +64,13 @@ npm run test:watch
 - **Browser storage only for conveniences** (e.g. the singles listing's
   default set), always inside `try`/`catch`: work state that must survive
   belongs on the server.
+- **Settings saved on the server** (e.g. the buy helper's rules) save
+  themselves shortly after the last change, right away when the user moves
+  to another page, and with a `keepalive` request when the tab is closed or
+  reloaded, so no change is lost.
+- **Downloads** come from `download()` in `src/api/client.ts` (POST with the
+  CSRF header, file name from `Content-Disposition`, letters/digits/`._-`
+  only) and are saved with `saveDownload()`; no inline scripts or `data:`
+  URLs.
+- **Uploads** are read in the browser (`File.text()`) after a size check and
+  sent as JSON; the server checks again.

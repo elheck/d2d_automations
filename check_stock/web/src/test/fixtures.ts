@@ -58,6 +58,15 @@ export const catalog: PermissionInfo[] = [
     requires: ["repricing.view"],
   },
   {
+    key: "buy_helper.use",
+    label: "Buy Helper",
+    description:
+      "Value a purchase offer from a seller's card list. The list itself is never saved; each user's split rules and rates are.",
+    group: "tools",
+    group_label: "Tools",
+    requires: [],
+  },
+  {
     key: "listing.use",
     label: "Singles listing",
     description: "Look up cards by set and collector number, with images and prices.",
@@ -74,6 +83,8 @@ export const admin: MeResponse = {
 };
 
 export const helper: MeResponse = { username: "helper", display_name: "Helper", permissions: ["search.use"] };
+
+export const buyer: MeResponse = { username: "buyer", display_name: "Buyer", permissions: ["buy_helper.use"] };
 
 export const lister: MeResponse = { username: "lister", display_name: "Lister", permissions: ["listing.use"] };
 

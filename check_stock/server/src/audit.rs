@@ -56,6 +56,8 @@ pub mod action {
     pub const USER_DELETED: &str = "user.deleted";
     pub const DESKTOP_IMPORTED: &str = "import.desktop";
     pub const DESKTOP_REFRESHED: &str = "import.refresh";
+    /// A user changed their own settings of a screen (target: the setting).
+    pub const SETTINGS_CHANGED: &str = "settings.changed";
 }
 
 /// Adds an entry.

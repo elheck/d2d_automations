@@ -27,6 +27,7 @@ pub mod precon_loader;
 pub mod price_trends;
 pub mod repricing;
 pub mod restock;
+pub mod spreadsheet;
 pub mod stock_analysis;
 pub mod wantslist;
 

@@ -7,7 +7,8 @@ and admin commands.
 
 Status: foundation done (steps 1a–1c: server, login, users with
 fine-grained permissions, audit log, and the [web UI](../web/) built into the
-binary); first ported screen: the singles listing (step 2a).
+binary); ported screens: the singles listing (step 2a) and the buy helper
+(step 2b).
 
 ## Try it locally
 
@@ -81,6 +82,9 @@ standard input; passwords are never command-line arguments.
 | `GET /api/audit?before_id=&limit=` | View audit log | newest first |
 | `GET /api/singles/lookup?input=&default_set=` | Singles listing | the card for `hou120` (or `120` + default set): Scryfall data, Cardmarket link, latest inventory_sync prices (`prices.status`: `found`, `no_cardmarket_id`, `not_tracked`, `not_configured`, `unavailable`) |
 | `GET /api/singles/image/{set}/{number}` | Singles listing | the card image (JPEG/PNG), browser-cacheable for 7 days (`private`) |
+| `POST /api/buy-helper/offer` | Buy Helper | `{csv, params}` → summary (cards, value, offer for singles and bulk) and the 200 most valuable singles. The card list is parsed in memory and never stored |
+| `POST /api/buy-helper/export` | Buy Helper | same body → the offer as `buy_offer.csv` (download) |
+| `GET` / `PUT /api/buy-helper/settings` | Buy Helper | the user's own split rules and rates (`params`) plus the `defaults`; `PUT` stores them (audit entry only when they changed) |
 
 State-changing requests (anything but `GET`) need the header
 `X-Check-Stock-CSRF: 1`. Errors are always
@@ -142,7 +146,16 @@ files are out of date.
   `Cache-Control: no-store`. HSTS comes from Caddy, which terminates TLS.
 - **No internal details for clients.** Database errors, paths and panic
   messages go only to the log; malformed request bodies get a generic message;
-  unknown JSON fields are refused; bodies are limited to 64 KiB.
+  unknown JSON fields are refused; bodies are limited to 64 KiB, except the
+  buy helper's card list upload (offer and export routes only): at most 6 MB
+  of CSV, 50,000 rows, quantities and prices up to 1,000,000; checked only
+  after the session, so anonymous callers cannot make the server read a large
+  body. Errors about a file name the line, never the file's content.
+- **Spreadsheet-safe reports:** text from an uploaded file that could start a
+  spreadsheet formula (`=`, `+`, `-`, `@`, also full-width or after spaces) is
+  exported with a leading `'` (`check_stock_core::spreadsheet`). Only for
+  reports people open; CSVs that are imported somewhere again keep their
+  values exactly.
 - **Audit log:** logins (also failed ones, with address and reason), logouts,
   password changes, every user change with its before/after, imports. Written
   in the same transaction as the change.
@@ -182,6 +195,7 @@ newer server version is refused.
 | `srv_user_permissions` | Granted permissions per user |
 | `srv_sessions` | Sessions: SHA-256 of the token, user, last activity, end |
 | `srv_audit_log` | Who did what and when |
+| `srv_user_settings` | Per-user settings of the screens (`src/user_settings.rs`): one JSON value (≤ 16 KiB) per user and setting, deleted with the user; read back through each screen's validation, defaults if it no longer fits |
 
 ## Development
 

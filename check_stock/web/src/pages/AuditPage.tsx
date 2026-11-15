@@ -17,6 +17,7 @@ export const ACTION_LABELS: Record<string, string> = {
   "user.deleted": "User deleted",
   "import.desktop": "Desktop data imported",
   "import.refresh": "Desktop data refreshed",
+  "settings.changed": "Settings changed",
 };
 
 /** Why a login failed, in words. */

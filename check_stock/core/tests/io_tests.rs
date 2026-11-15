@@ -1,4 +1,6 @@
-use check_stock_core::io::{read_csv, read_csv_with_category, read_wantslist};
+use check_stock_core::io::{
+    parse_csv, read_csv, read_csv_with_category, read_wantslist, CsvReadError,
+};
 use check_stock_core::models::Card;
 use std::io::Write;
 use tempfile::NamedTempFile;
@@ -556,4 +558,57 @@ fn test_read_csv_real_magic_report_still_detected_as_magic() {
         let csv = read_csv_with_category(path).expect("should parse real Magic report");
         assert_eq!(csv.category, "Magic", "for {path}");
     }
+}
+
+// Tests for parse_csv (uploads already in memory)
+
+#[test]
+fn test_parse_csv_matches_read_csv() {
+    let content = create_sample_csv_content();
+    let mut temp_file = NamedTempFile::new().unwrap();
+    write!(temp_file, "{content}").unwrap();
+    let from_file = read_csv(temp_file.path().to_str().unwrap()).unwrap();
+    let from_memory = parse_csv(content.as_bytes(), 100).unwrap();
+    let names = |cards: &[Card]| cards.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&from_memory), names(&from_file));
+    // Rows without quantity or price are skipped, as from a file.
+    assert_eq!(from_memory.len(), 3);
+}
+
+#[test]
+fn test_parse_csv_reads_the_generic_fixture() {
+    let data = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/inventory-report-Generic.csv"
+    ))
+    .unwrap();
+    let cards = parse_csv(&data, 100).unwrap();
+    // The second row has quantity 0 and is skipped.
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].name, "100 TCG Guru Perfect Slim Fit Inner Sleeves");
+}
+
+#[test]
+fn test_parse_csv_stops_after_max_rows() {
+    let content = create_sample_csv_content();
+    // Five data rows; skipped rows count too.
+    assert!(parse_csv(content.as_bytes(), 5).is_ok());
+    match parse_csv(content.as_bytes(), 4) {
+        Err(CsvReadError::TooManyRows { max: 4 }) => {}
+        other => panic!("expected TooManyRows, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_csv_reports_the_line_of_a_bad_row() {
+    let err = parse_csv(create_invalid_csv_content().as_bytes(), 100).unwrap_err();
+    assert!(matches!(err, CsvReadError::Csv(_)));
+    assert_eq!(err.line(), Some(2));
+
+    let mut bad_utf8 = create_sample_csv_content().into_bytes();
+    let second_line = bad_utf8.iter().position(|&b| b == b'\n').unwrap() + 1;
+    bad_utf8[second_line + 8] = 0xFF;
+    let err = parse_csv(&bad_utf8, 100).unwrap_err();
+    assert_eq!(err.line(), Some(2));
+    assert!(parse_csv(b"", 100).unwrap().is_empty());
 }
