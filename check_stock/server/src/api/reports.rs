@@ -14,7 +14,8 @@
 use super::{blocking, Access, Api, ApiQuery, CurrentUser};
 use crate::app::AppState;
 use crate::http::ApiError;
-use crate::import::META_COPY_TAKEN_AT;
+use crate::import::{META_COPY_TAKEN_AT, META_CUTOVER_AT};
+use crate::inventory_import::latest_version;
 use crate::migrations::get_meta;
 use crate::permissions::Permission;
 use axum::extract::State;
@@ -60,6 +61,14 @@ pub struct DataInfo {
     pub copy_taken_at: Option<String>,
     /// Day of the last inventory import in that data (`YYYY-MM-DD`).
     pub last_import: Option<String>,
+    /// Changes with every change of the inventory data (import, restore,
+    /// desktop copy); pages poll it to say "the inventory was updated".
+    pub inventory_version: i64,
+    /// When that change happened (RFC 3339).
+    pub updated_at: Option<String>,
+    /// The data is a copy of the desktop app's database before cutover:
+    /// imports here are thrown away at cutover.
+    pub test_copy: bool,
 }
 
 async fn data_info(State(state): State<AppState>) -> Result<Json<DataInfo>, ApiError> {
@@ -68,9 +77,14 @@ async fn data_info(State(state): State<AppState>) -> Result<Json<DataInfo>, ApiE
         .read(|conn| {
             let copy_taken_at = get_meta(conn, META_COPY_TAKEN_AT)?;
             let last_import = last_sync_date_conn(conn)?;
+            let (inventory_version, updated_at) = latest_version(conn)?;
+            let test_copy = copy_taken_at.is_some() && get_meta(conn, META_CUTOVER_AT)?.is_none();
             Ok(DataInfo {
                 copy_taken_at,
                 last_import,
+                inventory_version,
+                updated_at,
+                test_copy,
             })
         })
         .await?;

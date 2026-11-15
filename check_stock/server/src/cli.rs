@@ -34,6 +34,11 @@ pub enum Command {
     /// Set a new password for a user, unlock it and end its sessions (the
     /// server must be stopped).
     ResetPassword(ResetPasswordArgs),
+    /// Put the inventory data of a backup back (e.g. the
+    /// `inventory.db.import-<time>.bak` taken before a bad import). Users,
+    /// settings and the audit log stay; the current database is kept as a
+    /// backup first. The server must be stopped.
+    RestoreInventory(RestoreArgs),
 }
 
 #[derive(Args, Debug)]
@@ -118,6 +123,16 @@ pub struct ImportArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct RestoreArgs {
+    #[arg(long, env = "CHECK_STOCK_DATA_DIR")]
+    pub data_dir: PathBuf,
+
+    /// The backup to restore from.
+    #[arg(long)]
+    pub backup: PathBuf,
+}
+
+#[derive(Args, Debug)]
 pub struct CreateAdminArgs {
     #[arg(long, env = "CHECK_STOCK_DATA_DIR")]
     pub data_dir: PathBuf,
@@ -185,6 +200,19 @@ pub fn run_command(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             if let Some(previous) = report.previous_kept_as {
                 println!("The previous database is kept as {}.", previous.display());
             }
+        }
+        Command::RestoreInventory(args) => {
+            let report = import::restore_inventory(&args.backup, &args.data_dir)?;
+            println!(
+                "Restored {} inventory rows ({}) into {}.",
+                report.inventory_rows,
+                report.categories.join(", "),
+                report.target.display()
+            );
+            println!(
+                "The database as it was before is kept as {}.",
+                report.previous_kept_as.display()
+            );
         }
         Command::CreateAdmin(args) => {
             match admin::create_admin(

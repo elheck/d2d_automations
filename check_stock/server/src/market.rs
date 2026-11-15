@@ -17,6 +17,7 @@ use check_stock_core::precon_loader::local_date;
 use check_stock_core::price_trends::SnapshotSet;
 use chrono::{DateTime, NaiveDate, Utc};
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
@@ -60,6 +61,8 @@ pub struct MarketService {
     job: Arc<Job>,
     last_end: Mutex<Option<Instant>>,
     cooldown: Duration,
+    /// The stock changed (an import) since the last load started.
+    stock_changed: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -83,6 +86,7 @@ impl MarketService {
             job: Arc::new(Job::default()),
             last_end: Mutex::new(None),
             cooldown: LOAD_COOLDOWN,
+            stock_changed: AtomicBool::new(false),
         }
     }
 
@@ -111,12 +115,23 @@ impl MarketService {
         self.job.cancel();
     }
 
-    /// Starts a load unless today's data is there (then `Ok(false)`;
-    /// `refresh` loads anyway).
+    /// The stock changed (an inventory import): the loaded data stays
+    /// visible, but the next [`MarketService::start_load`] loads again.
+    pub fn stock_changed(&self) {
+        self.stock_changed.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether the stock changed since the loaded data was read.
+    pub fn is_outdated(&self) -> bool {
+        self.stock_changed.load(Ordering::SeqCst)
+    }
+
+    /// Starts a load unless today's data for the current stock is there
+    /// (then `Ok(false)`; `refresh` loads anyway).
     pub fn start_load(self: &Arc<Self>, db: Db, refresh: bool) -> Result<bool, StartError> {
         let tracker = self.tracker.clone().ok_or(StartError::NotConfigured)?;
         let today = local_date(Utc::now().timestamp());
-        if !refresh && self.loaded().is_some_and(|d| d.today == today) {
+        if !refresh && !self.is_outdated() && self.loaded().is_some_and(|d| d.today == today) {
             return Ok(false);
         }
         if let Some(at) = *lock(&self.last_end) {
@@ -130,6 +145,9 @@ impl MarketService {
         let Some(run) = self.job.start("Reading the stock…", Utc::now()) else {
             return Err(StartError::Running);
         };
+        // Cleared before the stock is read: an import after this point
+        // marks the new data outdated again.
+        self.stock_changed.store(false, Ordering::SeqCst);
         let service = self.clone();
         tokio::spawn(async move {
             let cards = db

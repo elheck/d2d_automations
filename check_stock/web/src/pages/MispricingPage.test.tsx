@@ -10,6 +10,7 @@ const loaded: MarketStatusView = {
   configured: true,
   job: { state: "finished", at: "2026-11-15T08:00:00Z" },
   loaded: { version: 1, loaded_at: "2026-11-15T08:00:00Z", day: "2026-11-15", cards: 3, products: 3 },
+  stock_changed: false,
 };
 
 function row(overrides: Partial<MispricingRow> = {}): MispricingRow {
@@ -93,7 +94,15 @@ const reportCalls = (calls: Call[]) => calls.filter((c) => c.url.startsWith("/ap
 function server(me = pricer, money = false, extra: Parameters<typeof fakeServer>[0] = {}) {
   return fakeServer({
     "GET /api/auth/me": { body: me },
-    "GET /api/data-info": { body: { copy_taken_at: null, last_import: "2026-11-11" } },
+    "GET /api/data-info": {
+      body: {
+        copy_taken_at: null,
+        last_import: "2026-11-11",
+        inventory_version: 1,
+        updated_at: null,
+        test_copy: false,
+      },
+    },
     "GET /api/mispricing/status": { body: loaded },
     "POST /api/mispricing/load": { status: 202, body: loaded },
     "GET /api/mispricing": { body: view(money) },

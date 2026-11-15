@@ -10,6 +10,7 @@ const loaded: MarketStatusView = {
   configured: true,
   job: { state: "finished", at: "2026-11-15T08:00:00Z" },
   loaded: { version: 1, loaded_at: "2026-11-15T08:00:00Z", day: "2026-11-15", cards: 3, products: 3 },
+  stock_changed: false,
 };
 
 function row(overrides: Partial<MoverRow> = {}): MoverRow {
@@ -43,7 +44,15 @@ const loads = (calls: Call[]) => calls.filter((c) => c.url === "/api/movers/load
 function server(extra: Parameters<typeof fakeServer>[0] = {}) {
   return fakeServer({
     "GET /api/auth/me": { body: reporter },
-    "GET /api/data-info": { body: { copy_taken_at: null, last_import: "2026-11-11" } },
+    "GET /api/data-info": {
+      body: {
+        copy_taken_at: null,
+        last_import: "2026-11-11",
+        inventory_version: 1,
+        updated_at: null,
+        test_copy: false,
+      },
+    },
     "GET /api/movers/status": { body: loaded },
     "POST /api/movers/load": { status: 202, body: loaded },
     "GET /api/movers": { body: view },
@@ -73,7 +82,7 @@ describe("price movers", () => {
   });
 
   it("follows a running load and fetches again on request", async () => {
-    let status: MarketStatusView = { configured: true, job: { state: "idle" }, loaded: null };
+    let status: MarketStatusView = { configured: true, job: { state: "idle" }, loaded: null, stock_changed: false };
     let polls = 0;
     const { calls } = server({
       "GET /api/movers/status": () => {
@@ -92,6 +101,7 @@ describe("price movers", () => {
             total: null,
           },
           loaded: null,
+          stock_changed: false,
         };
         return { status: 202, body: status };
       },
@@ -172,5 +182,26 @@ describe("price movers", () => {
     expect(parseDays("0")).toBe(0);
     expect(parseDays("3650")).toBe(3650);
     for (const bad of ["", "3651", "-1", "1.5", "x"]) expect(parseDays(bad), bad).toBeNull();
+  });
+
+  it("loads the market data again after an import changed the stock", async () => {
+    let status: MarketStatusView = loaded;
+    const { calls } = server({
+      "GET /api/movers/status": () => ({ body: status }),
+      "POST /api/movers/load": () => ({ status: 202, body: status }),
+    });
+    const { queryClient } = renderApp("/movers");
+    await screen.findByRole("row", { name: /Riser/ });
+    await waitFor(() => expect(loads(calls)).toHaveLength(1));
+    status = { ...loaded, stock_changed: true };
+    await queryClient.refetchQueries({ queryKey: ["market-status"] });
+    await waitFor(() => expect(loads(calls)).toHaveLength(2));
+    expect(loads(calls)[1]?.body).toEqual({ refresh: false });
+    expect(
+      screen.getByText("The stock changed (an inventory import) since these prices were loaded."),
+    ).toBeInTheDocument();
+    // Answered once; the same flag does not ask again.
+    await queryClient.refetchQueries({ queryKey: ["market-status"] });
+    expect(loads(calls)).toHaveLength(2);
   });
 });

@@ -58,6 +58,13 @@ pub mod action {
     pub const DESKTOP_REFRESHED: &str = "import.refresh";
     /// A user changed their own settings of a screen (target: the setting).
     pub const SETTINGS_CHANGED: &str = "settings.changed";
+    /// An inventory export was imported (target: the category).
+    pub const INVENTORY_IMPORTED: &str = "inventory.imported";
+    /// An import the safety check had blocked was confirmed with the typed
+    /// number of copies (target: the category).
+    pub const INVENTORY_IMPORT_FORCED: &str = "inventory.import_forced";
+    /// The inventory was restored from a backup (`restore-inventory`).
+    pub const INVENTORY_RESTORED: &str = "inventory.restored";
 }
 
 /// Adds an entry.

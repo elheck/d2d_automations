@@ -12,4 +12,18 @@ copy_taken_at: string | null,
 /**
  * Day of the last inventory import in that data (`YYYY-MM-DD`).
  */
-last_import: string | null, };
+last_import: string | null, 
+/**
+ * Changes with every change of the inventory data (import, restore,
+ * desktop copy); pages poll it to say "the inventory was updated".
+ */
+inventory_version: number, 
+/**
+ * When that change happened (RFC 3339).
+ */
+updated_at: string | null, 
+/**
+ * The data is a copy of the desktop app's database before cutover:
+ * imports here are thrown away at cutover.
+ */
+test_copy: boolean, };

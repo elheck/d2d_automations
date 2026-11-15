@@ -5,6 +5,12 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClie
 import { api, ApiError, download } from "./client";
 import type {
   AuditPage,
+  DigestView,
+  InventoryConfirmRequest,
+  InventoryFileRequest,
+  InventoryImportResult,
+  InventoryPreview,
+  InventoryVersion,
   StockAnalysisView,
   MispricingSortKey,
   MispricingView,
@@ -54,6 +60,8 @@ export const keys = {
   movers: ["movers"] as const,
   mispricing: ["mispricing"] as const,
   stockAnalysis: ["stock-analysis"] as const,
+  importHistory: ["import-history"] as const,
+  digest: ["digest"] as const,
 };
 
 /** The logged-in user; `null` when not logged in. */
@@ -369,11 +377,57 @@ export function usePreconHistory(id: number, settings: PreconSettings | null, ve
 // ── Reports ──────────────────────────────────────────────────────────────
 
 /** How current the inventory data is (shown above the reports). */
+/** How current the inventory data is; polled so open pages notice an import. */
+export const DATA_INFO_POLL_MS = 60_000;
+
 export function useDataInfo() {
   return useQuery({
     queryKey: keys.dataInfo,
     queryFn: () => api.get<DataInfo>("/api/data-info"),
-    staleTime: 60_000,
+    staleTime: DATA_INFO_POLL_MS,
+    refetchInterval: DATA_INFO_POLL_MS,
+  });
+}
+
+/** The latest changes of the inventory data (imports, restores, copies). */
+export function useImportHistory() {
+  return useQuery({
+    queryKey: keys.importHistory,
+    queryFn: () => api.get<InventoryVersion[]>("/api/inventory/imports"),
+  });
+}
+
+/** Checks an export against the current data (nothing is written yet). */
+export function usePreviewImport() {
+  return useMutation({
+    mutationFn: (file: InventoryFileRequest) => api.post<InventoryPreview>("/api/inventory/preview", file),
+  });
+}
+
+/** Imports the checked export (uploaded again); every page's data changes. */
+export function useConfirmImport() {
+  return useMutation({
+    mutationFn: (request: InventoryConfirmRequest) =>
+      api.post<InventoryImportResult>("/api/inventory/confirm", request),
+  });
+}
+
+/** Drops the user's check. */
+export function useDiscardImport() {
+  return useMutation({ mutationFn: () => api.delete<void>("/api/inventory/pending") });
+}
+
+/**
+ * The start page's "since your last visit" digest. A POST (it records the
+ * visit day), asked once per page load.
+ */
+export function useDigest() {
+  return useQuery({
+    queryKey: keys.digest,
+    queryFn: () => api.post<DigestView>("/api/digest"),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    retry: false,
   });
 }
 

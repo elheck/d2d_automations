@@ -45,6 +45,9 @@ pub struct MarketStatusView {
     pub configured: bool,
     pub job: JobStatus,
     pub loaded: Option<MarketInfo>,
+    /// The stock changed (an import) since the loaded data was read; the
+    /// next load reads it again.
+    pub stock_changed: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
@@ -71,6 +74,7 @@ pub(super) fn market_status(state: &AppState) -> MarketStatusView {
             cards: d.cards.len(),
             products: d.products,
         }),
+        stock_changed: market.is_outdated(),
     }
 }
 

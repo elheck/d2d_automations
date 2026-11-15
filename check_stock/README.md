@@ -10,9 +10,10 @@ web version locally with `./dev.sh` (needs Node.js 24; see the server README):
 it works on a copy of the desktop database and asks for a password for your
 local login on the first start. Ported so far: the Magic Singles Listing
 (Cardmarket prices from inventory_sync, set with `--inventory-sync-url`), the
-Card Buy Helper, Precon EV and the reports Restock, Price Movers, Mispricing
+Card Buy Helper, Precon EV, the reports Restock, Price Movers, Mispricing
 and Stock Analysis (read-only; revenue, costs and margins only for users with
-"View revenue and costs").
+"View revenue and costs"), and the inventory import (on the test copy only
+until the move: keep importing in the desktop app).
 
 The welcome screen shows a **since-last-visit digest** (copies sold and revenue
 since the previous day the app was opened, new listings, bulk lots built,
@@ -275,6 +276,12 @@ category, so every sync is scoped to one:
   accessory in another.
 - The safety guard that blocks a suspicious import measures only the category
   being synced, so it stays meaningful for both.
+- The web version's import (`/inventory-import`) is stricter: every import
+  is checked first and confirmed, a blocked one needs the number of copies
+  it would count as sold typed in, more than 3× the usual sales gives a
+  warning, and a backup is taken before each import
+  (`check_stock_server restore-inventory` puts one back; see the
+  [server README](server/README.md)).
 
 The category is taken from the filename (`inventory-report-<game id or name>`);
 if the file has been renamed, it is inferred from the rows instead (accessory

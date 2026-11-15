@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RestockRow, RestockView } from "../api/types";
+import type { DataInfo, RestockRow, RestockView } from "../api/types";
 import { admin, helper, reporter } from "../test/fixtures";
 import { renderApp } from "../test/renderApp";
 import { fakeServer, type Call } from "../test/server";
@@ -46,7 +46,13 @@ const view = (money: boolean): RestockView => ({
   revenue: money ? 13 : null,
 });
 
-const dataInfo = { copy_taken_at: "2026-01-16T08:00:00Z", last_import: "2026-01-15" };
+const dataInfo: DataInfo = {
+  copy_taken_at: "2026-01-16T08:00:00Z",
+  last_import: "2026-01-15",
+  inventory_version: 1,
+  updated_at: "2026-01-16T08:00:00Z",
+  test_copy: true,
+};
 const restockCalls = (calls: Call[]) => calls.filter((c) => c.url.startsWith("/api/restock?"));
 
 afterEach(() => vi.unstubAllGlobals());

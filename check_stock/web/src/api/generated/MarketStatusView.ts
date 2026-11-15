@@ -5,4 +5,9 @@ import type { MarketInfo } from "./MarketInfo";
 /**
  * What the shared market data job is doing and what is loaded.
  */
-export type MarketStatusView = { configured: boolean, job: JobStatus, loaded: MarketInfo | null, };
+export type MarketStatusView = { configured: boolean, job: JobStatus, loaded: MarketInfo | null, 
+/**
+ * The stock changed (an import) since the loaded data was read; the
+ * next load reads it again.
+ */
+stock_changed: boolean, };

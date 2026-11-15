@@ -8,8 +8,9 @@ and admin commands.
 Status: foundation done (steps 1a–1c: server, login, users with
 fine-grained permissions, audit log, and the [web UI](../web/) built into the
 binary); ported screens: the singles listing (2a), the buy helper (2b),
-precon EV (2c) and the reports restock (3a), price movers (3b),
-mispricing (3c) and stock analysis (3d).
+precon EV (2c), the reports restock (3a), price movers (3b),
+mispricing (3c) and stock analysis (3d), and the inventory import with the
+start page's digest (4a).
 
 ## Try it locally
 
@@ -46,6 +47,7 @@ check_stock_server serve --data-dir <DIR> [--bind 127.0.0.1:8080] \
 check_stock_server import-desktop --data-dir <DIR> --db <desktop inventory.db> [--refresh | --replace]
 check_stock_server create-admin --data-dir <DIR> --username <NAME> [--display-name <NAME>] [--if-none]
 check_stock_server reset-password --data-dir <DIR> --username <NAME>
+check_stock_server restore-inventory --data-dir <DIR> --backup <inventory.db.import-….bak>
 ```
 
 | Option | Environment variable | Meaning |
@@ -63,7 +65,17 @@ check_stock_server reset-password --data-dir <DIR> --username <NAME>
 `--refresh` and `--replace` keep the previous database as
 `inventory.db.replaced-<time>.bak` (the newest 3 are kept).
 
-`create-admin` and `reset-password` need the server to be stopped. They ask
+Every inventory import on the server first saves the database as
+`inventory.db.import-<time>.bak` (the newest 10 are kept); without that
+backup nothing is imported. `restore-inventory` puts the inventory data of
+such a backup back (users, settings, the audit log and the desktop-copy
+details stay; the database as it was is kept as a `replaced` backup first)
+and logs it as `inventory.restored`. Use it after a wrong import: importing
+the right file afterwards brings the stock back, but the copies the wrong
+file counted as sold would stay in the sales history.
+
+`create-admin`, `reset-password` and `restore-inventory` need the server to
+be stopped. They ask
 for the password on the terminal (twice, without echo) or read one line from
 standard input; passwords are never command-line arguments.
 
@@ -91,7 +103,12 @@ standard input; passwords are never command-line arguments.
 | `GET /api/precon-ev/ranking?field=&sealed_field=&cutoff=&foil_needs_sales=&sort=&desc=&filter=&hide_no_decklist=` | Precon EV | one row per precon (EV, ratio, Liquid EV, Top 5, coverage, notes), sorted and filtered by core; 409 `not_loaded` before the first load |
 | `GET /api/precon-ev/products/{id}?field=&sealed_field=&cutoff=&foil_needs_sales=` | Precon EV | the product's figures and every card line (rank, Top 5, unit and line price, sales days, note) per deck |
 | `GET /api/precon-ev/products/{id}/history?…` | Precon EV | weekly EV, sealed price and Top 5 since the release (at most 52 weeks) |
-| `GET /api/data-info` | logged in | how current the inventory data is: `copy_taken_at` (when the desktop copy was taken) and `last_import` (day of the last inventory import) |
+| `GET /api/data-info` | logged in | how current the inventory data is: `copy_taken_at` (when the desktop copy was taken), `last_import` (day of the last inventory import), `inventory_version` + `updated_at` (change with every import, restore or desktop copy; the pages poll them every minute and offer the new data), `test_copy` (a desktop copy before cutover) |
+| `POST /api/digest` | logged in | records today's visit and returns what changed since the user's previous visit day (as the desktop's welcome line): sales, new listings, bulk lots and restock candidates only with "View reports", revenue only with "View revenue and costs" too; the day of the last import for everyone |
+| `POST /api/inventory/preview` | Import inventory | `{file_name, csv}` (at most 16 MB, 200,000 rows) → what the import would change: new / updated / gone listings, copies counted as sold, stock before → after, price changes; `blocked` (more than half the stock counted as sold), `unusual` (more than 3× the usual sales for the days since the last import, at least 10 copies), the usual pace, until when it can be confirmed (30 minutes). Keeps the check (file fingerprint, category, inventory version, numbers), not the rows |
+| `POST /api/inventory/confirm` | Import inventory | the same file again (+ `confirm_sold` for a blocked one: the copies counted as sold, typed in) → backup, then sync, version, kept file and audit entry in one transaction. 409 `no_preview` / `preview_expired` / `other_file` / `outdated` (another change of the category since the check) / `changed` (the numbers moved), 422 `confirmation_needed` / `confirmation_wrong`, 503 `backup_failed` |
+| `DELETE /api/inventory/pending` | Import inventory | drops the user's check |
+| `GET /api/inventory/imports` | Import inventory | the last 20 changes of the inventory data (import, forced import, restore, desktop copy) with who, when and the numbers |
 | `GET /api/restock?min_copies=&sort=&desc=` | View reports | sold-out variants ranked by sell-through speed (first 300; `total`, `copies`); `realized_revenue` / `revenue` only with "View revenue and costs", and `sort=revenue` is refused (403) without it |
 | `GET /api/restock/export?…` | View reports | the same list, all rows, as `restock_buy_list.csv` (the `realizedRevenue` column only with "View revenue and costs"; spreadsheet-safe text) |
 | `GET /api/movers/status` | View reports | the shared market data job and what is loaded (`day`, `cards`, `products`, `version`) |
@@ -164,9 +181,24 @@ files are out of date.
   messages go only to the log; malformed request bodies get a generic message;
   unknown JSON fields are refused; bodies are limited to 64 KiB, except the
   buy helper's card list upload (offer and export routes only): at most 6 MB
-  of CSV, 50,000 rows, quantities and prices up to 1,000,000; checked only
-  after the session, so anonymous callers cannot make the server read a large
-  body. Errors about a file name the line, never the file's content.
+  of CSV, 50,000 rows, quantities and prices up to 1,000,000; and the
+  inventory import (preview and confirm only): at most 16 MB of CSV, 200,000
+  rows, quantities 1–1,000,000, prices 0–1,000,000, a category name of
+  letters and digits. Checked only after the session, so anonymous callers
+  cannot make the server read a large body. Errors about a file name the
+  line or the card, never other content of the file.
+- **Inventory import** (`src/inventory_import.rs`), stricter than the desktop
+  app: every import is checked first and needs a confirmation; the
+  confirmation uploads the same file again (same SHA-256 and category), is
+  refused after 30 minutes, after any other change of that category, or when
+  the numbers moved. An import the safety check blocks (more than half the
+  stock counted as sold) needs the number of those copies typed in and is
+  logged as `inventory.import_forced`; more than 3× the usual sales is a
+  warning only. A backup before every import (no backup, no import); sync,
+  version row, kept file and audit entry in one transaction. Only the
+  confirmed file of the last import per category is kept (for bin analysis,
+  3e); a pending check keeps no rows. An import marks the shared market data
+  as outdated, so the next report load reads the new stock.
 - **Money figures** (revenue, margins, lot costs) are only sent to users
   with "View revenue and costs": without it the server leaves them out of
   answers and CSV files and refuses sorting by them (the order would give
@@ -177,10 +209,12 @@ files are out of date.
   reports people open; CSVs that are imported somewhere again keep their
   values exactly.
 - **Audit log:** logins (also failed ones, with address and reason), logouts,
-  password changes, every user change with its before/after, imports. Written
-  in the same transaction as the change.
-- **One process per data folder.** `serve`, `import-desktop`, `create-admin`
-  and `reset-password` hold an OS file lock on `<data-dir>/.lock`.
+  password changes, every user change with its before/after, desktop copies,
+  inventory imports (file name, fingerprint, numbers, backup), forced
+  imports and restores. Written in the same transaction as the change.
+- **One process per data folder.** `serve`, `import-desktop`, `create-admin`,
+  `reset-password` and `restore-inventory` hold an OS file lock on
+  `<data-dir>/.lock`.
 - **Database:** one writer connection (foreign keys on) plus read-only
   readers (SQLite read-only flag and `query_only`), WAL mode, 5 s busy
   timeout. All database work and password hashing run on blocking threads.
@@ -236,6 +270,10 @@ newer server version is refused.
 | `srv_user_permissions` | Granted permissions per user |
 | `srv_sessions` | Sessions: SHA-256 of the token, user, last activity, end |
 | `srv_audit_log` | Who did what and when |
+| `srv_inventory_versions` | One row per change of the inventory data and category: import, forced import, restore, desktop copy; who (name kept when the user is deleted), file fingerprint and numbers |
+| `srv_pending_imports` | The check of each user's import (one per user, 30 minutes): file SHA-256, category, inventory version, preview numbers; no rows of the file |
+| `srv_inventory_files` | The confirmed file of the last import per category (every pile with its own location, which the inventory tables merge), for bin analysis (3e) |
+| `srv_user_visits` | Last and previous visit day per user, the baseline of the start page's digest; deleted with the user |
 | `srv_user_settings` | Per-user settings of the screens (`src/user_settings.rs`): one JSON value (≤ 16 KiB) per user and setting, deleted with the user; read back through each screen's validation, defaults if it no longer fits |
 
 ## Development

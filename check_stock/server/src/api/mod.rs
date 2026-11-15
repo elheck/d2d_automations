@@ -13,6 +13,8 @@
 mod audit_log;
 mod auth;
 mod buy_helper;
+mod home;
+mod inventory;
 mod mispricing;
 mod movers;
 mod precon_ev;
@@ -147,7 +149,9 @@ fn api(state: AppState) -> Api {
     let api = reports::routes(api);
     let api = movers::routes(api);
     let api = mispricing::routes(api);
-    stock_analysis::routes(api)
+    let api = stock_analysis::routes(api);
+    let api = inventory::routes(api);
+    home::routes(api)
 }
 
 /// The API router with CSRF check and body limit.

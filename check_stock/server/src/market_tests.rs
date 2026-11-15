@@ -151,6 +151,15 @@ async fn a_load_brings_prices_and_history_of_the_stock() {
     assert_eq!(market.start_load(db.clone(), false), Ok(false));
     assert_eq!(market.start_load(db.clone(), true), Ok(true));
     wait_until(|| market.loaded().is_some_and(|d| d.version == 2)).await;
+
+    // An import changed the stock: the data stays, the next load reads again.
+    market.stock_changed();
+    assert!(market.is_outdated());
+    assert_eq!(market.loaded().unwrap().version, 2);
+    assert_eq!(market.start_load(db.clone(), false), Ok(true));
+    assert!(!market.is_outdated(), "cleared when the load starts");
+    wait_until(|| market.loaded().is_some_and(|d| d.version == 3)).await;
+    assert_eq!(market.start_load(db.clone(), false), Ok(false));
 }
 
 #[tokio::test]

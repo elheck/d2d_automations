@@ -17,6 +17,7 @@ use crate::audit::{self, action, Actor};
 use crate::config::inventory_db_in;
 use crate::data_dir::{DataDirLock, LockError};
 use crate::db::{open_writer, DbError, BUSY_TIMEOUT};
+use crate::inventory_import;
 use crate::migrations::{self, MigrationError, TABLE_PREFIX};
 use check_stock_core::inventory_db::InventoryDb;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, MAIN_DB};
@@ -27,6 +28,11 @@ pub const META_COPY_SOURCE: &str = "desktop_copy.source";
 /// `srv_meta` key: when the copy was taken (RFC 3339, UTC). Shown as
 /// "data as of …" once screens read the copy.
 pub const META_COPY_TAKEN_AT: &str = "desktop_copy.taken_at";
+
+/// `srv_meta` key: when this database became the real one (set by the
+/// cutover, Phase 5). Until then a desktop copy is a test copy: changes
+/// made on the server are thrown away at cutover.
+pub const META_CUTOVER_AT: &str = "cutover.at";
 
 /// Most integrity-check messages kept for the error report.
 const MAX_INTEGRITY_MESSAGES: usize = 20;
@@ -188,12 +194,13 @@ pub fn refresh_desktop(source: &Path, data_dir: &Path) -> Result<ImportReport, I
         "ATTACH DATABASE ?1 AS fresh",
         [snapshot.path().to_string_lossy().as_ref()],
     )?;
-    let result = swap_desktop_tables(&mut conn).and_then(|()| {
+    let result = (|| -> Result<i64, ImportError> {
         let tx = conn.transaction()?;
+        swap_desktop_tables(&tx)?;
         let rows = record_provenance(&tx, &source, &taken_at, action::DESKTOP_REFRESHED)?;
         tx.commit()?;
         Ok(rows)
-    });
+    })();
     conn.execute("DETACH DATABASE fresh", [])?;
     let inventory_rows = result?;
     Ok(ImportReport {
@@ -201,6 +208,84 @@ pub fn refresh_desktop(source: &Path, data_dir: &Path) -> Result<ImportReport, I
         inventory_rows,
         taken_at,
         previous_kept_as: Some(previous_kept_as),
+    })
+}
+
+/// What `restore-inventory` did.
+#[derive(Debug)]
+pub struct RestoreReport {
+    pub target: PathBuf,
+    pub inventory_rows: i64,
+    pub categories: Vec<String>,
+    /// Backup of the database as it was before the restore.
+    pub previous_kept_as: PathBuf,
+}
+
+/// Puts the inventory data of `backup` (a backup taken before an import, or
+/// any copy of the database) back into the database in `data_dir`, with the
+/// last import's file kept for bin analysis. Users, sessions, settings, the
+/// audit log and the desktop-copy details stay. The server must be stopped
+/// (data folder lock); the current database is kept as a `replaced` backup
+/// first. All in one transaction.
+pub fn restore_inventory(backup: &Path, data_dir: &Path) -> Result<RestoreReport, ImportError> {
+    let (_lock, backup, target) = checked_paths(backup, data_dir)?;
+    if !target.exists() {
+        return Err(ImportError::NothingToRefresh(target));
+    }
+    let snapshot = prepare_snapshot(&backup, data_dir)?;
+    let previous_kept_as = backup_current(&target)?;
+
+    let mut conn = open_writer(&inventory_db_in(data_dir))?;
+    conn.execute(
+        "ATTACH DATABASE ?1 AS fresh",
+        [snapshot.path().to_string_lossy().as_ref()],
+    )?;
+    let result = (|| -> Result<(i64, Vec<String>), ImportError> {
+        let tx = conn.transaction()?;
+        swap_desktop_tables(&tx)?;
+        let has_files = tx
+            .query_row(
+                "SELECT 1 FROM fresh.sqlite_master WHERE type = 'table' AND name = 'srv_inventory_files'",
+                [],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        tx.execute("DELETE FROM main.srv_inventory_files", [])?;
+        if has_files {
+            tx.execute(
+                "INSERT INTO main.srv_inventory_files (category, version_id, file_name, csv)
+                 SELECT f.category, f.version_id, f.file_name, f.csv FROM fresh.srv_inventory_files f
+                 WHERE f.version_id IN (SELECT id FROM main.srv_inventory_versions)",
+                [],
+            )?;
+        }
+        let now = chrono::Utc::now();
+        let categories = inventory_import::record_replaced_data(&tx, "restore", now, true)?;
+        let rows: i64 =
+            tx.query_row("SELECT COUNT(*) FROM inventory_cards", [], |row| row.get(0))?;
+        let name = backup
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        audit::record(
+            &tx,
+            now,
+            Actor::Cli,
+            action::INVENTORY_RESTORED,
+            Some(&name),
+            serde_json::json!({ "inventory_rows": rows, "categories": categories }),
+        )?;
+        tx.commit()?;
+        Ok((rows, categories))
+    })();
+    conn.execute("DETACH DATABASE fresh", [])?;
+    let (inventory_rows, categories) = result?;
+    Ok(RestoreReport {
+        target,
+        inventory_rows,
+        categories,
+        previous_kept_as,
     })
 }
 
@@ -245,6 +330,9 @@ fn record_provenance(
     let source_text = source.display().to_string();
     migrations::set_meta(conn, META_COPY_SOURCE, &source_text)?;
     migrations::set_meta(conn, META_COPY_TAKEN_AT, taken_at)?;
+    // New desktop data: a new version (open pages notice it), previews and
+    // the last import's file no longer fit it.
+    inventory_import::record_replaced_data(conn, "desktop_copy", chrono::Utc::now(), false)?;
     let rows: i64 = conn.query_row("SELECT COUNT(*) FROM inventory_cards", [], |row| row.get(0))?;
     audit::record(
         conn,
@@ -257,11 +345,10 @@ fn record_provenance(
     Ok(rows)
 }
 
-/// In one transaction: drops every desktop table of `main` and recreates
-/// them, with their rows, indexes and triggers, from the attached `fresh`
-/// copy. Server tables (`srv_…`) and SQLite's own are not touched.
-fn swap_desktop_tables(conn: &mut Connection) -> Result<(), ImportError> {
-    let tx = conn.transaction()?;
+/// Inside the caller's transaction: drops every desktop table of `main` and
+/// recreates them, with their rows, indexes and triggers, from the attached
+/// `fresh` copy. Server tables (`srv_…`) and SQLite's own are not touched.
+fn swap_desktop_tables(tx: &rusqlite::Transaction<'_>) -> Result<(), ImportError> {
     let not_ours = "name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND name NOT LIKE ?1 ESCAPE '\\'";
     let server_pattern = format!("{}%", TABLE_PREFIX.replace('_', "\\_"));
     let names = |schema: &str, kind: &str| -> rusqlite::Result<Vec<String>> {
@@ -317,7 +404,6 @@ fn swap_desktop_tables(conn: &mut Connection) -> Result<(), ImportError> {
             tx.execute_batch(&sql)?;
         }
     }
-    tx.commit()?;
     Ok(())
 }
 
@@ -374,14 +460,14 @@ pub const KEEP_REPLACED: usize = 3;
 /// newest [`KEEP_REPLACED`] of these backups are kept.
 fn backup_current(target: &Path) -> Result<PathBuf, ImportError> {
     let stamp = chrono::Local::now().format("%Y%m%dT%H%M%S").to_string();
-    let backup = unique_backup_path(target, &stamp);
+    let backup = unique_backup_path(target, REPLACED, &stamp);
     {
         let conn = Connection::open(target)?;
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
     }
     if let Some(dir) = target.parent() {
-        prune_replaced(dir, KEEP_REPLACED)?;
+        prune_backups(dir, REPLACED, KEEP_REPLACED)?;
     }
     Ok(backup)
 }
@@ -398,9 +484,12 @@ fn remove_database(target: &Path) -> Result<(), ImportError> {
     Ok(())
 }
 
-/// `inventory.db.replaced-<stamp>.bak`, with `-2`, `-3`, … appended when a
+/// Kind of the backups taken before a database is replaced or refreshed.
+pub const REPLACED: &str = "replaced";
+
+/// `inventory.db.<kind>-<stamp>.bak`, with `-2`, `-3`, … appended when a
 /// backup of that second already exists. Names sort chronologically.
-fn unique_backup_path(target: &Path, stamp: &str) -> PathBuf {
+pub(crate) fn unique_backup_path(target: &Path, kind: &str, stamp: &str) -> PathBuf {
     let name = |n: u32| {
         let counter = if n == 1 {
             String::new()
@@ -408,16 +497,16 @@ fn unique_backup_path(target: &Path, stamp: &str) -> PathBuf {
             format!("-{n}")
         };
         target.with_file_name(format!(
-            "{}.replaced-{stamp}{counter}.bak",
+            "{}.{kind}-{stamp}{counter}.bak",
             InventoryDb::FILE_NAME
         ))
     };
     (1..).map(name).find(|p| !p.exists()).expect("a free name")
 }
 
-/// Deletes all but the `keep` newest replaced-database backups in `dir`.
-fn prune_replaced(dir: &Path, keep: usize) -> std::io::Result<()> {
-    let prefix = format!("{}.replaced-", InventoryDb::FILE_NAME);
+/// Deletes all but the `keep` newest backups of `kind` in `dir`.
+pub(crate) fn prune_backups(dir: &Path, kind: &str, keep: usize) -> std::io::Result<()> {
+    let prefix = format!("{}.{kind}-", InventoryDb::FILE_NAME);
     let mut backups: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| {
@@ -426,7 +515,7 @@ fn prune_replaced(dir: &Path, keep: usize) -> std::io::Result<()> {
                 .is_some_and(|n| n.starts_with(&prefix) && n.ends_with(".bak"))
         })
         .collect();
-    backups.sort_by_key(|p| backup_order_key(p));
+    backups.sort_by_key(|p| backup_order_key(p, &prefix));
     let excess = backups.len().saturating_sub(keep);
     for old in &backups[..excess] {
         std::fs::remove_file(old)?;
@@ -437,14 +526,12 @@ fn prune_replaced(dir: &Path, keep: usize) -> std::io::Result<()> {
 
 /// Sort key: the timestamp, then the same-second counter as a number (so
 /// `-10` sorts after `-9`).
-fn backup_order_key(path: &Path) -> (String, u32) {
+fn backup_order_key(path: &Path, prefix: &str) -> (String, u32) {
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or_default();
-    let middle = name
-        .trim_start_matches(&format!("{}.replaced-", InventoryDb::FILE_NAME))
-        .trim_end_matches(".bak");
+    let middle = name.trim_start_matches(prefix).trim_end_matches(".bak");
     match middle.split_once('-') {
         Some((stamp, n)) => (stamp.to_string(), n.parse().unwrap_or(0)),
         None => (middle.to_string(), 1),

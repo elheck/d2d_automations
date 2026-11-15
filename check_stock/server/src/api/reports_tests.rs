@@ -96,6 +96,31 @@ async fn data_info_says_how_current_the_data_is() {
     let (_, body) = get(&router, "/api/data-info", &cookie).await;
     assert_eq!(body["copy_taken_at"], "2026-01-16T08:00:00Z");
     assert_eq!(body["last_import"], "2026-01-15");
+    assert_eq!(body["test_copy"], true, "a desktop copy before cutover");
+    assert_eq!(body["inventory_version"], 0);
+    assert_eq!(body["updated_at"], Value::Null);
+
+    app.state
+        .db
+        .write(|conn| {
+            crate::inventory_import::record_replaced_data(
+                conn,
+                "desktop_copy",
+                chrono::Utc::now(),
+                false,
+            )?;
+            crate::migrations::set_meta(
+                conn,
+                crate::import::META_CUTOVER_AT,
+                "2026-12-01T08:00:00Z",
+            )
+        })
+        .await
+        .unwrap();
+    let (_, body) = get(&router, "/api/data-info", &cookie).await;
+    assert_eq!(body["inventory_version"], 1);
+    assert!(body["updated_at"].is_string());
+    assert_eq!(body["test_copy"], false, "after cutover");
 }
 
 #[tokio::test]

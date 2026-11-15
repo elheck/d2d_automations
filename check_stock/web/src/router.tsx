@@ -14,6 +14,7 @@ import { MoversPage } from "./pages/MoversPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { PreconEvPage } from "./pages/PreconEvPage";
 import { PreconProductPage } from "./pages/PreconProductPage";
+import { InventoryImportPage } from "./pages/InventoryImportPage";
 import { RestockPage } from "./pages/RestockPage";
 import { StockAnalysisPage } from "./pages/StockAnalysisPage";
 import { SinglesPage } from "./pages/SinglesPage";
@@ -127,6 +128,16 @@ const mispricingRoute = createRoute({
   ),
 });
 
+const inventoryImportRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/inventory-import",
+  component: () => (
+    <RequirePermission permission="inventory.import">
+      <InventoryImportPage />
+    </RequirePermission>
+  ),
+});
+
 const stockAnalysisRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/stock-analysis",
@@ -175,6 +186,7 @@ const routeTree = rootRoute.addChildren([
     moversRoute,
     mispricingRoute,
     stockAnalysisRoute,
+    inventoryImportRoute,
     usersRoute,
     auditRoute,
     accountRoute,

@@ -77,6 +77,53 @@ const MIGRATIONS: &[(u32, &str)] = &[
              PRIMARY KEY (user_id, key)
          ) STRICT, WITHOUT ROWID;",
     ),
+    (
+        4,
+        // Inventory imports on the server (4a). Every change of the inventory
+        // data gets a version row per category (import, forced import,
+        // restore from a backup, desktop copy); the name is kept when the
+        // user is deleted. A pending import holds only what is needed to
+        // check the confirmation (the file is uploaded again): its SHA-256,
+        // category, the version it was previewed against and the preview
+        // numbers. The file of the last import per category is kept for bin
+        // analysis (every pile with its own location; the inventory tables
+        // merge them). Visit days per user for the start page's digest.
+        "CREATE TABLE srv_inventory_versions (
+             id              INTEGER PRIMARY KEY,
+             category        TEXT NOT NULL,
+             created_at      TEXT NOT NULL,
+             kind            TEXT NOT NULL
+                 CHECK (kind IN ('import', 'forced_import', 'restore', 'desktop_copy')),
+             user_id         INTEGER REFERENCES srv_users (id) ON DELETE SET NULL,
+             user_name       TEXT NOT NULL,
+             file_sha256     TEXT,
+             file_rows       INTEGER NOT NULL DEFAULT 0,
+             copies_sold     INTEGER NOT NULL DEFAULT 0,
+             new_variants    INTEGER NOT NULL DEFAULT 0,
+             zeroed_variants INTEGER NOT NULL DEFAULT 0
+         ) STRICT;
+         CREATE INDEX srv_inventory_versions_category ON srv_inventory_versions (category, id);
+         CREATE TABLE srv_pending_imports (
+             user_id      INTEGER PRIMARY KEY REFERENCES srv_users (id) ON DELETE CASCADE,
+             category     TEXT NOT NULL,
+             file_sha256  TEXT NOT NULL,
+             base_version INTEGER NOT NULL,
+             preview      TEXT NOT NULL CHECK (json_valid(preview)),
+             created_at   TEXT NOT NULL,
+             expires_at   TEXT NOT NULL
+         ) STRICT;
+         CREATE TABLE srv_inventory_files (
+             category   TEXT PRIMARY KEY NOT NULL,
+             version_id INTEGER NOT NULL REFERENCES srv_inventory_versions (id),
+             file_name  TEXT NOT NULL,
+             csv        BLOB NOT NULL
+         ) STRICT;
+         CREATE TABLE srv_user_visits (
+             user_id    INTEGER PRIMARY KEY REFERENCES srv_users (id) ON DELETE CASCADE,
+             last_visit TEXT NOT NULL,
+             prev_visit TEXT
+         ) STRICT;",
+    ),
 ];
 
 /// Newest schema version this build knows.

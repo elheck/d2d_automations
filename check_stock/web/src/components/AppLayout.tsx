@@ -5,6 +5,7 @@ import { Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { useLogout, useMe } from "../api/queries";
 import { groupIsActive, visibleGroups, type NavGroup } from "../navigation";
+import { InventoryUpdated } from "./InventoryUpdated";
 
 export function AppLayout() {
   const { data: me, isPending, error } = useMe();
@@ -82,6 +83,7 @@ export function AppLayout() {
         </div>
       </header>
       <main className="app-main">
+        <InventoryUpdated />
         <Outlet />
       </main>
     </div>

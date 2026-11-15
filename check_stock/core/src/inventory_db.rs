@@ -413,6 +413,97 @@ impl SyncPreview {
     }
 }
 
+/// Days of sale log [`sales_pace_conn`] averages over.
+pub const SALES_PACE_DAYS: i64 = 30;
+/// Below this many days of history there is no usual pace to compare with.
+pub const MIN_PACE_DAYS: i64 = 7;
+/// A sync counting more than this multiple of the expected sales is unusual.
+pub const UNUSUAL_SALES_FACTOR: f64 = 3.0;
+/// Fewer copies than this are never called unusual (small numbers swing).
+pub const MIN_UNUSUAL_COPIES: i64 = 10;
+
+/// How many copies of a category usually sell per day: the sale log of the
+/// [`SALES_PACE_DAYS`] days up to the category's last import.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SalesPace {
+    /// Average single-sale copies per day (bulk lots not counted, like
+    /// [`SyncPreview::copies_sold`]).
+    pub daily_copies: f64,
+    /// Days the average covers (at most [`SALES_PACE_DAYS`]).
+    pub days: i64,
+    /// Day of the category's last import (`YYYY-MM-DD`).
+    pub last_sync: String,
+}
+
+/// A sync that would count clearly more copies as sold than usual.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnusualSales {
+    pub daily_copies: f64,
+    /// Days since the last import (at least 1).
+    pub days_since_last_import: i64,
+    /// Usual copies for that many days.
+    pub expected_copies: f64,
+}
+
+impl SyncPreview {
+    /// `Some` when this sync counts more than [`UNUSUAL_SALES_FACTOR`] × the
+    /// copies that usually sell between two imports this far apart (and at
+    /// least [`MIN_UNUSUAL_COPIES`]). A warning only: unlike
+    /// [`SyncPreview::is_suspicious`] it never blocks.
+    pub fn unusual_sales(&self, pace: &SalesPace, today: &str) -> Option<UnusualSales> {
+        let day = |s: &str| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok();
+        let days = match (day(today), day(&pace.last_sync)) {
+            (Some(today), Some(last)) => (today - last).num_days().max(1),
+            _ => 1,
+        };
+        let expected = pace.daily_copies * days as f64;
+        (self.copies_sold >= MIN_UNUSUAL_COPIES
+            && self.copies_sold as f64 > UNUSUAL_SALES_FACTOR * expected)
+            .then_some(UnusualSales {
+                daily_copies: pace.daily_copies,
+                days_since_last_import: days,
+                expected_copies: expected,
+            })
+    }
+}
+
+/// The usual sales pace of `category`; `None` while it has less than
+/// [`MIN_PACE_DAYS`] days of history.
+pub fn sales_pace_conn(conn: &Connection, category: &str) -> DbResult<Option<SalesPace>> {
+    let (first, last): (Option<String>, Option<String>) = conn.query_row(
+        "SELECT MIN(first_synced_at), MAX(last_synced_at) FROM inventory_cards
+         WHERE category = ?1",
+        params![category],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let day = |s: &Option<String>| {
+        s.as_deref()
+            .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+    };
+    let (Some(first_day), Some(last_day), Some(last)) = (day(&first), day(&last), last) else {
+        return Ok(None);
+    };
+    let span = (last_day - first_day).num_days();
+    if span < MIN_PACE_DAYS {
+        return Ok(None);
+    }
+    let days = span.min(SALES_PACE_DAYS);
+    let from = (last_day - chrono::Duration::days(days))
+        .format("%Y-%m-%d")
+        .to_string();
+    let copies: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(copies), 0) FROM sold_events
+         WHERE category = ?1 AND date > ?2 AND date <= ?3",
+        params![category, from, last],
+        |r| r.get(0),
+    )?;
+    Ok(Some(SalesPace {
+        daily_copies: copies as f64 / days as f64,
+        days,
+        last_sync: last,
+    }))
+}
+
 /// Result of a guarded sync: either it ran, or the safety check blocked it and
 /// nothing was written (rerun via [`InventoryDb::sync_inventory_forced`] to override).
 #[derive(Debug)]
@@ -1784,21 +1875,28 @@ fn visit_digest_conn(conn: &Connection, today: &str) -> DbResult<VisitDigest> {
         }
     };
 
+    digest_since_conn(conn, baseline.as_deref())
+}
+
+/// The digest measured from `since` (exclusive; `None` = only the current
+/// figures), without recording a visit: for callers that keep their own
+/// visit dates (the server, per user).
+pub fn digest_since_conn(conn: &Connection, since: Option<&str>) -> DbResult<VisitDigest> {
     let mut digest = VisitDigest {
-        since: baseline.clone(),
+        since: since.map(str::to_string),
         ..VisitDigest::default()
     };
-    if let Some(since) = &baseline {
+    if let Some(since) = since {
         let (copies, revenue): (Option<i64>, Option<f64>) = conn.query_row(
             "SELECT SUM(copies), SUM(copies * price) FROM sold_events WHERE date > ?1",
-            [since.as_str()],
+            [since],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         digest.sold_copies = copies.unwrap_or(0);
         digest.sold_revenue = revenue.unwrap_or(0.0);
         digest.new_listings = conn.query_row(
             "SELECT COUNT(*) FROM inventory_cards WHERE first_synced_at > ?1",
-            [since.as_str()],
+            [since],
             |r| r.get(0),
         )?;
         digest.bulk_lots = bulk_lots::totals_between(conn, Some(since), None)?;
@@ -2278,7 +2376,13 @@ fn parse_csv_price(price: &str) -> Option<f64> {
 /// Scoped to `category`: rows in other categories are neither counted in
 /// `copies_before` nor reported as zeroed, so the suspicious-change guard
 /// measures only the slice this sync actually owns.
-fn preview_sync_conn(conn: &Connection, cards: &[Card], category: &str) -> DbResult<SyncPreview> {
+/// What syncing `cards` into `category` would change, without writing
+/// anything (the guard of [`InventoryDb::sync_inventory`] decides on it).
+pub fn preview_sync_conn(
+    conn: &Connection,
+    cards: &[Card],
+    category: &str,
+) -> DbResult<SyncPreview> {
     let agg = aggregate_by_variant(cards, category);
     let mut preview = SyncPreview::default();
 
@@ -2696,13 +2800,29 @@ fn sync_inventory_conn(
     category: &str,
     today: &str,
 ) -> DbResult<SyncStats> {
+    let tx = conn.transaction()?;
+    let stats = sync_inventory_in_tx(&tx, cards, category, today)?;
+    tx.commit()?;
+    Ok(stats)
+}
+
+/// The sync of [`InventoryDb::sync_inventory`] inside the caller's
+/// transaction, without guard or backup: for a caller that runs its own
+/// checks and backup first and records more in the same transaction (the
+/// server's import with its version row and audit entry). Nothing is
+/// written unless the caller commits.
+pub fn sync_inventory_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    cards: &[Card],
+    category: &str,
+    today: &str,
+) -> DbResult<SyncStats> {
     log::debug!(
         "Syncing {} cards to inventory DB (category '{}', {})",
         cards.len(),
         category,
         today
     );
-    let tx = conn.transaction()?;
     let mut stats = SyncStats::default();
     let agg = aggregate_by_variant(cards, category);
 
@@ -2747,7 +2867,7 @@ fn sync_inventory_conn(
     let new_totals = aggregated_totals(&agg);
     let removals = RemovalPlan::plan(
         &variant_drops(&db_qty_price, &new_totals),
-        &bulk_lots::pending_removals_conn(&tx, category)?,
+        &bulk_lots::pending_removals_conn(tx, category)?,
     );
 
     // Sold events detected this sync: (key fields..., copies, price at sale).
@@ -2897,7 +3017,7 @@ fn sync_inventory_conn(
     }
 
     // Phase 2a: use up the pending bulk-lot removals this sync has seen happen.
-    removals.apply(&tx)?;
+    removals.apply(tx)?;
     stats.bulk_removed = removals.total();
 
     // Phase 2b: persist the sold deltas detected above. Rows are appended, never
@@ -2923,12 +3043,11 @@ fn sync_inventory_conn(
 
     // Phase 2c: split the new stock across lots and credit this sync's sales
     // to the lots they left.
-    sync_lot_stock(&tx, cards, category, &db_qty_price, &removals)?;
+    sync_lot_stock(tx, cards, category, &db_qty_price, &removals)?;
 
     // Phase 3: record today's snapshot from the now-current table state.
-    write_snapshot(&tx, today)?;
+    write_snapshot(tx, today)?;
 
-    tx.commit()?;
     if stats.upserted > 0 || stats.zeroed > 0 {
         log::info!(
             "Inventory DB sync: {} variants updated, {} zeroed, {} bulk-lot copies removed",

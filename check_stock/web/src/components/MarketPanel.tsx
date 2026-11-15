@@ -1,6 +1,7 @@
 // The shared market data of the reports (price movers, mispricing): loads
 // today's data when the page opens (the server does nothing when it is
-// there), offers to fetch again, and shows progress and what is loaded.
+// there) and again after an import changed the stock, offers to fetch
+// again, and shows progress and what is loaded.
 
 import { useEffect, useRef } from "react";
 import { useStartMarketLoad, type MarketBase } from "../api/queries";
@@ -10,12 +11,16 @@ import { JobProgress } from "./JobProgress";
 
 export function MarketPanel({ base, status }: { base: MarketBase; status: MarketStatusView }) {
   const start = useStartMarketLoad(base);
-  const asked = useRef(false);
+  // The `stock_changed` value the last automatic load was asked for: once
+  // when the page opens, and again when an import changes the stock.
+  const askedFor = useRef<boolean | null>(null);
   useEffect(() => {
-    if (asked.current || !status.configured || status.job.state === "running") return;
-    asked.current = true;
+    if (!status.stock_changed && askedFor.current === true) askedFor.current = false;
+    if (!status.configured || status.job.state === "running") return;
+    if (askedFor.current !== null && !(status.stock_changed && askedFor.current === false)) return;
+    askedFor.current = status.stock_changed;
     start.mutate(false);
-  }, [status.configured, status.job.state, start]);
+  }, [status.configured, status.job.state, status.stock_changed, start]);
 
   if (!status.configured) {
     return (
@@ -40,6 +45,9 @@ export function MarketPanel({ base, status }: { base: MarketBase; status: Market
         </button>
         <JobProgress status={status.job} />
       </div>
+      {status.stock_changed && status.job.state !== "running" && (
+        <p className="muted">The stock changed (an inventory import) since these prices were loaded.</p>
+      )}
       {status.loaded && (
         <p className="muted">
           Market prices of {status.loaded.day} for {status.loaded.products} products ({status.loaded.cards} cards in

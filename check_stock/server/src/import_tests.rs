@@ -342,7 +342,7 @@ fn pruning_keeps_the_newest_by_time_and_counter() {
     for n in names {
         std::fs::write(dir.path().join(n), "x").unwrap();
     }
-    prune_replaced(dir.path(), 2).unwrap();
+    prune_backups(dir.path(), REPLACED, 2).unwrap();
     let mut left: Vec<String> = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(|e| e.ok()?.file_name().into_string().ok())
@@ -520,4 +520,158 @@ fn a_plain_import_is_logged_in_the_copy() {
         ("cli", "import.desktop")
     );
     assert_eq!(entry.details["inventory_rows"], 4);
+}
+
+// ── Inventory versions and restoring a backup ─────────────────────────────
+
+fn versions(conn: &Connection) -> Vec<(String, String)> {
+    crate::inventory_import::recent_versions(conn, 20)
+        .unwrap()
+        .into_iter()
+        .map(|v| (v.kind, v.category))
+        .collect()
+}
+
+fn count(conn: &Connection, table: &str) -> i64 {
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap()
+}
+
+/// A pending preview and a kept import file, as an import on the server
+/// leaves them.
+fn server_import_state(conn: &Connection, user: i64) {
+    conn.execute(
+        "INSERT INTO srv_inventory_versions (category, created_at, kind, user_name)
+         VALUES ('Magic', '2026-03-01T10:00:00Z', 'import', 'Aron')",
+        [],
+    )
+    .unwrap();
+    let version = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO srv_inventory_files (category, version_id, file_name, csv)
+         VALUES ('Magic', ?1, 'inventory-report-Magic.csv', X'6162')",
+        [version],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO srv_pending_imports
+             (user_id, category, file_sha256, base_version, preview, created_at, expires_at)
+         VALUES (?1, 'Magic', 'x', ?2, '{}', '2026-03-01T10:00:00Z', '2099-01-01T00:00:00Z')",
+        rusqlite::params![user, version],
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_desktop_copy_is_a_new_inventory_version() {
+    let desktop = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let user = server_db_with_user(data.path(), desktop.path(), 2);
+    {
+        let conn = Connection::open(inventory_db_in(data.path()).path()).unwrap();
+        assert_eq!(versions(&conn), [("desktop_copy".into(), "Magic".into())]);
+        server_import_state(&conn, user);
+    }
+    refresh_desktop(&desktop_db(desktop.path(), 3), data.path()).unwrap();
+    let conn = Connection::open(inventory_db_in(data.path()).path()).unwrap();
+    assert_eq!(versions(&conn)[0], ("desktop_copy".into(), "Magic".into()));
+    assert_eq!(
+        count(&conn, "srv_pending_imports"),
+        0,
+        "previews are outdated"
+    );
+    assert_eq!(
+        count(&conn, "srv_inventory_files"),
+        0,
+        "the last import's piles no longer fit"
+    );
+}
+
+#[test]
+fn restore_puts_the_inventory_of_a_backup_back_and_keeps_the_rest() {
+    let desktop = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let user = server_db_with_user(data.path(), desktop.path(), 2);
+    let target = inventory_db_in(data.path()).path().to_path_buf();
+    {
+        let conn = Connection::open(&target).unwrap();
+        server_import_state(&conn, user);
+        conn.execute(
+            "VACUUM INTO ?1",
+            [data
+                .path()
+                .join("inventory.db.import-20260301T100000.bak")
+                .to_string_lossy()
+                .as_ref()],
+        )
+        .unwrap();
+        // The bad import: everything gone, its file replaced.
+        conn.execute("DELETE FROM inventory_cards", []).unwrap();
+        conn.execute("UPDATE srv_inventory_files SET csv = X'00'", [])
+            .unwrap();
+    }
+    let report = restore_inventory(
+        &data.path().join("inventory.db.import-20260301T100000.bak"),
+        data.path(),
+    )
+    .unwrap();
+    assert_eq!(report.inventory_rows, 2);
+    assert_eq!(report.categories, ["Magic"]);
+    assert_eq!(
+        rows(&report.previous_kept_as),
+        0,
+        "the state before is kept"
+    );
+
+    let conn = Connection::open(&target).unwrap();
+    assert_eq!(rows(&target), 2);
+    assert!(crate::users::find_by_id(&conn, user).unwrap().is_some());
+    assert_eq!(versions(&conn)[0], ("restore".into(), "Magic".into()));
+    assert_eq!(count(&conn, "srv_pending_imports"), 0);
+    let csv: Vec<u8> = conn
+        .query_row("SELECT csv FROM srv_inventory_files", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(csv, b"ab", "the backup's import file is back");
+    let entry = &crate::audit::list(&conn, None, 1).unwrap()[0];
+    assert_eq!(
+        (entry.action.as_str(), entry.target.as_deref()),
+        (
+            "inventory.restored",
+            Some("inventory.db.import-20260301T100000.bak")
+        )
+    );
+    assert!(
+        migrations::get_meta(&conn, META_COPY_TAKEN_AT)
+            .unwrap()
+            .is_some(),
+        "the desktop-copy details stay"
+    );
+}
+
+#[test]
+fn restore_refuses_while_the_server_runs() {
+    let desktop = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    server_db_with_user(data.path(), desktop.path(), 1);
+    let backup = data.path().join("copy.bak");
+    std::fs::copy(inventory_db_in(data.path()).path(), &backup).unwrap();
+    let _server = DataDirLock::acquire(data.path()).unwrap();
+    assert!(matches!(
+        restore_inventory(&backup, data.path()),
+        Err(ImportError::Lock(LockError::InUse(_)))
+    ));
+}
+
+#[test]
+fn restore_refuses_files_that_are_not_databases() {
+    let desktop = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    server_db_with_user(data.path(), desktop.path(), 1);
+    let bogus = data.path().join("bogus.bak");
+    std::fs::write(&bogus, "not a database").unwrap();
+    assert!(matches!(
+        restore_inventory(&bogus, data.path()),
+        Err(ImportError::NotAnInventoryDb(..))
+    ));
+    assert_eq!(rows(inventory_db_in(data.path()).path()), 1);
 }

@@ -82,7 +82,7 @@ impl TestApp {
         (id, cookie)
     }
 
-    async fn audit_actions(&self) -> Vec<(String, String, Value)> {
+    pub(super) async fn audit_actions(&self) -> Vec<(String, String, Value)> {
         let entries = self
             .state
             .db

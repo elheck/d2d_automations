@@ -3238,3 +3238,101 @@ fn last_sync_date_is_the_newest_import_day() {
         Some("2026-01-05")
     );
 }
+
+// ==================== import checks for the server ====================
+
+/// `n` cards with ids `1..=n`, one copy each.
+fn cards(n: usize) -> Vec<Card> {
+    (1..=n)
+        .map(|i| make_card(&i.to_string(), &format!("Card {i}"), "1"))
+        .collect()
+}
+
+#[test]
+fn sales_pace_needs_a_week_of_history() {
+    let mut conn = test_conn();
+    assert_eq!(sales_pace_conn(&conn, CAT).unwrap(), None);
+    sync_inventory_conn(&mut conn, &cards(10), "2026-01-01").unwrap();
+    sync_inventory_conn(&mut conn, &cards(8), "2026-01-07").unwrap();
+    assert_eq!(sales_pace_conn(&conn, CAT).unwrap(), None, "6 days");
+    sync_inventory_conn(&mut conn, &cards(8), "2026-01-08").unwrap();
+    let pace = sales_pace_conn(&conn, CAT).unwrap().unwrap();
+    assert_eq!(pace.days, 7);
+    assert!((pace.daily_copies - 2.0 / 7.0).abs() < 1e-9);
+    assert_eq!(pace.last_sync, "2026-01-08");
+    assert_eq!(sales_pace_conn(&conn, "Generic").unwrap(), None);
+}
+
+#[test]
+fn sales_pace_averages_the_last_30_days_before_the_last_import() {
+    let mut conn = test_conn();
+    sync_inventory_conn(&mut conn, &cards(200), "2026-01-01").unwrap();
+    // 100 copies sold early (outside the window), then 60 in the last 30 days.
+    sync_inventory_conn(&mut conn, &cards(100), "2026-01-10").unwrap();
+    sync_inventory_conn(&mut conn, &cards(70), "2026-02-20").unwrap();
+    sync_inventory_conn(&mut conn, &cards(40), "2026-03-01").unwrap();
+    let pace = sales_pace_conn(&conn, CAT).unwrap().unwrap();
+    assert_eq!(pace.days, 30);
+    assert!((pace.daily_copies - 2.0).abs() < 1e-9, "{pace:?}");
+}
+
+#[test]
+fn unusual_sales_compare_with_the_days_since_the_last_import() {
+    let pace = SalesPace {
+        daily_copies: 2.0,
+        days: 30,
+        last_sync: "2026-03-01".to_string(),
+    };
+    let sold = |copies_sold| SyncPreview {
+        copies_sold,
+        ..SyncPreview::default()
+    };
+    // One day later: 2 expected, more than 6 is unusual (but at least 10).
+    assert_eq!(sold(9).unusual_sales(&pace, "2026-03-02"), None);
+    let unusual = sold(10).unusual_sales(&pace, "2026-03-02").unwrap();
+    assert_eq!(unusual.days_since_last_import, 1);
+    assert!((unusual.expected_copies - 2.0).abs() < 1e-9);
+    // Five days later 10 expected: 30 is fine, 31 is not.
+    assert_eq!(sold(30).unusual_sales(&pace, "2026-03-06"), None);
+    assert!(sold(31).unusual_sales(&pace, "2026-03-06").is_some());
+    // A same-day import counts as one day.
+    assert!(sold(10).unusual_sales(&pace, "2026-03-01").is_some());
+    assert_eq!(sold(6).unusual_sales(&pace, "2026-03-01"), None);
+}
+
+#[test]
+fn sync_in_a_callers_transaction_writes_nothing_without_commit() {
+    let mut conn = test_conn();
+    {
+        let tx = conn.transaction().unwrap();
+        let stats = sync_inventory_in_tx(&tx, &cards(3), CAT, "2026-01-01").unwrap();
+        assert_eq!(stats.upserted, 3);
+        // dropped: rolled back
+    }
+    assert_eq!(count_rows(&conn), 0);
+    let tx = conn.transaction().unwrap();
+    sync_inventory_in_tx(&tx, &cards(3), CAT, "2026-01-01").unwrap();
+    tx.commit().unwrap();
+    assert_eq!(count_rows(&conn), 3);
+}
+
+#[test]
+fn digest_since_reads_without_recording_a_visit() {
+    let mut conn = test_conn();
+    sync_inventory_conn(&mut conn, &[make_card("1", "Alpha", "5")], "2026-01-01").unwrap();
+    sync_inventory_conn(
+        &mut conn,
+        &[make_card("1", "Alpha", "3"), make_card("2", "Beta", "1")],
+        "2026-01-03",
+    )
+    .unwrap();
+    let d = digest_since_conn(&conn, Some("2026-01-01")).unwrap();
+    assert_eq!(d.since.as_deref(), Some("2026-01-01"));
+    assert_eq!(d.sold_copies, 2);
+    assert_eq!(d.new_listings, 1);
+    assert_eq!(d.last_sync.as_deref(), Some("2026-01-03"));
+    let none = digest_since_conn(&conn, None).unwrap();
+    assert_eq!(none.sold_copies, 0);
+    assert_eq!(none.last_sync.as_deref(), Some("2026-01-03"));
+    assert_eq!(get_meta(&conn, "last_visit").unwrap(), None);
+}

@@ -1008,3 +1008,72 @@ code {
 .top-list li span:first-child {
   margin-right: 0.75rem;
 }
+
+/* Notices (test copy, warnings, done) */
+.notice {
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius);
+  border-left: 4px solid var(--border);
+  background: var(--surface);
+  margin: 0.75rem 0;
+}
+.notice p {
+  margin: 0 0 0.5rem;
+}
+.notice--warning {
+  border-left-color: var(--warning);
+  background: var(--warning-bg);
+}
+.notice--danger {
+  border-left-color: var(--danger);
+  background: var(--danger-bg);
+}
+.notice--success {
+  border-left-color: var(--success);
+}
+
+/* "The inventory was updated" on every page */
+.update-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.5rem 0.85rem;
+  margin-bottom: 1rem;
+  border-radius: var(--radius);
+  border-left: 4px solid var(--accent);
+  background: var(--surface);
+}
+
+/* Inventory import */
+.import-numbers {
+  max-width: 32rem;
+}
+.import-numbers__key th,
+.import-numbers__key td {
+  font-weight: 700;
+}
+.import-actions,
+.import-force {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: 0.75rem 0 0.5rem;
+}
+.import-force .input {
+  min-height: var(--tap);
+  width: 9rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.digest {
+  margin: 0 0 0.5rem;
+}
+.digest--stale {
+  color: var(--warning);
+}

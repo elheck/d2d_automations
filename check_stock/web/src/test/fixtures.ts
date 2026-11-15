@@ -26,6 +26,15 @@ export const catalog: PermissionInfo[] = [
     requires: [],
   },
   {
+    key: "inventory.import",
+    label: "Import inventory",
+    description:
+      "Upload Cardmarket inventory exports. An import changes the stock for everyone and records copies that are gone as sold, so it affects every report.",
+    group: "inventory",
+    group_label: "Inventory",
+    requires: [],
+  },
+  {
     key: "inventory.discard",
     label: "Discard cards",
     description: "Write cards off as junk from Search.",
@@ -123,6 +132,12 @@ export const analyst: MeResponse = { username: "analyst", display_name: "Analyst
 export const reporter: MeResponse = { username: "reporter", display_name: "Reporter", permissions: ["analysis.view"] };
 
 export const pricer: MeResponse = { username: "pricer", display_name: "Pricer", permissions: ["mispricing.view"] };
+
+export const importer: MeResponse = {
+  username: "importer",
+  display_name: "Importer",
+  permissions: ["inventory.import"],
+};
 
 export const lister: MeResponse = { username: "lister", display_name: "Lister", permissions: ["listing.use"] };
 

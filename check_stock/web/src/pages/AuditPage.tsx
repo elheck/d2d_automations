@@ -18,6 +18,9 @@ export const ACTION_LABELS: Record<string, string> = {
   "import.desktop": "Desktop data imported",
   "import.refresh": "Desktop data refreshed",
   "settings.changed": "Settings changed",
+  "inventory.imported": "Inventory imported",
+  "inventory.import_forced": "Blocked inventory import forced",
+  "inventory.restored": "Inventory restored from a backup",
 };
 
 /** Why a login failed, in words. */

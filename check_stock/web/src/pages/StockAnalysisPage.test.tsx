@@ -1,6 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { LotRow, StockAnalysisView } from "../api/types";
+import type { DataInfo, LotRow, StockAnalysisView } from "../api/types";
 import { admin, helper, reporter } from "../test/fixtures";
 import { renderApp } from "../test/renderApp";
 import { fakeServer } from "../test/server";
@@ -93,7 +93,13 @@ function view(money: boolean): StockAnalysisView {
   };
 }
 
-const dataInfo = { copy_taken_at: "2026-01-16T08:00:00Z", last_import: "2026-01-15" };
+const dataInfo: DataInfo = {
+  copy_taken_at: "2026-01-16T08:00:00Z",
+  last_import: "2026-01-15",
+  inventory_version: 1,
+  updated_at: "2026-01-16T08:00:00Z",
+  test_copy: true,
+};
 
 describe("stock analysis", () => {
   it("shows counts and sales speed but no money to analysts", async () => {

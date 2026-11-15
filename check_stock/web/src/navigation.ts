@@ -12,6 +12,7 @@ export type NavPath =
   | "/movers"
   | "/mispricing"
   | "/stock-analysis"
+  | "/inventory-import"
   | "/users"
   | "/audit";
 
@@ -43,6 +44,12 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "Buy helper",
         permission: "buy_helper.use",
         description: "Value a seller's card list for a purchase offer.",
+      },
+      {
+        to: "/inventory-import",
+        label: "Inventory import",
+        permission: "inventory.import",
+        description: "Upload the Cardmarket inventory export; you see what changes before anything is written.",
       },
       {
         to: "/precon-ev",
