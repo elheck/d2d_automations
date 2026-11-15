@@ -7,8 +7,8 @@ and admin commands.
 
 Status: foundation done (steps 1a–1c: server, login, users with
 fine-grained permissions, audit log, and the [web UI](../web/) built into the
-binary); ported screens: the singles listing (step 2a) and the buy helper
-(step 2b).
+binary); ported screens: the singles listing (step 2a), the buy helper
+(step 2b) and precon EV (step 2c).
 
 ## Try it locally
 
@@ -85,6 +85,12 @@ standard input; passwords are never command-line arguments.
 | `POST /api/buy-helper/offer` | Buy Helper | `{csv, params}` → summary (cards, value, offer for singles and bulk) and the 200 most valuable singles. The card list is parsed in memory and never stored |
 | `POST /api/buy-helper/export` | Buy Helper | same body → the offer as `buy_offer.csv` (download) |
 | `GET` / `PUT /api/buy-helper/settings` | Buy Helper | the user's own split rules and rates (`params`) plus the `defaults`; `PUT` stores them (audit entry only when they changed) |
+| `GET /api/precon-ev/status` | Precon EV | whether a tracker is configured, the `load` and `sales` jobs (`idle`/`running` with stage and counts/`finished`/`failed`/`cancelled`), and what is loaded (`version` changes with every load and when the sales history arrives) |
+| `POST /api/precon-ev/load` | Precon EV | `{refresh_index}` → starts a load for everyone (202 with the status; also while one runs). 429 `too_soon` with `Retry-After` within 30 s after the last load ended, 409 `not_configured` without `--inventory-sync-url` |
+| `GET /api/precon-ev/ranking?field=&sealed_field=&cutoff=&foil_needs_sales=&sort=&desc=&filter=&hide_no_decklist=` | Precon EV | one row per precon (EV, ratio, Liquid EV, Top 5, coverage, notes), sorted and filtered by core; 409 `not_loaded` before the first load |
+| `GET /api/precon-ev/products/{id}?field=&sealed_field=&cutoff=&foil_needs_sales=` | Precon EV | the product's figures and every card line (rank, Top 5, unit and line price, sales days, note) per deck |
+| `GET /api/precon-ev/products/{id}/history?…` | Precon EV | weekly EV, sealed price and Top 5 since the release (at most 52 weeks) |
+| `GET` / `PUT /api/precon-ev/settings` | Precon EV | the user's price columns, cutoff, foil option, sorting and "hide without decklist" plus the `defaults` |
 
 State-changing requests (anything but `GET`) need the header
 `X-Check-Stock-CSRF: 1`. Errors are always
@@ -165,6 +171,20 @@ files are out of date.
   readers (SQLite read-only flag and `query_only`), WAL mode, 5 s busy
   timeout. All database work and password hashing run on blocking threads.
   Ctrl-C / SIGTERM finish the requests in flight before stopping.
+- **Background jobs** (`src/jobs.rs`): long work (the precon load and its
+  sales history) runs on the server once for all users, one run per kind at a
+  time; pages poll its status. A replaced run is cancelled and can no longer
+  change the status. On Ctrl-C / SIGTERM running jobs are cancelled and the
+  process waits at most 3 s for them.
+- **Precon EV** (`src/precon.rs`): MTGJSON only at its fixed address (deck
+  file names checked by core), inventory_sync only at the configured one. A
+  new load is refused within 30 s after the last load ended; weekly histories are
+  fetched one at a time and the last 20 products are kept (until the next
+  load). Load errors shown to users are cut to their first part ("Catalog
+  fetch failed."); the full text with addresses only goes to the log, and a
+  failed decklist download shows no details. Decklists and the sealed index
+  are cached in `<data-dir>/cache/mtgjson_v1/`, the daily sales stats in
+  `<data-dir>/cache/precon_sales/` (the desktop app's layout).
 - **Scryfall** (`src/cards.rs`): the browser never contacts Scryfall; the
   server looks a printing up once and keeps it in `<data-dir>/cache/`
   (`scryfall_cache.json`, `images/`, the desktop app's cache layout). Set

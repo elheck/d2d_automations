@@ -6,7 +6,7 @@ import { useEffect, useRef } from "react";
 import { can, useLogout, useMe } from "../api/queries";
 
 export interface NavItem {
-  to: "/" | "/singles" | "/buy-helper" | "/users" | "/audit";
+  to: "/" | "/singles" | "/buy-helper" | "/precon-ev" | "/users" | "/audit";
   label: string;
   permission?: string;
 }
@@ -15,6 +15,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/", label: "Home" },
   { to: "/singles", label: "Singles", permission: "listing.use" },
   { to: "/buy-helper", label: "Buy helper", permission: "buy_helper.use" },
+  { to: "/precon-ev", label: "Precon EV", permission: "precon_ev.use" },
   { to: "/users", label: "Users", permission: "users.manage" },
   { to: "/audit", label: "Audit log", permission: "audit.view" },
 ];

@@ -7,9 +7,11 @@ use crate::data_dir::{DataDirLock, LockError};
 use crate::db::{Db, DbError};
 use crate::http;
 use crate::password::{self, PasswordError};
+use crate::precon::PreconService;
 use crate::rate_limit::LoginRateLimiter;
 use axum::Router;
 use check_stock_core::api::inventory_sync::InventorySyncClient;
+use check_stock_core::api::mtgjson::MtgjsonClient;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -29,6 +31,10 @@ pub struct AppState {
     pub cards: Arc<CardLookup>,
     /// The inventory_sync price tracker, if configured.
     pub inventory_sync: Option<Arc<InventorySyncClient>>,
+    /// Precon EV data and its background jobs (shared by all users).
+    pub precon: Arc<PreconService>,
+    /// Where the caches live (`<data>/cache`).
+    pub cache_root: Arc<PathBuf>,
 }
 
 impl AppState {
@@ -42,7 +48,9 @@ impl AppState {
         trusted_proxies: TrustedProxies,
     ) -> Result<Self, PasswordError> {
         let data_dir = db.path().parent().map(PathBuf::from).unwrap_or_default();
-        let cards = CardLookup::new(&crate::config::cache_root_in(&data_dir));
+        let cache_root = crate::config::cache_root_in(&data_dir);
+        let cards = CardLookup::new(&cache_root);
+        let precon = PreconService::new(&cache_root, None, MtgjsonClient::default());
         Ok(Self {
             db,
             allowed_hosts: Arc::new(allowed_hosts),
@@ -51,6 +59,8 @@ impl AppState {
             dummy_hash: password::dummy_hash()?.into(),
             cards: Arc::new(cards),
             inventory_sync: None,
+            precon: Arc::new(precon),
+            cache_root: Arc::new(cache_root),
         })
     }
 
@@ -60,9 +70,22 @@ impl AppState {
         self
     }
 
-    /// Asks the inventory_sync server at `url` for Cardmarket prices.
+    /// Asks the inventory_sync server at `url` for Cardmarket prices (also
+    /// for the precon EV, which then uses MTGJSON's real address).
     pub fn with_inventory_sync(mut self, url: Option<&str>) -> Self {
-        self.inventory_sync = url.map(|u| Arc::new(InventorySyncClient::new(u)));
+        let client = url.map(InventorySyncClient::new);
+        self.inventory_sync = client.clone().map(Arc::new);
+        self.precon = Arc::new(PreconService::new(
+            &self.cache_root,
+            client,
+            MtgjsonClient::default(),
+        ));
+        self
+    }
+
+    /// Uses `precon` for the precon EV (tests: fake tracker and MTGJSON).
+    pub fn with_precon(mut self, precon: PreconService) -> Self {
+        self.precon = Arc::new(precon);
         self
     }
 }
@@ -167,7 +190,10 @@ where
         config.allowed_hosts.hosts().join(", ")
     );
     on_ready(addr);
+    let precon = state.precon.clone();
     serve(listener, http::router(state), shutdown).await?;
+    // Background jobs stop at their next check; `main` waits only briefly.
+    precon.shutdown();
     log::info!("Stopped");
     Ok(())
 }

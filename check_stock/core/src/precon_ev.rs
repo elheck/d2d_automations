@@ -484,6 +484,35 @@ pub fn top_n_lines(values: &[CardValue], n: usize) -> HashSet<usize> {
     out
 }
 
+/// Why a card line in the detail table is valued the way it is (empty when
+/// there is nothing to say). `prices` and `field` are the latest prices and
+/// card price column the values were computed with.
+pub fn card_note<P: PriceFields>(
+    value: &CardValue,
+    prices: &HashMap<u64, P>,
+    field: PriceField,
+    cutoff: f64,
+) -> &'static str {
+    let counted = value.unit.is_some_and(|u| u.eur >= cutoff);
+    match (value.unit, value.card.mcm_id) {
+        (None, None) => "no Cardmarket id in MTGJSON",
+        (None, Some(_)) => "no tracker price",
+        (Some(u), Some(id)) if u.foil_fallback => {
+            let has_foil_price = prices
+                .get(&id)
+                .and_then(|p| p.price_for(field, true))
+                .is_some_and(|p| p > 0.0);
+            if has_foil_price {
+                "foil unsold — non-foil price used"
+            } else {
+                "no foil price — non-foil used"
+            }
+        }
+        (Some(_), _) if !counted => "below cutoff",
+        _ => "",
+    }
+}
+
 /// Aggregated value of a deck (or a bundle of decks).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DeckEv {
@@ -586,6 +615,27 @@ pub struct PreconData {
 }
 
 impl PreconData {
+    /// Release date of a product's decklists (from MTGJSON), if resolved.
+    pub fn release_date(&self, id_product: u64) -> Option<&str> {
+        match self.resolved.get(&id_product)? {
+            DeckResolution::Ready(refs) => refs.iter().find_map(|r| r.release_date.as_deref()),
+            DeckResolution::Pending(_) => None,
+        }
+    }
+
+    /// Card ids and weekly dates for a product's EV history (see
+    /// [`ev_history`]); `None` without loaded decklists.
+    pub fn history_request(
+        &self,
+        id_product: u64,
+        today: NaiveDate,
+    ) -> Option<(Vec<u64>, Vec<String>)> {
+        let decks = self.decks_for(id_product)?;
+        let dates = weekly_dates(history_start(self.release_date(id_product), today), today);
+        let card_ids = decks.iter().flat_map(|d| d.card_ids()).collect();
+        Some((card_ids, dates))
+    }
+
     /// The decklists of a product, if all of them are loaded.
     pub fn decks_for(&self, id_product: u64) -> Option<Vec<&PreconDeck>> {
         match self.resolved.get(&id_product)? {
@@ -710,12 +760,7 @@ pub fn build_rows(data: &PreconData, params: EvParams) -> Vec<PreconRow> {
                     }
                 }
             };
-            let release_date = match data.resolved.get(&id) {
-                Some(DeckResolution::Ready(refs)) => {
-                    refs.iter().find_map(|r| r.release_date.clone())
-                }
-                _ => None,
-            };
+            let release_date = data.release_date(id).map(str::to_string);
             let set_label = p
                 .expansion_name
                 .clone()

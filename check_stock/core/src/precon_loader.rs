@@ -30,7 +30,7 @@ const DECK_FETCH_THREADS: usize = 4;
 const SALES_BATCH: usize = 100;
 /// Pause between sales batches so other tracker clients get the lock.
 const SALES_PAUSE: std::time::Duration = std::time::Duration::from_millis(100);
-/// Pause before retrying a failed sales batch.
+/// Pause before retrying a failed price or sales request.
 const SALES_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Progress reported while [`load_precons`] runs.
@@ -141,9 +141,16 @@ pub fn load_precons(
 
     progress(LoadEvent::Stage("Fetching latest prices…".to_string()));
     let ids = price_ids(&catalog, &decks);
+    // One retry: a connection dropped mid-body should not cost the whole load
+    // (the answer covers thousands of products).
     let prices: HashMap<u64, _> = opts
         .tracker
         .latest_prices_blocking(&ids)
+        .or_else(|e| {
+            log::warn!("Price fetch failed, retrying once: {e}");
+            std::thread::sleep(SALES_RETRY_DELAY);
+            opts.tracker.latest_prices_blocking(&ids)
+        })
         .map_err(|e| format!("Price fetch failed: {e}"))?
         .into_iter()
         .map(|p| (p.id_product, p))

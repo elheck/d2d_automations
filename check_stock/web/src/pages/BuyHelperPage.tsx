@@ -3,7 +3,7 @@
 // (it is sent along for every calculation, never stored); the split rules and
 // rates are the user's own settings, saved on the server as they change.
 
-import { useEffect, useId, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useId, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import {
   saveBuyHelperSettingsOnExit,
   useBuyHelperSettings,
@@ -15,6 +15,7 @@ import {
 import type { BuyHelperSettings, BuyOffer, BuyOfferParams } from "../api/types";
 import { ErrorMessage } from "../components/ErrorMessage";
 import { formatCount, formatEuro } from "../format";
+import { useAutoSave } from "../useAutoSave";
 import { useDebounced } from "../useDebounced";
 import {
   fileProblem,
@@ -25,9 +26,8 @@ import {
   type SettingsForm,
 } from "./buyHelper";
 
-/** Wait after the last change before the offer is recalculated / settings are saved. */
+/** Wait after the last change before the offer is recalculated. */
 const RECALCULATE_MS = 300;
-const SAVE_MS = 800;
 
 export function BuyHelperPage() {
   const settings = useBuyHelperSettings();
@@ -56,7 +56,7 @@ function BuyHelper({ initial }: { initial: BuyHelperSettings }) {
   const offerParams = useDebounced(params, RECALCULATE_MS);
   const offer = useBuyOffer(file, offerParams);
   const exportOffer = useExportOffer();
-  const saving = useAutoSave(params, initial.params);
+  const saving = useSaveSettings(params, initial.params);
 
   async function chooseFile(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
@@ -159,51 +159,10 @@ function BuyHelper({ initial }: { initial: BuyHelperSettings }) {
   );
 }
 
-/**
- * Saves the settings on the server once they stopped changing, and right away
- * when the page is left (another page of the app, a reload or a closed tab)
- * with changes not saved yet. Only valid, changed settings are sent.
- */
-function useAutoSave(params: BuyOfferParams | null, stored: BuyOfferParams) {
+/** Saves the settings on the server as they change (see {@link useAutoSave}). */
+function useSaveSettings(params: BuyOfferParams | null, stored: BuyOfferParams) {
   const { mutate: save, error, isPending, isSuccess } = useSaveBuyHelperSettings();
-  const savedKey = useRef(JSON.stringify(stored));
-  const latest = useRef(params);
-  const settled = useDebounced(params, SAVE_MS);
-
-  useEffect(() => {
-    latest.current = params;
-  }, [params]);
-
-  useEffect(() => {
-    if (!settled) return;
-    const key = JSON.stringify(settled);
-    if (key === savedKey.current) return;
-    savedKey.current = key;
-    save(settled);
-  }, [settled, save]);
-
-  useEffect(() => {
-    /** The settings not saved yet, marked as saved. */
-    const takeUnsaved = () => {
-      const pending = latest.current;
-      if (!pending || JSON.stringify(pending) === savedKey.current) return null;
-      savedKey.current = JSON.stringify(pending);
-      return pending;
-    };
-    // Reload or closed tab: React does not unmount, the page just goes away.
-    const onPageHide = () => {
-      const pending = takeUnsaved();
-      if (pending) saveBuyHelperSettingsOnExit(pending);
-    };
-    window.addEventListener("pagehide", onPageHide);
-    return () => {
-      window.removeEventListener("pagehide", onPageHide);
-      // Another page of the app: a normal save, which also updates the cache.
-      const pending = takeUnsaved();
-      if (pending) save(pending);
-    };
-  }, [save]);
-
+  useAutoSave(params, stored, save, saveBuyHelperSettingsOnExit);
   return { error, isPending, isSuccess };
 }
 

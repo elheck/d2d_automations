@@ -5,6 +5,13 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClie
 import { api, ApiError, download } from "./client";
 import type {
   AuditPage,
+  EvHistory,
+  LoadRequest,
+  PreconSettings,
+  PreconSettingsView,
+  PreconStatusView,
+  ProductDetail,
+  RankingView,
   BuyHelperSettings,
   BuyOffer,
   BuyOfferParams,
@@ -26,6 +33,9 @@ export const keys = {
   singles: ["singles"] as const,
   buyHelperSettings: ["buy-helper-settings"] as const,
   buyOffer: ["buy-offer"] as const,
+  preconStatus: ["precon-status"] as const,
+  preconSettings: ["precon-settings"] as const,
+  precon: ["precon"] as const,
 };
 
 /** The logged-in user; `null` when not logged in. */
@@ -223,6 +233,118 @@ export function useExportOffer() {
   return useMutation({
     mutationFn: ({ file, params }: { file: CardListFile; params: BuyOfferParams }) =>
       download("/api/buy-helper/export", { csv: file.csv, params }, "buy_offer.csv"),
+  });
+}
+
+// ── Precon EV ────────────────────────────────────────────────────────────
+
+/** How often the status is asked for while a load or the sales history runs. */
+export const PRECON_POLL_MS = 1000;
+
+/** What is loaded and what the background jobs are doing (polled while they run). */
+export function usePreconStatus() {
+  return useQuery({
+    queryKey: keys.preconStatus,
+    queryFn: () => api.get<PreconStatusView>("/api/precon-ev/status"),
+    refetchInterval: (query) => {
+      const status = query.state.data;
+      const running = status && (status.load.state === "running" || status.sales.state === "running");
+      return running ? PRECON_POLL_MS : false;
+    },
+  });
+}
+
+export function useStartPreconLoad() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: LoadRequest) => api.post<PreconStatusView>("/api/precon-ev/load", body),
+    onSuccess: (status) => queryClient.setQueryData(keys.preconStatus, status),
+  });
+}
+
+const PRECON_SETTINGS = "/api/precon-ev/settings";
+
+export function usePreconSettings() {
+  return useQuery({
+    queryKey: keys.preconSettings,
+    queryFn: () => api.get<PreconSettingsView>(PRECON_SETTINGS),
+    staleTime: Infinity,
+  });
+}
+
+export function useSavePreconSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (settings: PreconSettings) => api.put<PreconSettingsView>(PRECON_SETTINGS, settings),
+    // The detail page reads the settings too: show them there at once.
+    onMutate: (settings) => {
+      queryClient.setQueryData<PreconSettingsView>(keys.preconSettings, (old) => (old ? { ...old, settings } : old));
+    },
+    onSuccess: async (view) => {
+      queryClient.setQueryData(keys.preconSettings, view);
+      await queryClient.invalidateQueries({ queryKey: keys.audit });
+    },
+  });
+}
+
+/** Saves settings while the page is closing (see {@link saveBuyHelperSettingsOnExit}). */
+export function savePreconSettingsOnExit(settings: PreconSettings): void {
+  void api.put(PRECON_SETTINGS, settings, { keepalive: true }).catch(() => undefined);
+}
+
+/** The query string of the pricing parameters. */
+export function evQuery(s: PreconSettings): URLSearchParams {
+  return new URLSearchParams({
+    field: s.field,
+    sealed_field: s.sealed_field,
+    cutoff: String(s.cutoff),
+    foil_needs_sales: String(s.foil_needs_sales),
+  });
+}
+
+/** The ranking for `settings` and `filter`; `version` = loaded data version (null: nothing loaded). */
+export function usePreconRanking(settings: PreconSettings | null, filter: string, version: number | null) {
+  return useQuery({
+    queryKey: [...keys.precon, "ranking", version, settings, filter],
+    queryFn: () => {
+      if (!settings) throw new Error("no settings");
+      const query = evQuery(settings);
+      query.set("sort", settings.sort);
+      query.set("desc", String(settings.desc));
+      query.set("filter", filter);
+      query.set("hide_no_decklist", String(settings.hide_no_decklist));
+      return api.get<RankingView>(`/api/precon-ev/ranking?${query.toString()}`);
+    },
+    enabled: settings !== null && version !== null,
+    placeholderData: (previous) => previous,
+    staleTime: Infinity,
+  });
+}
+
+export function usePreconProduct(id: number, settings: PreconSettings | null, version: number | null) {
+  return useQuery({
+    queryKey: [...keys.precon, "product", id, version, settings && evQuery(settings).toString()],
+    queryFn: () => {
+      if (!settings) throw new Error("no settings");
+      return api.get<ProductDetail>(`/api/precon-ev/products/${id}?${evQuery(settings).toString()}`);
+    },
+    enabled: settings !== null && version !== null,
+    placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[2] === id ? previous : undefined),
+    staleTime: Infinity,
+  });
+}
+
+export function usePreconHistory(id: number, settings: PreconSettings | null, version: number | null) {
+  return useQuery({
+    queryKey: [...keys.precon, "history", id, version, settings && evQuery(settings).toString()],
+    queryFn: () => {
+      if (!settings) throw new Error("no settings");
+      return api.get<EvHistory>(`/api/precon-ev/products/${id}/history?${evQuery(settings).toString()}`);
+    },
+    enabled: settings !== null && version !== null,
+    placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[2] === id ? previous : undefined),
+    staleTime: Infinity,
+    retry: false,
   });
 }
 

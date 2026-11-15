@@ -58,6 +58,14 @@ export const catalog: PermissionInfo[] = [
     requires: ["repricing.view"],
   },
   {
+    key: "precon_ev.use",
+    label: "Precon EV",
+    description: "Rank Commander precons by the value of their singles against the sealed price.",
+    group: "tools",
+    group_label: "Tools",
+    requires: [],
+  },
+  {
     key: "buy_helper.use",
     label: "Buy Helper",
     description:
@@ -85,6 +93,8 @@ export const admin: MeResponse = {
 export const helper: MeResponse = { username: "helper", display_name: "Helper", permissions: ["search.use"] };
 
 export const buyer: MeResponse = { username: "buyer", display_name: "Buyer", permissions: ["buy_helper.use"] };
+
+export const analyst: MeResponse = { username: "analyst", display_name: "Analyst", permissions: ["precon_ev.use"] };
 
 export const lister: MeResponse = { username: "lister", display_name: "Lister", permissions: ["listing.use"] };
 

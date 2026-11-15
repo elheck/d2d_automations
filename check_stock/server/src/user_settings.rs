@@ -19,12 +19,15 @@ pub const MAX_VALUE_BYTES: usize = 16 * 1024;
 pub enum Setting {
     /// The buy helper's split rules and rates.
     BuyHelper,
+    /// The precon EV's price columns, cutoff, foil check and sorting.
+    PreconEv,
 }
 
 impl Setting {
     pub fn key(self) -> &'static str {
         match self {
             Setting::BuyHelper => "buy_helper",
+            Setting::PreconEv => "precon_ev",
         }
     }
 }

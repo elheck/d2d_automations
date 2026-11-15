@@ -13,9 +13,9 @@ mod ranking;
 use crate::{
     api::{cardmarket::product_url, inventory_sync::InventorySyncClient, mtgjson::MtgjsonClient},
     precon_ev::{
-        build_rows, ev_history, history_start, sales_candidates, sort_rows, trim_leading_gaps,
-        weekly_dates, EvParams, PreconData, FOIL_LOOKBACK_DAYS, LIQUID_FULL_SHARE, SALES_DAYS,
-        SALES_MIN_PRICE_EUR, SEALED_FIELDS, STALE_SEALED_FACTOR,
+        build_rows, ev_history, sales_candidates, sort_rows, trim_leading_gaps, EvParams,
+        PreconData, FOIL_LOOKBACK_DAYS, LIQUID_FULL_SHARE, SALES_DAYS, SALES_MIN_PRICE_EUR,
+        SEALED_FIELDS, STALE_SEALED_FACTOR,
     },
     precon_loader::{load_history, load_precons, load_sales, local_date, LoadEvent, LoadOptions},
     ui::{
@@ -516,17 +516,8 @@ impl PreconEvScreen {
 
     /// Card ids and weekly dates for a product's history request.
     fn history_request(state: &PreconEvState, id: u64) -> Option<(Vec<u64>, Vec<String>)> {
-        let data = state.data.as_ref()?;
-        let decks = data.decks_for(id)?;
-        let release = state
-            .rows
-            .iter()
-            .find(|r| r.id_product == id)
-            .and_then(|r| r.release_date.as_deref());
         let today = chrono::Local::now().date_naive();
-        let dates = weekly_dates(history_start(release, today), today);
-        let card_ids = decks.iter().flat_map(|d| d.card_ids()).collect();
-        Some((card_ids, dates))
+        state.data.as_ref()?.history_request(id, today)
     }
 
     /// Recomputes rows (and the open chart) from the loaded data.

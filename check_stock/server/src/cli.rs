@@ -8,6 +8,10 @@ use clap::{Args, Parser, Subcommand};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
+
+/// How long `serve` waits for background jobs after the last request.
+pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
 #[derive(Parser, Debug)]
 #[command(name = "check_stock_server", version)]
@@ -160,7 +164,11 @@ pub fn run_command(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(app::run(config, args.create_empty))?;
+            let result = runtime.block_on(app::run(config, args.create_empty));
+            // Background jobs (e.g. a precon sales fetch) were asked to stop;
+            // do not wait for a slow outside request to finish.
+            runtime.shutdown_timeout(SHUTDOWN_GRACE);
+            result?;
         }
         Command::ImportDesktop(args) => {
             let report = if args.refresh {

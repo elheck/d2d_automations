@@ -10,6 +10,8 @@ import { BuyHelperPage } from "./pages/BuyHelperPage";
 import { HomePage } from "./pages/HomePage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
+import { PreconEvPage } from "./pages/PreconEvPage";
+import { PreconProductPage } from "./pages/PreconProductPage";
 import { SinglesPage } from "./pages/SinglesPage";
 import { UsersPage } from "./pages/UsersPage";
 
@@ -71,6 +73,26 @@ const buyHelperRoute = createRoute({
   ),
 });
 
+const preconRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/precon-ev",
+  component: () => (
+    <RequirePermission permission="precon_ev.use">
+      <PreconEvPage />
+    </RequirePermission>
+  ),
+});
+
+const preconProductRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/precon-ev/$id",
+  component: () => (
+    <RequirePermission permission="precon_ev.use">
+      <PreconProductPage />
+    </RequirePermission>
+  ),
+});
+
 const usersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/users",
@@ -99,7 +121,16 @@ const accountRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  appRoute.addChildren([homeRoute, singlesRoute, buyHelperRoute, usersRoute, auditRoute, accountRoute]),
+  appRoute.addChildren([
+    homeRoute,
+    singlesRoute,
+    buyHelperRoute,
+    preconRoute,
+    preconProductRoute,
+    usersRoute,
+    auditRoute,
+    accountRoute,
+  ]),
 ]);
 
 export function createAppRouter(history?: RouterHistory) {

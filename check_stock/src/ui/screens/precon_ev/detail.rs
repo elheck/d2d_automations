@@ -2,12 +2,12 @@
 
 use crate::{
     api::{
-        inventory_sync::{LatestPrice, PriceField, PriceFields},
+        inventory_sync::{LatestPrice, PriceField},
         mtgjson::DeckBoard,
     },
     precon_ev::{
-        ranked_by_unit, summarize, top_n_lines, value_cards, CardValue, PreconRow, SALES_DAYS,
-        SALES_MIN_PRICE_EUR, TOP_N,
+        card_note, ranked_by_unit, summarize, top_n_lines, value_cards, CardValue, PreconRow,
+        SALES_DAYS, SALES_MIN_PRICE_EUR, TOP_N,
     },
     ui::{
         components::{line_chart, Series},
@@ -313,24 +313,7 @@ fn card_table(
                         cell(ui, "—".to_string());
                     }
                 }
-                let note = match (v.unit, v.card.mcm_id) {
-                    (None, None) => "no Cardmarket id in MTGJSON",
-                    (None, Some(_)) => "no tracker price",
-                    (Some(u), Some(id)) if u.foil_fallback => {
-                        let has_foil_price = ctx
-                            .prices
-                            .get(&id)
-                            .and_then(|p| p.price_for(ctx.field, true))
-                            .is_some_and(|p| p > 0.0);
-                        if has_foil_price {
-                            "foil unsold — non-foil price used"
-                        } else {
-                            "no foil price — non-foil used"
-                        }
-                    }
-                    (Some(_), _) if !counted => "below cutoff",
-                    _ => "",
-                };
+                let note = card_note(v, ctx.prices, ctx.field, ctx.cutoff);
                 ui.label(
                     egui::RichText::new(note)
                         .size(11.0)

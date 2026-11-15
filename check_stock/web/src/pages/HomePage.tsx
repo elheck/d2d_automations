@@ -5,6 +5,7 @@ import { NAV_ITEMS } from "../components/AppLayout";
 const DESCRIPTIONS: Record<string, string> = {
   "/singles": "Look up cards by set and collector number, with image and prices.",
   "/buy-helper": "Value a seller's card list for a purchase offer.",
+  "/precon-ev": "Rank Commander precons by the value of their singles against the sealed price.",
   "/users": "Create accounts and choose what each person may do.",
   "/audit": "Who did what and when.",
 };

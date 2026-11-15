@@ -9,8 +9,8 @@ built on top of core, with its browser interface in [`web/`](web/). Try the
 web version locally with `./dev.sh` (needs Node.js 24; see the server README):
 it works on a copy of the desktop database and asks for a password for your
 local login on the first start. Ported so far: the Magic Singles Listing
-(Cardmarket prices from inventory_sync, set with `--inventory-sync-url`) and
-the Card Buy Helper.
+(Cardmarket prices from inventory_sync, set with `--inventory-sync-url`), the
+Card Buy Helper and Precon EV.
 
 The welcome screen shows a **since-last-visit digest** (copies sold and revenue
 since the previous day the app was opened, new listings, bulk lots built,
@@ -175,9 +175,14 @@ showing exactly what would change before anything is written.
   (cheaper ones count as unsellable in Liquid EV). The ranking appears as soon
   as prices are loaded; sales history follows in the background, and the foil
   check and Liquid EV apply when it finishes. Changing the cutoff, a price
-  selector or the foil option recomputes locally.
+  selector or the foil option recomputes locally. A dropped price answer from
+  the tracker is retried once before the load fails.
   Clicking a sealed price (ranking or detail) or a card name in the breakdown
   opens that exact product/printing on Cardmarket in the browser.
+  Also in the web version (`/precon-ev`): there the server loads the precons
+  once for everyone (a background job with progress; another load is possible
+  30 s after the last one ended), and each user's price columns, cutoff,
+  foil option and sorting are saved on the server.
 - **Bulk Lots** — Bundle old, cheap singles into one Cardmarket lot such as
   "100 commons" or "100 non-basic lands". Three steps:
   1. **Choose cards** — load the Magic inventory export, start from a preset

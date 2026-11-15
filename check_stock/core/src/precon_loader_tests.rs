@@ -402,6 +402,68 @@ async fn tracker_outage_fails_the_load() {
     assert!(err.starts_with("Catalog fetch failed"), "{err}");
 }
 
+async fn mount_mtgjson(s: &Servers) {
+    mount(&s.mtgjson, "GET", "/SetList.json", set_list(), None).await;
+    mount(&s.mtgjson, "GET", "/DeckList.json", deck_list(), None).await;
+    mount(
+        &s.mtgjson,
+        "GET",
+        "/decks/AnimatedArmy_BLC.json",
+        deck_file("Animated Army", &[Some("101"), Some("102")]),
+        None,
+    )
+    .await;
+    mount(
+        &s.mtgjson,
+        "GET",
+        "/decks/FamilyMatters_BLC.json",
+        deck_file("Family Matters", &[Some("201")]),
+        None,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_dropped_price_answer_is_retried_once() {
+    let s = servers().await;
+    let tmp = tempfile::tempdir().unwrap();
+    // The first answer breaks off (not JSON), the second is fine.
+    Mock::given(method("POST"))
+        .and(path("/api/latest-prices"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("{\"success\": true, \"data\": [{\"id_pro"),
+        )
+        .up_to_n_times(1)
+        .mount(&s.tracker)
+        .await;
+    mount_tracker(&s, None).await;
+    mount_mtgjson(&s).await;
+    let data = load(&s, tmp.path().to_path_buf(), false, NOW)
+        .await
+        .0
+        .unwrap();
+    assert_eq!(data.prices.len(), 5);
+}
+
+#[tokio::test]
+async fn a_price_fetch_failing_twice_fails_the_load() {
+    let s = servers().await;
+    let tmp = tempfile::tempdir().unwrap();
+    Mock::given(method("POST"))
+        .and(path("/api/latest-prices"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(2)
+        .mount(&s.tracker)
+        .await;
+    mount(&s.tracker, "GET", "/api/search", catalog(&[]), None).await;
+    mount_mtgjson(&s).await;
+    let err = load(&s, tmp.path().to_path_buf(), false, NOW)
+        .await
+        .0
+        .unwrap_err();
+    assert!(err.starts_with("Price fetch failed"), "{err}");
+}
+
 #[tokio::test]
 async fn load_history_requests_cards_and_sealed_on_all_dates() {
     let tracker = MockServer::start().await;

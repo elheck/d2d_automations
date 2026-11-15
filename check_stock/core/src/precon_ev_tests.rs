@@ -930,3 +930,97 @@ fn rows_carry_liquid_ev_and_sort_by_it() {
     sort_rows(&mut rows, PreconSort::Liquid, true);
     assert_eq!(rows[0].id_product, 10, "rows without Liquid EV sort last");
 }
+
+#[test]
+fn card_notes_explain_the_value() {
+    let foil_sold = card("Foil Sold", 1, true, Some(1), DeckBoard::Main);
+    let foil_unsold = card("Foil Unsold", 1, true, Some(2), DeckBoard::Main);
+    let foil_no_price = card("Foil No Price", 1, true, Some(3), DeckBoard::Main);
+    let cheap = main("Cheap", 1, 4);
+    let unpriced = main("Unpriced", 1, 5);
+    let unmapped = card("Unmapped", 1, false, None, DeckBoard::Main);
+    let d = deck(
+        "D",
+        vec![
+            foil_sold,
+            foil_unsold,
+            foil_no_price,
+            cheap,
+            unpriced,
+            unmapped,
+        ],
+    );
+    let map = prices(vec![
+        price(1, Some(1.0), Some(5.0)),
+        price(2, Some(1.0), Some(5.0)),
+        price(3, Some(1.0), None),
+        price(4, Some(0.10), None),
+    ]);
+    let mut sales = SalesMap::new();
+    sales.insert(
+        1,
+        SalesStats {
+            foil_recent: true,
+            ..SalesStats::default()
+        },
+    );
+    sales.insert(2, SalesStats::default());
+    sales.insert(3, SalesStats::default());
+    let params = EvParams {
+        field: PriceField::Trend,
+        sealed_field: PriceField::Trend,
+        cutoff: 0.5,
+        foil_needs_sales: true,
+    };
+    let decks = [&d];
+    let vals = value_cards(&decks, |i| map.get(&i), Some(&sales), params);
+    let notes: Vec<&str> = vals
+        .iter()
+        .map(|v| card_note(v, &map, PriceField::Trend, 0.5))
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            "",
+            "foil unsold — non-foil price used",
+            "no foil price — non-foil used",
+            "below cutoff",
+            "no tracker price",
+            "no Cardmarket id in MTGJSON",
+        ]
+    );
+}
+
+#[test]
+fn history_request_uses_the_release_date_and_all_deck_cards() {
+    let data = sample_data();
+    let today = date("2026-11-15");
+    let ready = data
+        .catalog
+        .iter()
+        .map(|p| p.id_product)
+        .find(|id| data.decks_for(*id).is_some())
+        .expect("a product with decks");
+    let (ids, dates) = data.history_request(ready, today).unwrap();
+    let mut expected: Vec<u64> = data
+        .decks_for(ready)
+        .unwrap()
+        .iter()
+        .flat_map(|d| d.card_ids())
+        .collect();
+    expected.sort_unstable();
+    let mut got = ids.clone();
+    got.sort_unstable();
+    assert_eq!(got, expected);
+    assert_eq!(dates.last().map(String::as_str), Some("2026-11-15"));
+    let start = history_start(data.release_date(ready), today);
+    assert_eq!(dates, weekly_dates(start, today));
+    // No decklist, no history.
+    let missing = data
+        .catalog
+        .iter()
+        .map(|p| p.id_product)
+        .find(|id| data.decks_for(*id).is_none())
+        .expect("a product without decks");
+    assert!(data.history_request(missing, today).is_none());
+}

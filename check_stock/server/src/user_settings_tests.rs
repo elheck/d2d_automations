@@ -28,6 +28,7 @@ fn add_user(conn: &Connection, name: &str) -> i64 {
 fn keys_never_change() {
     // Stored in the database: renaming one loses everyone's settings.
     assert_eq!(Setting::BuyHelper.key(), "buy_helper");
+    assert_eq!(Setting::PreconEv.key(), "precon_ev");
 }
 
 #[test]
