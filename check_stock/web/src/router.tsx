@@ -15,6 +15,7 @@ import { NotFoundPage } from "./pages/NotFoundPage";
 import { PreconEvPage } from "./pages/PreconEvPage";
 import { PreconProductPage } from "./pages/PreconProductPage";
 import { BinAnalysisPage } from "./pages/BinAnalysisPage";
+import { BulkLotsPage } from "./pages/BulkLotsPage";
 import { BinMovesPage } from "./pages/BinMovesPage";
 import { InventoryImportPage } from "./pages/InventoryImportPage";
 import { PickingPage } from "./pages/PickingPage";
@@ -163,6 +164,16 @@ const searchRoute = createRoute({
   ),
 });
 
+const bulkLotsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/bulk-lots",
+  component: () => (
+    <RequirePermission permission="bulk_lot.build">
+      <BulkLotsPage />
+    </RequirePermission>
+  ),
+});
+
 const binsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/bins",
@@ -244,6 +255,7 @@ const routeTree = rootRoute.addChildren([
     inventoryImportRoute,
     binsRoute,
     binMovesRoute,
+    bulkLotsRoute,
     searchRoute,
     stockCheckerRoute,
     pickingRoute,

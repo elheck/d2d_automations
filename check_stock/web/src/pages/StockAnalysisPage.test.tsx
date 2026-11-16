@@ -1,10 +1,10 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { DataInfo, LotRow, StockAnalysisView } from "../api/types";
 import { admin, helper, reporter } from "../test/fixtures";
 import { renderApp } from "../test/renderApp";
-import { fakeServer } from "../test/server";
-import { formatMargin, sortLots } from "./StockAnalysisPage";
+import { fakeServer, type Call } from "../test/server";
+import { formatMargin, parseCost, sortLots } from "./StockAnalysisPage";
 
 function lot(overrides: Partial<LotRow> = {}): LotRow {
   return {
@@ -207,5 +207,61 @@ describe("stock analysis", () => {
     expect(formatMargin(0.35)).toBe("+35%");
     expect(formatMargin(-0.5)).toBe("−50%");
     expect(formatMargin(null)).toBe("—");
+  });
+
+  it("lets lot-cost editors enter a cost, sending the one they saw", async () => {
+    const { calls } = fakeServer({
+      "GET /api/auth/me": { body: admin },
+      "GET /api/data-info": { body: dataInfo },
+      "GET /api/stock-analysis": { body: view(true) },
+      "PUT /api/lot-costs/L10": { body: { lot: "L10", cost: 32.5 } },
+    });
+    const { user } = renderApp("/stock-analysis");
+    await user.click(await screen.findByRole("button", { name: "Edit the cost of L10" }));
+    const input = screen.getByLabelText("Cost of L10 in euros (empty: none)");
+    expect(input).toHaveValue("30.00");
+    await user.clear(input);
+    await user.type(input, "32,5");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(calls.find((c: Call) => c.method === "PUT")?.body).toEqual({ cost: 32.5, expected: 30 }),
+    );
+  });
+
+  it("shows a refusal when someone changed the cost meanwhile", async () => {
+    fakeServer({
+      "GET /api/auth/me": { body: admin },
+      "GET /api/data-info": { body: dataInfo },
+      "GET /api/stock-analysis": { body: view(true) },
+      "PUT /api/lot-costs/L2": {
+        status: 409,
+        body: { error: { code: "changed", message: "Someone changed this lot's cost meanwhile (now 12.00 €)" } },
+      },
+    });
+    const { user } = renderApp("/stock-analysis");
+    await user.click(await screen.findByRole("button", { name: "Edit the cost of L2" }));
+    await user.clear(screen.getByLabelText("Cost of L2 in euros (empty: none)"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(/Someone changed this lot's cost meanwhile/)).toBeInTheDocument();
+  });
+
+  it("shows costs read-only without the edit permission", async () => {
+    fakeServer({
+      "GET /api/auth/me": {
+        body: { username: "boss", display_name: "Boss", permissions: ["analysis.view", "financials.view"] },
+      },
+      "GET /api/data-info": { body: dataInfo },
+      "GET /api/stock-analysis": { body: view(true) },
+    });
+    renderApp("/stock-analysis");
+    expect(await screen.findByRole("row", { name: /^L10/ })).toHaveTextContent("30.00 €");
+    expect(screen.queryByRole("button", { name: /Edit the cost/ })).not.toBeInTheDocument();
+  });
+
+  it("reads costs with comma or point", () => {
+    expect(parseCost("12,50")).toBe(12.5);
+    expect(parseCost(" 3 ")).toBe(3);
+    expect(parseCost("")).toBeNull();
+    for (const bad of ["-1", "1.234", "abc", "1000000.01", "1e3"]) expect(parseCost(bad), bad).toBeUndefined();
   });
 });

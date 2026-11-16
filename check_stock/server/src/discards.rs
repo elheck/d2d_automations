@@ -26,7 +26,8 @@ use crate::stock::{kept_file_info, quantity, Source};
 use check_stock_core::card_matching::MatchedCard;
 use check_stock_core::formatters::format_update_stock_csv;
 use check_stock_core::inventory_db::{
-    db_variant_key, db_variant_key_of, discard_cards_in_tx, variant_quantity_conn,
+    card_variant_key, db_variant_key, db_variant_key_of, discard_cards_in_tx,
+    pending_removals_conn, variant_quantity_conn,
 };
 use check_stock_core::models::Card;
 use chrono::{DateTime, Utc};
@@ -233,7 +234,7 @@ pub fn discard(
         }
     }
     let mut piles: Vec<DiscardedPile> = Vec::new();
-    let mut per_variant: HashMap<_, (i64, String)> = HashMap::new();
+    let mut per_variant: HashMap<_, (i64, String, String)> = HashMap::new();
     for (pile, copies) in &merged {
         let card = source.pile(pile).expect("checked");
         let left = quantity(card) - later.get(pile).copied().unwrap_or(0);
@@ -243,18 +244,26 @@ pub fn discard(
                 available: left.max(0),
             }));
         }
-        let entry = per_variant
-            .entry(db_variant_key(card))
-            .or_insert((0, card.name.clone()));
+        let entry = per_variant.entry(db_variant_key(card)).or_insert((
+            0,
+            card.name.clone(),
+            card_variant_key(card, crate::stock::CATEGORY),
+        ));
         entry.0 += copies;
         piles.push(DiscardedPile::of(pile, card, *copies));
     }
-    for (key, (copies, name)) in &per_variant {
+    // Copies promised to a bulk lot awaiting its import are not free.
+    let mut reserved: HashMap<String, i64> = HashMap::new();
+    for removal in pending_removals_conn(conn, crate::stock::CATEGORY)? {
+        *reserved.entry(removal.variant).or_default() += removal.pending;
+    }
+    for (key, (copies, name, article)) in &per_variant {
         let stock = variant_quantity_conn(conn, key, crate::stock::CATEGORY)?.unwrap_or(0);
-        if *copies > stock {
+        let free = stock - reserved.get(article).copied().unwrap_or(0);
+        if *copies > free {
             return Ok(Err(DiscardError::NotEnough {
                 name: name.clone(),
-                available: stock.max(0),
+                available: free.max(0),
             }));
         }
     }

@@ -34,7 +34,7 @@ export function fakeServer(routes: Record<string, Route>) {
         : route
       : { status: 404, body: { error: { code: "not_found", message: "Not found" } } };
     const status = reply.status ?? 200;
-    return new Response(status === 204 ? null : JSON.stringify(reply.body ?? {}), {
+    return new Response(status === 204 ? null : JSON.stringify(reply.body === undefined ? {} : reply.body), {
       status,
       headers: { "Content-Type": "application/json" },
     });

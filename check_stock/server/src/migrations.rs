@@ -181,6 +181,31 @@ const MIGRATIONS: &[(u32, &str)] = &[
              items       TEXT NOT NULL CHECK (json_valid(items))
          ) STRICT;",
     ),
+    (
+        8,
+        // Bulk lots (4c): one draft per user (the rules, the chosen piles
+        // with their picked ticks, piles swapped out), the TCG Powertools
+        // CSV of each recorded lot (to download again), and a counter of
+        // other data changes (finished, corrected, removed or undone lots)
+        // that is part of the data version open pages watch.
+        "CREATE TABLE srv_bulk_lot_drafts (
+             user_id    INTEGER PRIMARY KEY REFERENCES srv_users (id) ON DELETE CASCADE,
+             spec       TEXT NOT NULL CHECK (json_valid(spec)),
+             picks      TEXT NOT NULL CHECK (json_valid(picks)),
+             excluded   TEXT NOT NULL CHECK (json_valid(excluded)),
+             updated_at TEXT NOT NULL
+         ) STRICT;
+         CREATE TABLE srv_bulk_lot_csvs (
+             lot_id    INTEGER PRIMARY KEY,
+             file_name TEXT NOT NULL,
+             csv       BLOB NOT NULL
+         ) STRICT;
+         CREATE TABLE srv_data_changes (
+             id   INTEGER PRIMARY KEY,
+             at   TEXT NOT NULL,
+             kind TEXT NOT NULL
+         ) STRICT;",
+    ),
 ];
 
 /// Newest schema version this build knows.

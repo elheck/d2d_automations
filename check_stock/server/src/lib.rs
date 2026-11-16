@@ -17,6 +17,7 @@ pub mod api;
 pub mod app;
 pub mod audit;
 pub mod bins;
+pub mod bulk;
 pub mod cards;
 pub mod cli;
 pub mod client_ip;

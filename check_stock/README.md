@@ -13,9 +13,9 @@ local login on the first start. Ported so far: the Magic Singles Listing
 Card Buy Helper, Precon EV, the reports Restock, Price Movers, Mispricing
 Stock Analysis and Bin Analysis with move lists (read-only; revenue, costs
 and margins only for users with "View revenue and costs"), the inventory
-import, Search with discards, the Stock Checker and Picking (writes only on
-the test copy until the move: keep importing and discarding in the desktop
-app).
+import, Search with discards, the Stock Checker, Picking, lot-cost editing
+and Bulk Lots (writes only on the test copy until the move: keep importing,
+discarding and building lots in the desktop app).
 
 The welcome screen shows a **since-last-visit digest** (copies sold and revenue
 since the previous day the app was opened, new listings, bulk lots built,
@@ -45,10 +45,11 @@ showing exactly what would change before anything is written.
   the bulk lot's price (hover a lot's Sold/Revenue cell for the split); sales
   velocity revenue includes bulk-lot prices, its copy counts are single sales
   only.
-  Also in the web version (`/stock-analysis`, read-only): money figures (stock
-  value, revenue, capital per age bucket, lot value/cost/margin/payback) only
-  for users with "View revenue and costs"; lot costs are still entered here in
-  the desktop app.
+  Also in the web version (`/stock-analysis`): money figures (stock value,
+  revenue, capital per age bucket, lot value/cost/margin/payback) only for
+  users with "View revenue and costs"; users who may edit lot costs click a
+  cost to change it (a save is refused when someone changed it meanwhile;
+  every change is logged).
 - **Bin Analysis** — Bin capacity utilization and free-slot analysis, plus two
   consolidation tools:
   - **Consolidation suggestions** — empties sparse bins into fuller ones (preferring
@@ -243,6 +244,13 @@ showing exactly what would change before anything is written.
   lists every lot with its status ("awaiting import" turns into a warning
   after 7 days), lets you correct the price it sold for, mark the removal as
   done by hand, list its cards, or undo it.
+
+  Also in the web version (`/bulk-lots`): the lot in progress is saved per
+  user (choose on the PC, pick on the phone); finishing checks again that no
+  other lot or discard took the picked copies meanwhile (then "Replace"),
+  takes a backup, and keeps the CSV to download again; undoing a lot whose
+  copies an import already took out needs that number typed in; card types
+  are looked up on the server and shared.
 
 ## Data Sources
 

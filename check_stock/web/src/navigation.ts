@@ -18,6 +18,7 @@ export type NavPath =
   | "/search"
   | "/stock-checker"
   | "/picking"
+  | "/bulk-lots"
   | "/users"
   | "/audit";
 
@@ -55,6 +56,12 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "Picking",
         permission: "stock_checker.use",
         description: "Your picking list in shelf order, ticked as you take the cards.",
+      },
+      {
+        to: "/bulk-lots",
+        label: "Bulk lots",
+        permission: "bulk_lot.build",
+        description: "Bundle old, cheap singles into one Cardmarket lot, pick them and record the sale.",
       },
       {
         to: "/singles",

@@ -70,6 +70,14 @@ pub mod action {
     /// A user made (or made again) their bin move list (target: the kind).
     pub const BINS_LIST_CREATED: &str = "bins.list_created";
     pub const BINS_LIST_DISCARDED: &str = "bins.list_discarded";
+    /// A bulk lot was recorded (target: its number).
+    pub const BULK_LOT_FINISHED: &str = "bulk_lot.finished";
+    pub const BULK_LOT_PRICE_CHANGED: &str = "bulk_lot.price_changed";
+    /// A bulk lot's removals were declared done by hand.
+    pub const BULK_LOT_MARKED_REMOVED: &str = "bulk_lot.marked_removed";
+    pub const BULK_LOT_UNDONE: &str = "bulk_lot.undone";
+    /// A purchase lot's cost was entered, changed or removed (target: the lot).
+    pub const LOT_COST_CHANGED: &str = "lot_cost.changed";
     /// A user made a picking list (target: number of piles).
     pub const PICKING_CREATED: &str = "picking.created";
 }

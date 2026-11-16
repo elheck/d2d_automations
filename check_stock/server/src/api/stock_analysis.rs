@@ -6,18 +6,27 @@
 //! Money figures (stock value, revenue, value per aging bucket, lot value,
 //! revenue, cost, margin, payback) are only sent with `financials.view`;
 //! `money` says whether they are in the answer. Individual card prices (most
-//! expensive, longest unsold) are listing prices and always shown. Editing
-//! lot costs comes with the writing workflows (Phase 4).
+//! expensive, longest unsold) are listing prices and always shown.
+//!
+//! - `PUT /api/lot-costs/{lot}` `{cost, expected}` (`lot_costs.edit`, which
+//!   needs `financials.view`): records (`cost` = null clears) a purchase
+//!   lot's cost. `expected` is the cost the user saw: when someone changed
+//!   it meanwhile the save is refused (409) instead of overwriting. Only
+//!   lots the data knows; logged with before and after.
 
-use super::{blocking, Access, Api, CurrentUser};
+use super::{blocking, in_transaction, Access, Api, ApiJson, CurrentUser};
 use crate::app::AppState;
 use crate::http::ApiError;
 use crate::permissions::Permission;
-use axum::extract::State;
-use axum::routing::get;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::routing::{get, put};
 use axum::Json;
 use check_stock_core::category::DEFAULT_CATEGORY;
-use check_stock_core::inventory_db::{get_db_stats_conn, DbStats, LotTotals};
+use check_stock_core::inventory_db::{
+    delete_lot_cost_conn, get_db_stats_conn, is_lot_id, lot_cost_conn, lot_known_conn,
+    set_lot_cost_conn, DbStats, LotTotals,
+};
 use check_stock_core::precon_loader::local_date;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -28,6 +37,117 @@ pub(super) fn routes(api: Api) -> Api {
         Access::Permission(Permission::AnalysisView),
         get(stock_analysis),
     )
+    .route(
+        "/api/lot-costs/{lot}",
+        Access::Permission(Permission::LotCostsEdit),
+        put(put_lot_cost),
+    )
+}
+
+/// Highest cost accepted for one purchase lot (euros).
+pub const MAX_LOT_COST: f64 = 1_000_000.0;
+
+/// A new cost for a purchase lot.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct LotCostRequest {
+    /// Euros; `null` removes the recorded cost.
+    pub cost: Option<f64>,
+    /// The cost the page showed (`null`: none recorded).
+    pub expected: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
+pub struct LotCostView {
+    pub lot: String,
+    pub cost: Option<f64>,
+}
+
+/// What a lot-cost change is refused for.
+enum CostRefusal {
+    Unknown,
+    Changed(Option<f64>),
+}
+
+fn same(a: Option<f64>, b: Option<f64>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => (a - b).abs() < 1e-9,
+        _ => false,
+    }
+}
+
+async fn put_lot_cost(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(lot): Path<String>,
+    ApiJson(request): ApiJson<LotCostRequest>,
+) -> Result<Json<LotCostView>, ApiError> {
+    if !is_lot_id(&lot) {
+        return Err(ApiError::bad_request("Not a purchase lot (e.g. L12)"));
+    }
+    if request
+        .cost
+        .is_some_and(|c| !c.is_finite() || !(0.0..=MAX_LOT_COST).contains(&c))
+    {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_cost",
+            "A lot cost must be between 0 and 1,000,000 €",
+        ));
+    }
+    let (id, username) = (user.id, user.username.clone());
+    let today = local_date(chrono::Utc::now().timestamp())
+        .format("%Y-%m-%d")
+        .to_string();
+    let target = lot.clone();
+    let outcome = state
+        .db
+        .write(move |conn| {
+            in_transaction(conn, |tx| {
+                if !lot_known_conn(tx, &target)? {
+                    return Ok(Err(CostRefusal::Unknown));
+                }
+                let before = lot_cost_conn(tx, &target)?;
+                if !same(before, request.expected) {
+                    return Ok(Err(CostRefusal::Changed(before)));
+                }
+                match request.cost {
+                    Some(cost) => set_lot_cost_conn(tx, &target, cost, &today)?,
+                    None => delete_lot_cost_conn(tx, &target)?,
+                }
+                crate::audit::record(
+                    tx,
+                    chrono::Utc::now(),
+                    crate::audit::Actor::User {
+                        id,
+                        username: &username,
+                    },
+                    crate::audit::action::LOT_COST_CHANGED,
+                    Some(&target),
+                    serde_json::json!({ "before": before, "after": request.cost }),
+                )?;
+                Ok::<_, crate::users::StoreError>(Ok(request.cost))
+            })
+        })
+        .await??;
+    match outcome {
+        Ok(cost) => Ok(Json(LotCostView { lot, cost })),
+        Err(CostRefusal::Unknown) => Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "unknown_lot",
+            "The data has no such purchase lot",
+        )),
+        Err(CostRefusal::Changed(now)) => Err(ApiError::conflict(
+            "changed",
+            match now {
+                Some(cost) => format!("Someone changed this lot's cost meanwhile (now {cost:.2} €); check and save again"),
+                None => "Someone removed this lot's cost meanwhile; check and save again".to_string(),
+            },
+        )),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, TS)]

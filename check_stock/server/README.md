@@ -10,8 +10,9 @@ fine-grained permissions, audit log, and the [web UI](../web/) built into the
 binary); ported screens: the singles listing (2a), the buy helper (2b),
 precon EV (2c), the reports restock (3a), price movers (3b),
 mispricing (3c), stock analysis (3d) and bin analysis with move lists (3e),
-the inventory import with the start page's digest (4a), and Search with
-discards, the Stock Checker and Picking (4b).
+the inventory import with the start page's digest (4a), Search with
+discards, the Stock Checker and Picking (4b), and lot-cost editing and Bulk
+Lots (4c).
 
 ## Try it locally
 
@@ -123,6 +124,15 @@ standard input; passwords are never command-line arguments.
 | `POST /api/stock-checker/output` | Stock Checker | `{format: picking/invoice/summary, discount, groups}`: the text, built from the server's data for the chosen piles |
 | `POST /api/stock-checker/update-csv` | Stock Checker | `{items}`: stock-update CSV with negative quantities from the current stock (refused when a pile is gone or too small) |
 | `GET` / `POST` / `DELETE /api/picking`, `PUT /api/picking/picked`, `GET /api/picking/image/{set}/{number}` | Stock Checker | the user's picking list (shelf order, `outdated` after an import or discard), ticks, card images |
+| `PUT /api/lot-costs/{lot}` | Edit lot costs | `{cost, expected}`: records (`null` removes) a purchase lot's cost; refused (409 `changed`) when it is no longer the cost the page showed; only lots the data knows (404), 0–1,000,000 € |
+| `GET /api/bulk-lots/options` | Build bulk lots | default rules, presets, conditions, the stock's languages, limits |
+| `POST /api/bulk-lots/preview` | Build bulk lots | `{spec}` → the lot the rules give now: lines (piles), summary, funnel with the limiting rule, card types still to look up |
+| `POST /api/bulk-lots/types/load`, `GET /api/bulk-lots/types/status` | Build bulk lots | looks the needed card types up on Scryfall (cards of the stock only; batches of 75, 600 ms apart; shared job, cached in the data folder) |
+| `GET` / `POST` / `DELETE /api/bulk-lots/draft`, `PUT …/draft/picked`, `POST …/draft/replace` | Build bulk lots | the user's lot in progress (rules, piles, picked ticks; `free` per line shows copies another lot or a discard took); "Replace" swaps a pile for the next matching one |
+| `GET /api/bulk-lots`, `GET /api/bulk-lots/{id}/cards`, `GET /api/bulk-lots/image/{set}/{number}` | Build bulk lots | recorded lots (price and listed value only with Finish or Manage), their cards, card images |
+| `POST /api/bulk-lots/finish` | Finish bulk lots | `{name, price}`: re-checks that every picked copy is still free (409 `taken`), takes a backup, records the lot (revenue, reserved copies) with its kept CSV and an audit entry |
+| `GET /api/bulk-lots/{id}/csv` | Finish bulk lots | the lot's TCG Powertools CSV (negative quantities, exact values) |
+| `PUT /api/bulk-lots/{id}/price`, `POST /api/bulk-lots/{id}/removed`, `POST /api/bulk-lots/{id}/undo` | Manage bulk lots | price correction (`expected` checked), removal declared done, undo (`confirm_removed` = copies an import already took out, when there are any); backups before removal and undo |
 | `GET /api/bins/image/{set}/{number}` | Bin moves | card images for the move list (same rules and cache as the singles listing's) |
 | `GET /api/inventory/imports` | Import inventory | the last 20 changes of the inventory data (import, forced import, restore, desktop copy) with who, when and the numbers |
 | `GET /api/restock?min_copies=&sort=&desc=` | View reports | sold-out variants ranked by sell-through speed (first 300; `total`, `copies`); `realized_revenue` / `revenue` only with "View revenue and costs", and `sort=revenue` is refused (403) without it |
@@ -229,6 +239,18 @@ files are out of date.
   still holds them is blocked by the import check (`returning_discards`,
   typed number to override): it was downloaded before the CSV went into
   Cardmarket. The CSV of the newest 20 can be downloaded again.
+- **Lot costs**: each change logged with before and after; a save is
+  refused when the cost is no longer the one the page showed.
+- **Bulk lots** (`src/bulk.rs`, owner-confirmed): finishing re-checks on the
+  writer that every picked copy is still free (another lot, a discard) and
+  refuses (the page then offers "Replace"); a backup
+  before finishing, marking a removal done and undoing (`inventory.db.bulklot-
+  <time>.bak`, newest 10; no backup, no change); undoing a lot an import
+  already took copies of needs their number typed in; price corrections are
+  checked against the price shown and logged; lot prices only for users who
+  finish or manage lots; every change counts as a data change (banner, open
+  import checks redone). Discards refuse copies reserved for a lot. Card
+  types from Scryfall for cards of the stock only, cached in the data folder.
 - **Stock Checker**: no deck links (owner's decision, 2026-11-15: the server
   never fetches a page a user names); wantslists at most 256 KB / 2,000
   lines, quantities up to 10,000, never stored.
@@ -254,7 +276,8 @@ files are out of date.
   password changes, every user change with its before/after, desktop copies,
   inventory imports (file name, fingerprint, numbers, backup), forced
   imports and restores, discards with every pile, move lists made and
-  discarded, picking lists made (ticks are work state and not logged). Written in the same transaction as the change.
+  discarded, picking lists made, lot-cost changes, bulk lots recorded,
+  corrected, marked removed and undone (ticks are work state and not logged). Written in the same transaction as the change.
 - **One process per data folder.** `serve`, `import-desktop`, `create-admin`,
   `reset-password` and `restore-inventory` hold an OS file lock on
   `<data-dir>/.lock`.

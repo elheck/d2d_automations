@@ -184,6 +184,22 @@ pub(super) fn record_bulk_lot_conn(
     category: &str,
     today: &str,
 ) -> DbResult<i64> {
+    let tx = conn.transaction()?;
+    let lot_id = record_bulk_lot_in_tx(&tx, name, price, cards, category, today)?;
+    tx.commit()?;
+    Ok(lot_id)
+}
+
+/// [`InventoryDb::record_bulk_lot`] inside the caller's transaction (the
+/// server checks availability first and records more in it).
+pub fn record_bulk_lot_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    name: &str,
+    price: f64,
+    cards: &[(Card, i64)],
+    category: &str,
+    today: &str,
+) -> DbResult<i64> {
     let name = validated_name(name)?;
     validate_price(price)?;
     if cards.is_empty() {
@@ -202,7 +218,6 @@ pub(super) fn record_bulk_lot_conn(
         )));
     }
 
-    let tx = conn.transaction()?;
     tx.execute(
         "INSERT INTO bulk_lots (name, created_at, price) VALUES (?1, ?2, ?3)",
         params![name, today, price],
@@ -236,7 +251,6 @@ pub(super) fn record_bulk_lot_conn(
             ])?;
         }
     }
-    tx.commit()?;
     log::info!("Bulk lot #{lot_id} '{name}' recorded: {total} copies for €{price:.2}");
     Ok(lot_id)
 }
@@ -249,7 +263,7 @@ impl InventoryDb {
     }
 }
 
-pub(super) fn list_bulk_lots_conn(conn: &Connection) -> DbResult<Vec<BulkLotSummary>> {
+pub fn list_bulk_lots_conn(conn: &Connection) -> DbResult<Vec<BulkLotSummary>> {
     conn.prepare(
         "SELECT l.id, l.name, l.created_at, l.price,
                 COALESCE(SUM(c.copies), 0),
@@ -282,7 +296,7 @@ impl InventoryDb {
     }
 }
 
-pub(super) fn bulk_lot_cards_conn(conn: &Connection, lot_id: i64) -> DbResult<Vec<BulkLotCard>> {
+pub fn bulk_lot_cards_conn(conn: &Connection, lot_id: i64) -> DbResult<Vec<BulkLotCard>> {
     conn.prepare(
         "SELECT name, set_name, rarity, condition, language, foil, location, purchase_lot,
                 copies, pending_copies, listed_price
@@ -316,7 +330,7 @@ impl InventoryDb {
     }
 }
 
-pub(super) fn set_bulk_lot_price_conn(conn: &Connection, lot_id: i64, price: f64) -> DbResult<()> {
+pub fn set_bulk_lot_price_conn(conn: &Connection, lot_id: i64, price: f64) -> DbResult<()> {
     validate_price(price)?;
     match conn.execute(
         "UPDATE bulk_lots SET price = ?1 WHERE id = ?2",
@@ -337,7 +351,7 @@ impl InventoryDb {
     }
 }
 
-pub(super) fn mark_bulk_lot_removed_conn(conn: &Connection, lot_id: i64) -> DbResult<()> {
+pub fn mark_bulk_lot_removed_conn(conn: &Connection, lot_id: i64) -> DbResult<()> {
     conn.execute(
         "UPDATE bulk_lot_cards SET pending_copies = 0 WHERE bulk_lot_id = ?1",
         params![lot_id],
@@ -356,6 +370,14 @@ impl InventoryDb {
 
 pub(super) fn delete_bulk_lot_conn(conn: &mut Connection, lot_id: i64) -> DbResult<()> {
     let tx = conn.transaction()?;
+    delete_bulk_lot_in_tx(&tx, lot_id)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Deletes a lot inside the caller's transaction (see
+/// [`InventoryDb::delete_bulk_lot`]).
+pub fn delete_bulk_lot_in_tx(tx: &rusqlite::Transaction<'_>, lot_id: i64) -> DbResult<()> {
     tx.execute(
         "DELETE FROM bulk_lot_cards WHERE bulk_lot_id = ?1",
         params![lot_id],
@@ -364,7 +386,6 @@ pub(super) fn delete_bulk_lot_conn(conn: &mut Connection, lot_id: i64) -> DbResu
     if deleted == 0 {
         return Err(rusqlite::Error::QueryReturnedNoRows);
     }
-    tx.commit()?;
     log::info!("Bulk lot #{lot_id} deleted");
     Ok(())
 }
@@ -377,10 +398,7 @@ impl InventoryDb {
     }
 }
 
-pub(super) fn pending_removals_conn(
-    conn: &Connection,
-    category: &str,
-) -> DbResult<Vec<PendingRemoval>> {
+pub fn pending_removals_conn(conn: &Connection, category: &str) -> DbResult<Vec<PendingRemoval>> {
     conn.prepare(
         "SELECT id, bulk_lot_id, cardmarket_id, condition, language, is_foil, is_signed,
                 purchase_lot, location, pending_copies
@@ -418,10 +436,7 @@ impl InventoryDb {
     }
 }
 
-pub(super) fn listing_dates_conn(
-    conn: &Connection,
-    category: &str,
-) -> DbResult<HashMap<String, String>> {
+pub fn listing_dates_conn(conn: &Connection, category: &str) -> DbResult<HashMap<String, String>> {
     conn.prepare(
         "SELECT cardmarket_id, condition, language, is_foil, is_signed,
                 COALESCE(NULLIF(listed_at, ''), first_synced_at)

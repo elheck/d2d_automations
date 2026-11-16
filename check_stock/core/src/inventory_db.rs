@@ -27,8 +27,10 @@ use std::path::{Path, PathBuf};
 mod bulk_lots;
 use bulk_lots::RemovalPlan;
 pub use bulk_lots::{
-    per_card_share, BulkLotCard, BulkLotSummary, BulkLotTotals, PendingRemoval, MAX_LOT_COPIES,
-    MAX_LOT_NAME_CHARS, MAX_LOT_PRICE_EUR,
+    bulk_lot_cards_conn, delete_bulk_lot_in_tx, list_bulk_lots_conn, listing_dates_conn,
+    mark_bulk_lot_removed_conn, pending_removals_conn, per_card_share, record_bulk_lot_in_tx,
+    set_bulk_lot_price_conn, BulkLotCard, BulkLotSummary, BulkLotTotals, PendingRemoval,
+    MAX_LOT_COPIES, MAX_LOT_NAME_CHARS, MAX_LOT_PRICE_EUR,
 };
 
 /// Article key of an inventory CSV row's variant, exactly as the sync keys it
@@ -1718,8 +1720,35 @@ impl InventoryDb {
     }
 }
 
-/// Inner delete that accepts an explicit connection — used in tests.
-fn delete_lot_cost_conn(conn: &Connection, lot: &str) -> DbResult<()> {
+/// The recorded acquisition cost of `lot`, if any.
+pub fn lot_cost_conn(conn: &Connection, lot: &str) -> DbResult<Option<f64>> {
+    conn.query_row("SELECT cost FROM lot_costs WHERE lot = ?1", [lot], |r| {
+        r.get(0)
+    })
+    .optional()
+}
+
+/// Whether `lot` is a purchase lot the data knows: it held stock at some
+/// point (`lot_stock`) or already has a cost.
+pub fn lot_known_conn(conn: &Connection, lot: &str) -> DbResult<bool> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM lot_stock WHERE lot = ?1)
+             OR EXISTS (SELECT 1 FROM lot_costs WHERE lot = ?1)",
+        [lot],
+        |r| r.get(0),
+    )
+}
+
+/// Whether `lot` has the form of a purchase lot id (`L12`).
+pub fn is_lot_id(lot: &str) -> bool {
+    lot.len() > 1
+        && lot.len() <= 12
+        && lot.starts_with('L')
+        && lot[1..].bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Removes the recorded acquisition cost for a lot, if any.
+pub fn delete_lot_cost_conn(conn: &Connection, lot: &str) -> DbResult<()> {
     conn.execute("DELETE FROM lot_costs WHERE lot = ?1", params![lot])?;
     Ok(())
 }

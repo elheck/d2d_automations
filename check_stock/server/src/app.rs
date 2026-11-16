@@ -1,6 +1,7 @@
 //! Starting and stopping the server.
 
 use crate::bins::BinsService;
+use crate::bulk::BulkService;
 use crate::cards::CardLookup;
 use crate::client_ip::TrustedProxies;
 use crate::config::{HostAllowlist, ServeConfig};
@@ -44,6 +45,8 @@ pub struct AppState {
     pub stock: Arc<StockService>,
     /// The plans of the bin analysis (shared).
     pub bins: Arc<BinsService>,
+    /// Bulk lots: card-type cache and lookup job (shared).
+    pub bulk: Arc<BulkService>,
 }
 
 impl AppState {
@@ -60,6 +63,7 @@ impl AppState {
         let cache_root = crate::config::cache_root_in(&data_dir);
         let cards = CardLookup::new(&cache_root);
         let precon = PreconService::new(&cache_root, None, MtgjsonClient::default());
+        let bulk = BulkService::new(&cache_root);
         Ok(Self {
             db,
             allowed_hosts: Arc::new(allowed_hosts),
@@ -73,6 +77,7 @@ impl AppState {
             cache_root: Arc::new(cache_root),
             stock: Arc::new(StockService::default()),
             bins: Arc::new(BinsService::default()),
+            bulk: Arc::new(bulk),
         })
     }
 
@@ -99,6 +104,12 @@ impl AppState {
     /// Uses `market` for the market data (tests: a fake tracker).
     pub fn with_market(mut self, market: MarketService) -> Self {
         self.market = Arc::new(market);
+        self
+    }
+
+    /// Uses `bulk` for bulk lots (tests: a fake Scryfall).
+    pub fn with_bulk(mut self, bulk: BulkService) -> Self {
+        self.bulk = Arc::new(bulk);
         self
     }
 
@@ -209,11 +220,16 @@ where
         config.allowed_hosts.hosts().join(", ")
     );
     on_ready(addr);
-    let (precon, market) = (state.precon.clone(), state.market.clone());
+    let (precon, market, bulk) = (
+        state.precon.clone(),
+        state.market.clone(),
+        state.bulk.clone(),
+    );
     serve(listener, http::router(state), shutdown).await?;
     // Background jobs stop at their next check; `main` waits only briefly.
     precon.shutdown();
     market.shutdown();
+    bulk.shutdown();
     log::info!("Stopped");
     Ok(())
 }

@@ -25,6 +25,11 @@ export const ACTION_LABELS: Record<string, string> = {
   "bins.list_created": "Bin move list made",
   "bins.list_discarded": "Bin move list discarded",
   "picking.created": "Picking list made",
+  "lot_cost.changed": "Lot cost changed",
+  "bulk_lot.finished": "Bulk lot recorded",
+  "bulk_lot.price_changed": "Bulk lot price corrected",
+  "bulk_lot.marked_removed": "Bulk lot removal marked done",
+  "bulk_lot.undone": "Bulk lot undone",
 };
 
 /** Why a login failed, in words. */

@@ -635,6 +635,9 @@ pub fn record_replaced_data(
     }
     conn.execute("DELETE FROM srv_pending_imports", [])?;
     crate::discards::settle(conn, now)?;
+    // The bulk lots now come from the new data: their kept CSVs may not
+    // belong to the lots with the same numbers any more.
+    conn.execute("DELETE FROM srv_bulk_lot_csvs", [])?;
     if !keep_files {
         conn.execute("DELETE FROM srv_inventory_files", [])?;
     }
@@ -642,8 +645,8 @@ pub fn record_replaced_data(
 }
 
 /// The data version (0 before the first change) and when it last changed:
-/// it grows with every import, restore, desktop copy (version rows) and
-/// discard, so open pages notice each of them.
+/// it grows with every import, restore, desktop copy (version rows),
+/// discard and bulk-lot change, so open pages notice each of them.
 pub fn latest_version(conn: &Connection) -> rusqlite::Result<(i64, Option<String>)> {
     let (version, version_at) = conn
         .query_row(
@@ -654,8 +657,19 @@ pub fn latest_version(conn: &Connection) -> rusqlite::Result<(i64, Option<String
         .optional()?
         .unwrap_or((0, None));
     let (discard, discard_at) = crate::discards::latest_id(conn)?;
-    // Both are RFC 3339 UTC strings: the later one sorts last.
-    Ok((version + discard, version_at.max(discard_at)))
+    let (change, change_at) = conn
+        .query_row(
+            "SELECT id, at FROM srv_data_changes ORDER BY id DESC LIMIT 1",
+            [],
+            |r| Ok((r.get::<_, i64>(0)?, Some(r.get::<_, String>(1)?))),
+        )
+        .optional()?
+        .unwrap_or((0, None));
+    // All are RFC 3339 UTC strings: the latest one sorts last.
+    Ok((
+        version + discard + change,
+        version_at.max(discard_at).max(change_at),
+    ))
 }
 
 #[cfg(test)]

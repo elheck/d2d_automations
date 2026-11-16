@@ -84,6 +84,14 @@ export const catalog: PermissionInfo[] = [
     requires: ["repricing.view"],
   },
   {
+    key: "lot_costs.edit",
+    label: "Edit lot costs",
+    description: "Enter and correct what a purchase lot cost.",
+    group: "reports",
+    group_label: "Reports and money",
+    requires: ["financials.view"],
+  },
+  {
     key: "analysis.view",
     label: "View reports",
     description: "See stock analysis, aging, bin analysis, restock and price movers.",
@@ -106,6 +114,31 @@ export const catalog: PermissionInfo[] = [
     group: "reports",
     group_label: "Reports and money",
     requires: [],
+  },
+  {
+    key: "bulk_lot.build",
+    label: "Build bulk lots",
+    description: "Choose cards for a bulk lot and pick them from the shelves.",
+    group: "bulk_lots",
+    group_label: "Bulk lots",
+    requires: [],
+  },
+  {
+    key: "bulk_lot.finish",
+    label: "Finish bulk lots",
+    description:
+      "Record a bulk lot with its price and export its stock-update CSV. This reserves the cards and books the lot's revenue.",
+    group: "bulk_lots",
+    group_label: "Bulk lots",
+    requires: ["bulk_lot.build"],
+  },
+  {
+    key: "bulk_lot.manage",
+    label: "Manage bulk lots",
+    description: "Correct the price of recorded bulk lots, mark their removal as done, or undo a lot.",
+    group: "bulk_lots",
+    group_label: "Bulk lots",
+    requires: ["bulk_lot.build"],
   },
   {
     key: "precon_ev.use",

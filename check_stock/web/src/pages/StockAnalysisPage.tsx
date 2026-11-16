@@ -1,11 +1,11 @@
 // Stock analysis: what is in stock, how fast it sells, how long it has been
 // sitting and how each purchase lot is doing. Money figures (values,
 // revenue, costs, margins) only appear for users allowed to see them — the
-// server leaves them out otherwise. Lot costs are still entered in the
-// desktop app (editing them moves here with the writing workflows).
+// server leaves them out otherwise. Users who may edit lot costs click a
+// lot's cost to enter or correct it.
 
 import { useState } from "react";
-import { useStockAnalysis } from "../api/queries";
+import { can, useMe, useSetLotCost, useStockAnalysis } from "../api/queries";
 import type { LotRow, NamedCount, StockAnalysisView } from "../api/types";
 import { DataAsOf } from "../components/DataAsOf";
 import { ErrorMessage } from "../components/ErrorMessage";
@@ -187,8 +187,8 @@ function Analysis({ data }: { data: StockAnalysisView }) {
         <section>
           <h2>Most copies</h2>
           <ol className="top-list">
-            {data.top_by_quantity.map((t) => (
-              <li key={t.name}>
+            {data.top_by_quantity.map((t, i) => (
+              <li key={`${i}-${t.name}`}>
                 <span>{t.name}</span>
                 <span className="num">×{formatCount(t.count)}</span>
               </li>
@@ -198,8 +198,8 @@ function Analysis({ data }: { data: StockAnalysisView }) {
         <section>
           <h2>Most expensive</h2>
           <ol className="top-list">
-            {data.top_by_price.map((t) => (
-              <li key={t.name}>
+            {data.top_by_price.map((t, i) => (
+              <li key={`${i}-${t.name}`}>
                 <span>{t.name}</span>
                 <span className="num">{formatEuro(t.price)}</span>
               </li>
@@ -263,7 +263,73 @@ function Analysis({ data }: { data: StockAnalysisView }) {
   );
 }
 
+/** `"12,50"` / `"12.5"` → 12.5; empty → `null` (no cost); otherwise `undefined`. */
+export function parseCost(text: string): number | null | undefined {
+  const t = text.trim().replace(",", ".");
+  if (t === "") return null;
+  if (!/^\d{1,7}(\.\d{1,2})?$/.test(t)) return undefined;
+  const value = Number(t);
+  return value <= 1_000_000 ? value : undefined;
+}
+
+/** The cost cell: a button that opens a small editor. */
+function CostCell({ lot }: { lot: LotRow }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState("");
+  const save = useSetLotCost();
+  const parsed = parseCost(text);
+  if (!editing) {
+    return (
+      <td className="num">
+        <button
+          type="button"
+          className="link-button"
+          onClick={() => {
+            setText(lot.cost === null ? "" : lot.cost.toFixed(2));
+            save.reset();
+            setEditing(true);
+          }}
+          aria-label={`Edit the cost of ${lot.lot}`}
+        >
+          {formatEuro(lot.cost)}
+        </button>
+      </td>
+    );
+  }
+  return (
+    <td className="num">
+      <form
+        className="cost-editor"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (parsed === undefined) return;
+          save.mutate({ lot: lot.lot, cost: parsed, expected: lot.cost }, { onSuccess: () => setEditing(false) });
+        }}
+      >
+        <input
+          className="number-field__input"
+          inputMode="decimal"
+          value={text}
+          aria-label={`Cost of ${lot.lot} in euros (empty: none)`}
+          aria-invalid={parsed === undefined}
+          onChange={(e) => setText(e.target.value)}
+          autoFocus
+        />
+        <button type="submit" className="button button--small" disabled={parsed === undefined || save.isPending}>
+          Save
+        </button>
+        <button type="button" className="button button--ghost button--small" onClick={() => setEditing(false)}>
+          Cancel
+        </button>
+        <ErrorMessage error={save.error} />
+      </form>
+    </td>
+  );
+}
+
 function Lots({ data }: { data: StockAnalysisView }) {
+  const { data: me } = useMe();
+  const mayEdit = data.money && can(me, "lot_costs.edit");
   const [order, setOrder] = useState<{ column: LotColumn; desc: boolean }>({ column: "lot", desc: false });
   const columns = LOT_COLUMNS.filter((c) => data.money || !c.money);
   const rows = sortLots(data.lots, order.column, order.desc);
@@ -273,7 +339,9 @@ function Lots({ data }: { data: StockAnalysisView }) {
       <h2>Purchase lots</h2>
       <p className="muted">
         {data.money
-          ? "Lot costs are entered in the desktop app for now. The margin counts only money already earned."
+          ? mayEdit
+            ? "Click a lot's cost to enter or correct it. The margin counts only money already earned."
+            : "The margin counts only money already earned."
           : "Values, revenue, costs and margins need the permission “View revenue and costs”."}
       </p>
       <div className="table-wrap">
@@ -329,7 +397,7 @@ function Lots({ data }: { data: StockAnalysisView }) {
                       <td className="num" title={bulkNote}>
                         {formatEuro(l.sold_revenue)}
                       </td>
-                      <td className="num">{formatEuro(l.cost)}</td>
+                      {mayEdit ? <CostCell lot={l} /> : <td className="num">{formatEuro(l.cost)}</td>}
                       <td
                         className={
                           l.margin === null ? "num muted" : l.margin >= 0 ? "num change--up" : "num change--down"

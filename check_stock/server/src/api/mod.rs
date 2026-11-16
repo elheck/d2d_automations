@@ -13,6 +13,7 @@
 mod audit_log;
 mod auth;
 mod bins;
+mod bulk_lots;
 mod buy_helper;
 mod home;
 mod inventory;
@@ -159,6 +160,7 @@ fn api(state: AppState) -> Api {
     let api = search::routes(api);
     let api = stock_checker::routes(api);
     let api = picking::routes(api);
+    let api = bulk_lots::routes(api);
     home::routes(api)
 }
 

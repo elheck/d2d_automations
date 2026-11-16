@@ -5,6 +5,20 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClie
 import { api, ApiError, download } from "./client";
 import type {
   AuditPage,
+  BulkLotCardView,
+  JobStatus,
+  BulkLotView,
+  BulkOptions,
+  BulkPreview,
+  DraftPickedResult,
+  DraftView,
+  FinishRequest,
+  FinishResult,
+  ManageResult,
+  ReplaceResult,
+  SpecView,
+  LotCostRequest,
+  LotCostView,
   OutputRequest,
   OutputText,
   PickedResult,
@@ -90,6 +104,12 @@ export const keys = {
   cardHistory: ["card-history"] as const,
   discards: ["discards"] as const,
   picking: ["picking"] as const,
+  bulkOptions: ["bulk-options"] as const,
+  bulkPreview: ["bulk-preview"] as const,
+  bulkTypes: ["bulk-types"] as const,
+  bulkDraft: ["bulk-draft"] as const,
+  bulkHistory: ["bulk-history"] as const,
+  bulkCards: ["bulk-cards"] as const,
   digest: ["digest"] as const,
 };
 
@@ -829,4 +849,153 @@ export function useDiscardPicking() {
     mutationFn: () => api.delete<void>("/api/picking"),
     onSuccess: () => queryClient.setQueryData(keys.picking, null),
   });
+}
+
+/** Records, changes or removes (`cost: null`) a purchase lot's cost. */
+export function useSetLotCost() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ lot, ...request }: LotCostRequest & { lot: string }) =>
+      api.put<LotCostView>(`/api/lot-costs/${encodeURIComponent(lot)}`, request),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: keys.stockAnalysis }),
+  });
+}
+
+// ── Bulk lots ───────────────────────────────────────────────────────────────
+
+export function useBulkOptions() {
+  return useQuery({ queryKey: keys.bulkOptions, queryFn: () => api.get<BulkOptions>("/api/bulk-lots/options") });
+}
+
+/** The lot the rules would give now (null spec: wait). */
+export function useBulkPreview(spec: SpecView | null) {
+  return useQuery({
+    queryKey: [...keys.bulkPreview, spec],
+    queryFn: () => {
+      if (!spec) throw new Error("no spec");
+      return api.post<BulkPreview>("/api/bulk-lots/preview", { spec });
+    },
+    enabled: spec !== null,
+    placeholderData: (previous) => previous,
+    retry: false,
+  });
+}
+
+/** The card-type lookup job; polled while it runs. */
+export function useBulkTypes() {
+  return useQuery({
+    queryKey: keys.bulkTypes,
+    queryFn: () => api.get<JobStatus>("/api/bulk-lots/types/status"),
+    refetchInterval: (query) => (query.state.data?.state === "running" ? PRECON_POLL_MS : false),
+  });
+}
+
+export function useLoadBulkTypes() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (spec: SpecView) => api.post<JobStatus>("/api/bulk-lots/types/load", { spec }),
+    onSuccess: (status) => queryClient.setQueryData(keys.bulkTypes, status),
+  });
+}
+
+export function useBulkDraft() {
+  return useQuery({ queryKey: keys.bulkDraft, queryFn: () => api.get<DraftView | null>("/api/bulk-lots/draft") });
+}
+
+export function useMakeBulkDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (spec: SpecView) => api.post<DraftView>("/api/bulk-lots/draft", { spec }),
+    onSuccess: (draft) => queryClient.setQueryData(keys.bulkDraft, draft),
+  });
+}
+
+/** Ticks picked cards at once; a refusal puts the old state back. */
+export function useBulkPicked() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: { piles: string[]; picked: boolean }) =>
+      api.put<DraftPickedResult>("/api/bulk-lots/draft/picked", request),
+    onMutate: async ({ piles, picked }) => {
+      await queryClient.cancelQueries({ queryKey: keys.bulkDraft });
+      const before = queryClient.getQueryData<DraftView | null>(keys.bulkDraft);
+      if (before) {
+        const changed = new Set(piles);
+        queryClient.setQueryData<DraftView>(keys.bulkDraft, {
+          ...before,
+          lines: before.lines.map((l) => (changed.has(l.pile) ? { ...l, picked } : l)),
+        });
+      }
+      return { before };
+    },
+    onError: (_error, _request, context) => {
+      if (context?.before !== undefined) queryClient.setQueryData(keys.bulkDraft, context.before);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: keys.bulkDraft }),
+  });
+}
+
+export function useReplaceBulkPile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (pile: string) => api.post<ReplaceResult>("/api/bulk-lots/draft/replace", { pile }),
+    onSuccess: (result) => queryClient.setQueryData(keys.bulkDraft, result.draft),
+  });
+}
+
+export function useDropBulkDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.delete<void>("/api/bulk-lots/draft"),
+    onSuccess: () => queryClient.setQueryData(keys.bulkDraft, null),
+  });
+}
+
+export function useFinishBulkLot() {
+  return useMutation({
+    mutationFn: (request: FinishRequest) => api.post<FinishResult>("/api/bulk-lots/finish", request),
+  });
+}
+
+export function useBulkHistory() {
+  return useQuery({ queryKey: keys.bulkHistory, queryFn: () => api.get<BulkLotView[]>("/api/bulk-lots") });
+}
+
+export function useBulkLotCards(id: number | null) {
+  return useQuery({
+    queryKey: [...keys.bulkCards, id],
+    queryFn: () => api.get<BulkLotCardView[]>(`/api/bulk-lots/${id}/cards`),
+    enabled: id !== null,
+  });
+}
+
+/** Price correction, removal by hand and undo of recorded lots. */
+export function useManageBulkLot() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (
+      op:
+        | { id: number; kind: "price"; price: number; expected: number }
+        | { id: number; kind: "removed" }
+        | { id: number; kind: "undo"; confirm?: string },
+    ) => {
+      switch (op.kind) {
+        case "price":
+          return api.put<ManageResult>(`/api/bulk-lots/${op.id}/price`, { price: op.price, expected: op.expected });
+        case "removed":
+          return api.post<ManageResult>(`/api/bulk-lots/${op.id}/removed`);
+        case "undo":
+          return api.post<ManageResult>(
+            `/api/bulk-lots/${op.id}/undo`,
+            op.confirm === undefined ? {} : { confirm_removed: op.confirm },
+          );
+      }
+    },
+    onSettled: () => queryClient.invalidateQueries(),
+  });
+}
+
+/** The TCG Powertools CSV of lot `id`. */
+export function downloadBulkCsv(id: number) {
+  return download(`/api/bulk-lots/${id}/csv`, undefined, `bulk_lot_${id}.csv`);
 }

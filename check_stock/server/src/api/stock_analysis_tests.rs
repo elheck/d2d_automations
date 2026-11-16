@@ -125,3 +125,125 @@ async fn an_empty_database_is_fine() {
     assert_eq!(body["lots"].as_array().unwrap().len(), 0);
     assert_eq!(body["velocity"], Value::Null);
 }
+
+async fn put_cost(app: &TestApp, cookie: &str, lot: &str, body: Value) -> (StatusCode, Value) {
+    let (status, _, body) = send(
+        &app.router(),
+        request(
+            Method::PUT,
+            &format!("/api/lot-costs/{lot}"),
+            Some(body),
+            Some(cookie),
+        ),
+    )
+    .await;
+    (status, body)
+}
+
+#[tokio::test]
+async fn lot_costs_are_edited_with_a_check_against_overwriting() {
+    let app = TestApp::new();
+    inventory(&app).await;
+    app.add_user(
+        "owner",
+        &["analysis.view", "financials.view", "lot_costs.edit"],
+    )
+    .await;
+    let cookie = login_ok(&app.router(), "owner", PASSWORD).await;
+
+    let (status, body) = put_cost(
+        &app,
+        &cookie,
+        "L2",
+        serde_json::json!({ "cost": 12.5, "expected": 10.0 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["cost"], 12.5);
+    // A stale page (it still shows 10.00) is refused, not overwritten.
+    let (status, body) = put_cost(
+        &app,
+        &cookie,
+        "L2",
+        serde_json::json!({ "cost": 99.0, "expected": 10.0 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "changed");
+    assert!(body["error"]["message"].as_str().unwrap().contains("12.50"));
+    // Clearing.
+    let (status, body) = put_cost(
+        &app,
+        &cookie,
+        "L2",
+        serde_json::json!({ "cost": null, "expected": 12.5 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["cost"], Value::Null);
+    let (_, view) = get_as(&app, "owner2", &["analysis.view", "financials.view"]).await;
+    assert_eq!(view["lots"][0]["cost"], Value::Null);
+
+    let actions = app.audit_actions().await;
+    let changes: Vec<&(String, String, Value)> = actions
+        .iter()
+        .filter(|a| a.0 == "lot_cost.changed")
+        .collect();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[1].2["before"], 10.0);
+    assert_eq!(changes[1].2["after"], 12.5);
+    assert_eq!(changes[0].2["after"], Value::Null);
+}
+
+#[tokio::test]
+async fn lot_costs_must_be_valid_and_for_known_lots() {
+    let app = TestApp::new();
+    inventory(&app).await;
+    app.add_user(
+        "owner",
+        &["analysis.view", "financials.view", "lot_costs.edit"],
+    )
+    .await;
+    let cookie = login_ok(&app.router(), "owner", PASSWORD).await;
+    for (lot, cost, status) in [
+        (
+            "L2",
+            serde_json::json!(-1.0),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "L2",
+            serde_json::json!(1_000_000.01),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        ("L99", serde_json::json!(5.0), StatusCode::NOT_FOUND),
+        ("X1", serde_json::json!(5.0), StatusCode::BAD_REQUEST),
+    ] {
+        let (got, body) = put_cost(
+            &app,
+            &cookie,
+            lot,
+            serde_json::json!({ "cost": cost, "expected": 10.0 }),
+        )
+        .await;
+        assert_eq!(got, status, "{lot} {cost}: {body}");
+    }
+    let (status, _) = put_cost(&app, &cookie, "L2", serde_json::json!({ "cost": 5.0 })).await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "no `expected` means no cost seen: refused, L2 has one"
+    );
+    // Analysts with the money view but without the edit permission: refused.
+    app.add_user("viewer", &["analysis.view", "financials.view"])
+        .await;
+    let viewer = login_ok(&app.router(), "viewer", PASSWORD).await;
+    let (status, _) = put_cost(
+        &app,
+        &viewer,
+        "L2",
+        serde_json::json!({ "cost": 5.0, "expected": 10.0 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}

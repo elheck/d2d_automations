@@ -3336,3 +3336,27 @@ fn digest_since_reads_without_recording_a_visit() {
     assert_eq!(none.last_sync.as_deref(), Some("2026-01-03"));
     assert_eq!(get_meta(&conn, "last_visit").unwrap(), None);
 }
+
+#[test]
+fn lot_costs_are_read_known_and_cleared() {
+    let mut conn = test_conn();
+    let mut card = make_card("1", "Alpha", "2");
+    card.location = Some("A-0-0-1-L7-R".to_string());
+    sync_inventory_conn(&mut conn, &[card], "2026-01-01").unwrap();
+    assert!(lot_known_conn(&conn, "L7").unwrap());
+    assert!(!lot_known_conn(&conn, "L8").unwrap());
+    assert_eq!(lot_cost_conn(&conn, "L7").unwrap(), None);
+    set_lot_cost_conn(&conn, "L7", 12.5, "2026-01-02").unwrap();
+    assert_eq!(lot_cost_conn(&conn, "L7").unwrap(), Some(12.5));
+    delete_lot_cost_conn(&conn, "L7").unwrap();
+    assert_eq!(lot_cost_conn(&conn, "L7").unwrap(), None);
+    // A cost alone makes a lot known.
+    set_lot_cost_conn(&conn, "L9", 1.0, "2026-01-02").unwrap();
+    assert!(lot_known_conn(&conn, "L9").unwrap());
+    for ok in ["L1", "L12", "L12345678901"] {
+        assert!(is_lot_id(ok), "{ok}");
+    }
+    for bad in ["", "L", "l1", "L1a", "X12", "L-1", "L123456789012"] {
+        assert!(!is_lot_id(bad), "{bad}");
+    }
+}
