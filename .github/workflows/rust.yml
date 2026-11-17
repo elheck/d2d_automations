@@ -419,6 +419,9 @@ jobs:
         docker run --rm inventory_sync:latest --help || true
         echo "✅ Production image built successfully"
 
+    # Images are what gets deployed: only pushes to main publish one (never
+    # pull requests or other branches; this workflow does not even run for
+    # pushes to other branches).
     - name: Log in to GitHub Container Registry
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       uses: docker/login-action@v3
