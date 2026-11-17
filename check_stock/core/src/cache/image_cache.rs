@@ -1,0 +1,77 @@
+use mtg_common::FileCache;
+
+/// Persistent cache for card images, keyed by set code + collector number.
+/// Stores images as files in the cache directory.
+pub struct ImageCache {
+    files: FileCache,
+}
+
+impl ImageCache {
+    /// Folder of this cache inside the application's cache root.
+    pub const DIR_NAME: &'static str = "images";
+
+    /// The image cache inside the application's cache root (`<root>/images`).
+    pub fn in_root(cache_root: &std::path::Path) -> Self {
+        Self::with_dir(cache_root.join(Self::DIR_NAME))
+    }
+
+    /// Create an image cache rooted at the given directory (used by tests)
+    pub fn with_dir(cache_dir: std::path::PathBuf) -> Self {
+        Self {
+            files: FileCache::new(cache_dir),
+        }
+    }
+
+    /// Get the cache directory path
+    pub fn cache_dir(&self) -> &std::path::Path {
+        self.files.dir()
+    }
+
+    /// Whether a set code and collector number are safe to use in a file
+    /// name and a Scryfall URL path: ASCII letters, digits and `-` only.
+    /// Both come from CSV files, so anything else (`/`, `..`, spaces in token
+    /// numbers like `T 1/2`) is refused rather than escaped.
+    pub fn is_safe_key(set_code: &str, collector_number: &str) -> bool {
+        let ok = |s: &str, max: usize| {
+            !s.is_empty()
+                && s.len() <= max
+                && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        };
+        ok(set_code, 10) && ok(collector_number, 12)
+    }
+
+    /// Generate a filename from set code and collector number, or `None` when
+    /// they are not [safe](Self::is_safe_key).
+    fn filename(set_code: &str, collector_number: &str) -> Option<String> {
+        Self::is_safe_key(set_code, collector_number)
+            .then(|| format!("{}_{}.jpg", set_code.to_lowercase(), collector_number))
+    }
+
+    /// Check if an image is cached
+    pub fn contains(&self, set_code: &str, collector_number: &str) -> bool {
+        Self::filename(set_code, collector_number).is_some_and(|f| self.files.contains(&f))
+    }
+
+    /// Get a cached image
+    pub fn get(&self, set_code: &str, collector_number: &str) -> Option<Vec<u8>> {
+        let bytes = self
+            .files
+            .read(&Self::filename(set_code, collector_number)?)?;
+        log::info!("Image cache hit for {}/{}", set_code, collector_number);
+        Some(bytes)
+    }
+
+    /// Store an image in the cache (ignored for unsafe keys)
+    pub fn insert(&self, set_code: &str, collector_number: &str, bytes: &[u8]) {
+        let Some(filename) = Self::filename(set_code, collector_number) else {
+            log::warn!("Not caching image for unsafe key {set_code:?}/{collector_number:?}");
+            return;
+        };
+        self.files.write(&filename, bytes);
+        log::debug!("Cached image for {}/{}", set_code, collector_number);
+    }
+}
+
+#[cfg(test)]
+#[path = "image_cache_tests.rs"]
+mod tests;

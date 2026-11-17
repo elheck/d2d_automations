@@ -174,7 +174,7 @@ async fn search_encodes_query_and_clamps_limit() {
     Mock::given(method("GET"))
         .and(path("/api/search"))
         .and(query_param("q", "Commander: \"A&B\""))
-        .and(query_param("limit", "10000"))
+        .and(query_param("limit", "5000"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "success": true,
             "data": [{ "id_product": 774134, "name": "Deck", "category_name": "Magic Intropack",

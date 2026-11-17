@@ -1,0 +1,17 @@
+//! API clients for external services (Scryfall, Cardmarket, inventory_sync, MTGJSON)
+
+pub mod cardmarket;
+pub mod inventory_sync;
+pub mod mtgjson;
+pub mod scryfall;
+
+#[cfg(test)]
+mod cardmarket_tests;
+#[cfg(test)]
+mod scryfall_tests;
+
+// Re-exports for public API convenience
+#[allow(unused_imports)]
+pub use cardmarket::PriceGuide;
+#[allow(unused_imports)]
+pub use scryfall::{fetch_card, fetch_card_async, fetch_scryfall_image_async, ScryfallCard};

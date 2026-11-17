@@ -83,3 +83,41 @@ fn test_different_products_cached_separately() {
         Some("Beta")
     );
 }
+
+#[test]
+fn misses_are_remembered_for_thirty_days() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let cache = ImageCache::new(temp.path());
+    let now = SystemTime::now();
+    assert!(!cache.is_recent_miss(42, now));
+    cache.record_miss(42, now);
+    assert!(cache.is_recent_miss(42, now));
+    assert!(cache.is_recent_miss(42, now + MISS_TTL - Duration::from_secs(1)));
+    assert!(!cache.is_recent_miss(42, now + MISS_TTL));
+    assert!(!cache.is_recent_miss(43, now), "per product");
+}
+
+#[test]
+fn a_damaged_miss_marker_counts_as_no_miss() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let cache = ImageCache::new(temp.path());
+    std::fs::create_dir_all(temp.path().join("card_images")).unwrap();
+    std::fs::write(temp.path().join("card_images/7.miss"), "garbage").unwrap();
+    assert!(!cache.is_recent_miss(7, SystemTime::now()));
+}
+
+#[test]
+fn only_not_found_errors_are_remembered() {
+    assert!(is_permanent_miss(&InventoryError::ScryfallNotFound(
+        "x".into()
+    )));
+    assert!(is_permanent_miss(&InventoryError::NoImageAvailable(
+        "x".into()
+    )));
+    assert!(!is_permanent_miss(&InventoryError::ImageFetchFailed(
+        "x".into()
+    )));
+    assert!(!is_permanent_miss(&InventoryError::HttpStatus(
+        reqwest::StatusCode::BAD_GATEWAY
+    )));
+}

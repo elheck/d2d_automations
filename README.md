@@ -9,10 +9,10 @@ Rust monorepo for Magic: The Gathering business operations.
 
 | Project | Type | Description |
 |---------|------|-------------|
-| [check_stock](check_stock/) | egui desktop app | Stock checker, analysis, picking, repricing, precon EV, bulk lots |
+| [check_stock](check_stock/) | egui desktop app + [core library](check_stock/core/) + [web server](check_stock/server/) and [web UI](check_stock/web/) (in progress) | Stock checker, analysis, picking, repricing, precon EV, bulk lots |
 | [accounting](accounting/) | egui desktop app | Cardmarket CSV & CardTrader reports → SevDesk invoicing |
 | [inventory_sync](inventory_sync/) | REST API server | CSV → SQLite with price tracking & web UI |
-| [mtg_common](mtg_common/) | shared library | Shared types, API clients (Cardmarket, Scryfall, inventory_sync, MTGJSON), file cache, errors |
+| [mtg_common](mtg_common/) | shared library | Shared types, API clients (Cardmarket, Scryfall, inventory_sync, MTGJSON), file cache, network helpers for the servers, errors |
 
 ## Quick Start
 
@@ -83,12 +83,13 @@ Status last checked 2026-10-29.
 
 | # | Project | Issue | Status |
 |---|---------|-------|--------|
-| M1 | check_stock | SSRF via unvalidated image URL from Scryfall | Open |
+| M1 | check_stock | SSRF via unvalidated image URL from Scryfall | **Fixed** — images are only fetched from `https://cards.scryfall.io` (desktop singles listing and tile views; the web server also refuses redirects and caps the size) |
 | M2 | check_stock | Path traversal in cache filenames | **Fixed** — image cache names are only built from ASCII letters, digits and `-`; other caches use fixed names or `is_safe_deck_file_name` |
-| M3 | check_stock | URL injection via unsanitized set_code/collector_number | Partly fixed — tile views (picking, consolidation, bulk lots) only request validated set codes/collector numbers; Magic Singles Listing still puts typed values into the URL |
+| M3 | check_stock | URL injection via unsanitized set_code/collector_number | **Fixed** — the singles listing (desktop and web) and the tile views (picking, consolidation, bulk lots) only request set codes/collector numbers made of ASCII letters, digits and `-` |
 | M4 | accounting | API token stored as plain mutable String | Open |
 | M5 | accounting | Token length logged at debug level | Open |
 | M6 | inventory_sync | LIKE metacharacter injection in search | Open |
 | M7 | inventory_sync | No graceful shutdown | Open |
 | M8 | inventory_sync | Unbounded image cache can fill disk | Open |
 | M9 | inventory_sync | CDN script without SRI hash | Open |
+| M10 | check_stock | CSV formula injection: card names from a seller's list (e.g. `=HYPERLINK(…)`) copied into the buy helper's offer CSV run as formulas in Excel/LibreOffice | **Fixed** — every text cell from the seller's file that could start a formula gets a leading `'` (`check_stock_core::spreadsheet`), desktop and web; CSVs that are re-imported (repricing, bulk lots) are left exact |

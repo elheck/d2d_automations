@@ -7,8 +7,7 @@
 //! the inventory DB.
 
 use crate::{
-    inventory_db::get_restock_candidates,
-    restock::{format_buy_list_csv, rank_candidates, RankedRestock},
+    restock::{format_buy_list_csv, rank_candidates, sort_ranked, RankedRestock},
     ui::{
         state::{RestockSort, RestockState, Screen},
         style,
@@ -130,15 +129,8 @@ impl RestockScreen {
 
     fn show_table(ui: &mut egui::Ui, state: &mut RestockState) {
         let Some(rows) = &state.rows else { return };
-        let mut sorted: Vec<&RankedRestock> = rows.iter().collect();
-        sorted.sort_by(|a, b| {
-            let ord = compare(a, b, state.sort);
-            if state.sort_desc {
-                ord.reverse()
-            } else {
-                ord
-            }
-        });
+        let mut sorted: Vec<RankedRestock> = rows.clone();
+        sort_ranked(&mut sorted, state.sort, state.sort_desc);
 
         let total = sorted.len();
         let shown = total.min(MAX_ROWS);
@@ -240,7 +232,7 @@ impl RestockScreen {
                 ui.label(egui::RichText::new("Sold out").strong());
                 ui.end_row();
 
-                for r in sorted.into_iter().take(MAX_ROWS) {
+                for r in sorted.iter().take(MAX_ROWS) {
                     let c = &r.candidate;
                     let name = if c.is_foil {
                         format!("{} ✦", c.name)
@@ -270,7 +262,7 @@ impl RestockScreen {
     fn rebuild(state: &mut RestockState) {
         // `None` = all categories: sleeves and other accessories are restock
         // candidates too, and the lot column already spans both.
-        match get_restock_candidates(None) {
+        match crate::paths::inventory_db().get_restock_candidates(None) {
             Ok(candidates) => {
                 state.rows = Some(rank_candidates(candidates, state.min_copies));
                 state.error = None;
@@ -285,15 +277,8 @@ impl RestockScreen {
     fn export_buy_list(state: &RestockState) {
         let Some(rows) = &state.rows else { return };
         let mut sorted: Vec<RankedRestock> = rows.clone();
-        sorted.sort_by(|a, b| {
-            let ord = compare(a, b, state.sort);
-            if state.sort_desc {
-                ord.reverse()
-            } else {
-                ord
-            }
-        });
-        let csv = format_buy_list_csv(&sorted);
+        sort_ranked(&mut sorted, state.sort, state.sort_desc);
+        let csv = format_buy_list_csv(&sorted, true);
 
         let Some(path) = rfd::FileDialog::new()
             .set_file_name("restock_buy_list.csv")
@@ -308,29 +293,4 @@ impl RestockScreen {
             Err(e) => error!("Failed to save buy list: {e}"),
         }
     }
-}
-
-/// Column comparator for the restock table, ascending.
-fn compare(a: &RankedRestock, b: &RankedRestock, sort: RestockSort) -> std::cmp::Ordering {
-    let eq = std::cmp::Ordering::Equal;
-    match sort {
-        RestockSort::Velocity => a.copies_per_week.partial_cmp(&b.copies_per_week),
-        RestockSort::Revenue => a
-            .candidate
-            .realized_revenue
-            .partial_cmp(&b.candidate.realized_revenue),
-        RestockSort::Price => a.candidate.last_price.partial_cmp(&b.candidate.last_price),
-        RestockSort::SoldCopies => Some(a.candidate.sold_copies.cmp(&b.candidate.sold_copies)),
-        RestockSort::Days => Some(a.days_to_sell_out.cmp(&b.days_to_sell_out)),
-        RestockSort::Name => Some(a.candidate.name.cmp(&b.candidate.name)),
-        // Option<String> orders None first, then lexicographically — good
-        // enough for lot labels of the same width; ties broken by name.
-        RestockSort::Lot => Some(
-            a.candidate
-                .lot
-                .cmp(&b.candidate.lot)
-                .then_with(|| a.candidate.name.cmp(&b.candidate.name)),
-        ),
-    }
-    .unwrap_or(eq)
 }

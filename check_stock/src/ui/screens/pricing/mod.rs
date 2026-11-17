@@ -21,13 +21,12 @@ mod rules;
 use crate::api::cardmarket::PriceGuide;
 use crate::api::inventory_sync::{InventorySyncClient, LatestPrice};
 use crate::formatters::format_price_diff_csv;
-use crate::inventory_db::{self, card_variant_key};
+use crate::inventory_db::card_variant_key;
 use crate::io::read_csv_with_category;
 use crate::models::Card;
 use crate::repricing::{
-    default_ruleset_path, distinct_by_copies, evaluate, listings_from_cards, load_ruleset,
-    save_ruleset, summarize, ticked_changes, Evaluation, Listing, ListingFacts, Proposal, Rule,
-    Ruleset, Summary,
+    distinct_by_copies, evaluate, listings_from_cards, load_ruleset, save_ruleset, summarize,
+    ticked_changes, Evaluation, Listing, ListingFacts, Proposal, Rule, Ruleset, Summary,
 };
 use crate::ui::state::{AppState, Screen};
 use crate::ui::style;
@@ -227,7 +226,7 @@ pub struct PricingState {
 
 impl Default for PricingState {
     fn default() -> Self {
-        Self::new(default_ruleset_path())
+        Self::new(crate::paths::ruleset_file())
     }
 }
 
@@ -743,9 +742,7 @@ pub(crate) fn undo_path(path: &Path) -> PathBuf {
 }
 
 /// File name offered when exporting: `repricing_<date>.csv`.
-pub(crate) fn export_file_name(today: NaiveDate) -> String {
-    format!("repricing_{}.csv", today.format("%Y-%m-%d"))
-}
+pub(crate) use crate::repricing::export_file_name;
 
 /// Values found in the stock first, then defaults not seen there.
 fn merge_defaults(mut found: Vec<String>, defaults: &[&str]) -> Vec<String> {
@@ -1005,8 +1002,12 @@ impl PricingScreen {
         state.facts_generation = Some(app_state.db_generation);
         let category = state.category.clone();
         state.apply_facts(
-            inventory_db::get_listing_dates(&category).map_err(|e| e.to_string()),
-            inventory_db::get_sales_by_variant(&category).map_err(|e| e.to_string()),
+            crate::paths::inventory_db()
+                .get_listing_dates(&category)
+                .map_err(|e| e.to_string()),
+            crate::paths::inventory_db()
+                .get_sales_by_variant(&category)
+                .map_err(|e| e.to_string()),
             today,
         );
     }

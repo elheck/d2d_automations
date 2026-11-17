@@ -4,6 +4,7 @@
 use crate::error::InventoryError;
 use mtg_common::MtgError;
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 
 pub use mtg_common::scryfall::{CardFace, ImageUris, PurchaseUris, ScryfallCard};
 
@@ -65,6 +66,139 @@ pub async fn fetch_image(url: &str) -> Result<Vec<u8>, InventoryError> {
             MtgError::HttpStatus(_) => InventoryError::ImageFetchFailed(url.to_string()),
             other => other.into(),
         })
+}
+
+// ── The server's Scryfall client ───────────────────────────────────────────
+
+/// Only Scryfall's "not found" counts as a miss; any other error (rate
+/// limit, outage) is passing and must not hide the card for 30 days.
+fn card_error(err: MtgError, id: u64) -> InventoryError {
+    let what = format!("cardmarket_id:{id}");
+    match err {
+        MtgError::Api { code, .. } if code == "not_found" => InventoryError::ScryfallNotFound(what),
+        MtgError::HttpStatus(s) if s == reqwest::StatusCode::NOT_FOUND => {
+            InventoryError::ScryfallNotFound(what)
+        }
+        MtgError::Api { code, .. } => {
+            InventoryError::ScryfallUnavailable(format!("{what} ({code})"))
+        }
+        MtgError::HttpStatus(s) => InventoryError::ScryfallUnavailable(format!("{what} ({s})")),
+        other => other.into(),
+    }
+}
+
+/// Where card images come from; nothing else is ever downloaded as an image.
+pub const SCRYFALL_IMAGE_PREFIX: &str = "https://cards.scryfall.io/";
+/// Pause between two Scryfall requests (Scryfall asks for 50–100 ms).
+pub const SCRYFALL_SPACING: Duration = Duration::from_millis(100);
+/// Largest image accepted (Scryfall's `normal` JPEGs are about 150 KB).
+pub const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
+const IMAGE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Scryfall as the web server uses it: one request at a time, spaced, card
+/// data from the API and images only from Scryfall's image host (no
+/// redirects, size-capped, JPEG or PNG only).
+pub struct Scryfall {
+    api: String,
+    image_prefix: String,
+    spacing: Duration,
+    last: tokio::sync::Mutex<Option<Instant>>,
+}
+
+impl Default for Scryfall {
+    fn default() -> Self {
+        Self::with_endpoints(
+            mtg_common::scryfall::SCRYFALL_API,
+            SCRYFALL_IMAGE_PREFIX,
+            SCRYFALL_SPACING,
+        )
+    }
+}
+
+impl Scryfall {
+    /// Other endpoints (tests: a fake Scryfall).
+    pub fn with_endpoints(api: &str, image_prefix: &str, spacing: Duration) -> Self {
+        Self {
+            api: api.trim_end_matches('/').to_string(),
+            image_prefix: image_prefix.to_string(),
+            spacing,
+            last: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    /// Runs `request` when it is this caller's turn.
+    async fn in_turn<T>(&self, request: impl std::future::Future<Output = T>) -> T {
+        let mut last = self.last.lock().await;
+        if let Some(at) = *last {
+            let wait = self.spacing.saturating_sub(at.elapsed());
+            if !wait.is_zero() {
+                tokio::time::sleep(wait).await;
+            }
+        }
+        let result = request.await;
+        *last = Some(Instant::now());
+        result
+    }
+
+    /// The card with this Cardmarket product id.
+    pub async fn card(&self, id: u64) -> Result<ScryfallCard, InventoryError> {
+        self.in_turn(mtg_common::scryfall::fetch_card_by_cardmarket_id_from(
+            &self.api, id,
+        ))
+        .await
+        .map_err(|e| card_error(e, id))
+    }
+
+    /// An image from Scryfall's image host.
+    pub async fn image(&self, url: &str) -> Result<Vec<u8>, InventoryError> {
+        if !url.starts_with(&self.image_prefix) {
+            log::warn!("refused an image outside Scryfall's image host: {url}");
+            return Err(InventoryError::ImageFetchFailed(
+                "not a Scryfall image".into(),
+            ));
+        }
+        self.in_turn(download_image(url)).await
+    }
+}
+
+async fn download_image(url: &str) -> Result<Vec<u8>, InventoryError> {
+    let client = reqwest::Client::builder()
+        .timeout(IMAGE_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let response = client
+        .get(url)
+        .header("User-Agent", mtg_common::USER_AGENT)
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        return Err(InventoryError::HttpStatus(response.status()));
+    }
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_IMAGE_BYTES as u64)
+    {
+        return Err(InventoryError::ImageFetchFailed("image too large".into()));
+    }
+    let bytes = response.bytes().await?;
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(InventoryError::ImageFetchFailed("image too large".into()));
+    }
+    if image_type(&bytes).is_none() {
+        return Err(InventoryError::ImageFetchFailed("not a JPEG or PNG".into()));
+    }
+    Ok(bytes.to_vec())
+}
+
+/// The media type of an image by its first bytes (JPEG or PNG only).
+pub fn image_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some("image/png")
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

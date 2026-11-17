@@ -1,0 +1,3154 @@
+//! Local SQLite database for inventory sync.
+//!
+//! Every time a Cardmarket inventory CSV is loaded, the cards are synced here.
+//! - Articles no longer in the CSV have their quantity set to 0 (never deleted).
+//! - `first_synced_at`: set once on first insert, never changed.
+//! - `last_synced_at`: updated to today on each sync, max once per day.
+//! - Articles already at quantity 0 and not in the CSV are left untouched.
+//! - Multiple CSV rows for the same card variant (same condition/language/foil/signed)
+//!   in different physical locations are merged: quantities are summed, one DB row kept.
+//!
+//! # Category scoping
+//!
+//! Cardmarket exports one report per game/category (Magic, Generic accessories,
+//! …), each complete only for itself. Every sync is therefore scoped to a single
+//! category ([`crate::category`]): it only zeroes rows in that category, so
+//! loading the Generic export cannot wipe out the Magic inventory. The category
+//! is also part of the article key, because product IDs are namespaced per
+//! category and would otherwise collide across them.
+
+#[cfg_attr(not(test), allow(unused_imports))]
+use crate::category::{canonical_category, DEFAULT_CATEGORY};
+use crate::models::{canonical_condition, Card, Language};
+use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+mod bulk_lots;
+use bulk_lots::RemovalPlan;
+pub use bulk_lots::{
+    bulk_lot_cards_conn, delete_bulk_lot_in_tx, list_bulk_lots_conn, listing_dates_conn,
+    mark_bulk_lot_removed_conn, pending_removals_conn, per_card_share, record_bulk_lot_in_tx,
+    set_bulk_lot_price_conn, BulkLotCard, BulkLotSummary, BulkLotTotals, PendingRemoval,
+    MAX_LOT_COPIES, MAX_LOT_NAME_CHARS, MAX_LOT_PRICE_EUR,
+};
+
+/// Article key of an inventory CSV row's variant, exactly as the sync keys it
+/// (category + product id + normalised condition/language/foil/signed).
+pub fn card_variant_key(card: &Card, category: &str) -> String {
+    article_key(
+        category,
+        &card.cardmarket_id,
+        &canonical_condition(&card.condition),
+        &normalize_language(&card.language),
+        &normalize_flag(&card.is_foil),
+        &normalize_flag(&card.is_signed),
+    )
+}
+
+/// Purchase lot (`L12`) named by a location (`A-0-0-31-L12-R`), if any.
+pub fn purchase_lot_of(location: &str) -> Option<&str> {
+    extract_lot_number(location)
+}
+
+/// Normalise a boolean flag string to the canonical form used in the DB.
+///
+/// The legacy Cardmarket export wrote `""` for false and `"1"` for true; the
+/// inventory-report CSV uses `"false"`/`"true"`. Both sync to the same variant
+/// key by folding them onto the legacy encoding here. Without this, loading a
+/// new-format CSV against a DB populated from the legacy format would cause
+/// every existing variant to look missing and every CSV row to look new —
+/// `sold_quantity` would be incorrectly inflated by the "zeroed" ghost rows.
+fn normalize_flag(s: &str) -> String {
+    match s.trim().to_lowercase().as_str() {
+        "1" | "true" => "1".to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Normalise a language value to canonical capitalised form (`"English"`, …).
+/// Unknown values pass through unchanged so we never silently discard data.
+fn normalize_language(s: &str) -> String {
+    Language::parse(s)
+        .map(|l| l.as_str().to_string())
+        .unwrap_or_else(|| s.to_string())
+}
+
+/// Returns true if `card.location` is set and not just whitespace.
+fn card_has_location(card: &Card) -> bool {
+    card.location
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// Result type for database operations
+pub type DbResult<T> = Result<T, rusqlite::Error>;
+
+/// Per-lot revenue and stock breakdown.
+#[derive(Debug, Clone)]
+pub struct LotBreakdown {
+    pub lot: String,
+    pub in_stock_listings: i64,
+    pub in_stock_copies: i64,
+    pub in_stock_value: f64,
+    /// Copies that left the lot as sales — single sales plus copies sold in
+    /// bulk lots (`bulk_copies`).
+    pub sold_copies: i64,
+    /// Revenue the lot earned — single sales at their price plus its share of
+    /// bulk-lot prices (`bulk_revenue`).
+    pub sold_revenue: f64,
+    /// Of `sold_copies`: copies that went into bulk lots.
+    pub bulk_copies: i64,
+    /// Of `sold_revenue`: the lot's share of bulk-lot prices.
+    pub bulk_revenue: f64,
+    /// Recorded acquisition cost for the whole lot, in EUR. `None` when no cost
+    /// has been entered yet, which is distinct from a recorded cost of `0.0`.
+    pub cost: Option<f64>,
+}
+
+impl LotBreakdown {
+    /// Realized margin as a fraction of cost: `(revenue − cost) / cost`.
+    ///
+    /// Based only on money already earned (unsold stock is excluded). Returns
+    /// `None` when no cost is recorded, or when the cost is `0.0` (margin is
+    /// undefined — division by zero).
+    pub fn realized_margin_fraction(&self) -> Option<f64> {
+        match self.cost {
+            Some(cost) if cost > 0.0 => Some((self.sold_revenue - cost) / cost),
+            _ => None,
+        }
+    }
+
+    /// Whether the lot has paid for itself: recorded revenue ≥ recorded cost.
+    /// `None` when no cost is recorded.
+    pub fn is_recouped(&self) -> Option<bool> {
+        self.cost.map(|cost| self.sold_revenue >= cost)
+    }
+
+    /// Cost still to recoup before the lot breaks even, in EUR (never negative).
+    /// `None` when no cost is recorded.
+    pub fn cost_to_recoup(&self) -> Option<f64> {
+        self.cost.map(|cost| (cost - self.sold_revenue).max(0.0))
+    }
+}
+
+/// Column totals for the lot table.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LotTotals {
+    pub in_stock_value: f64,
+    pub sold_copies: i64,
+    pub sold_revenue: f64,
+    /// Sum of the recorded costs; lots without one contribute nothing.
+    pub cost: f64,
+    /// Revenue of only those lots that have a recorded cost.
+    pub costed_revenue: f64,
+}
+
+impl LotTotals {
+    pub fn of<'a>(lots: impl IntoIterator<Item = &'a LotBreakdown>) -> Self {
+        let mut totals = Self::default();
+        for lot in lots {
+            totals.in_stock_value += lot.in_stock_value;
+            totals.sold_copies += lot.sold_copies;
+            totals.sold_revenue += lot.sold_revenue;
+            if let Some(cost) = lot.cost {
+                totals.cost += cost;
+                totals.costed_revenue += lot.sold_revenue;
+            }
+        }
+        totals
+    }
+
+    /// Realized margin across the lots that have a recorded cost.
+    ///
+    /// Revenue from lots without a cost is left out: measuring it against the
+    /// other lots' costs would overstate the margin. `None` when no cost is
+    /// recorded at all.
+    pub fn realized_margin_fraction(&self) -> Option<f64> {
+        (self.cost > 0.0).then(|| (self.costed_revenue - self.cost) / self.cost)
+    }
+}
+
+/// Parses what the user typed into a lot's cost cell.
+///
+/// `Ok(None)` for an empty field (clear the recorded cost), `Ok(Some(cost))`
+/// for a finite, non-negative amount with either `.` or `,` as the decimal
+/// separator, and `Err` with a message for anything else.
+pub fn parse_lot_cost(input: &str) -> Result<Option<f64>, String> {
+    let trimmed = input.trim().trim_start_matches('€').trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    match trimmed.replace(',', ".").parse::<f64>() {
+        Ok(cost) if cost.is_finite() && cost >= 0.0 => Ok(Some(cost)),
+        _ => Err(format!(
+            "'{trimmed}' is not a valid cost — enter a non-negative amount such as 42.50"
+        )),
+    }
+}
+
+/// One row in the "longest unsold" top-5 list.
+#[derive(Debug, Clone)]
+pub struct OldestInStockEntry {
+    pub name: String,
+    /// Effective date: `listed_at` when available, otherwise `first_synced_at`.
+    pub date: String,
+    pub price: f64,
+    pub quantity: i64,
+    pub location: String,
+}
+
+/// A single in-stock card variant (quantity > 0) pulled from the database.
+///
+/// Used by analysis features (mispricing, aging) that need per-card data rather
+/// than the aggregate figures in [`DbStats`].
+#[derive(Debug, Clone)]
+pub struct InStockCard {
+    pub cardmarket_id: String,
+    pub name: String,
+    pub set_code: String,
+    pub cn: String,
+    pub condition: String,
+    pub language: String,
+    pub is_foil: bool,
+    pub rarity: String,
+    pub quantity: i64,
+    /// The seller's currently-listed unit price, in EUR.
+    pub price: f64,
+    pub location: String,
+    /// `listed_at` when present, otherwise `first_synced_at`. The best available
+    /// proxy for "how long has this been sitting in stock".
+    pub effective_date: String,
+}
+
+/// One per-variant sale recorded during a sync: `copies` of a variant left stock
+/// as a sale on `date`, at the `price` they were listed at when they sold.
+///
+/// Events are deltas, never totals — the same variant may have many rows (one per
+/// sync that saw its quantity drop), and summing `copies` per variant matches the
+/// increments applied to `inventory_cards.sold_quantity` since event recording
+/// began. Discards (write-offs) never produce events.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SoldEvent {
+    pub date: String,
+    pub cardmarket_id: String,
+    pub condition: String,
+    pub language: String,
+    /// Normalised flag: `"1"` for foil, empty otherwise.
+    pub is_foil: String,
+    /// Normalised flag: `"1"` for signed, empty otherwise.
+    pub is_signed: String,
+    pub copies: i64,
+    /// Listed unit price at the time of sale, in EUR.
+    pub price: f64,
+}
+
+/// A sold-out variant (quantity 0, `sold_quantity` > 0) — raw input for the
+/// restock recommendations report (see [`crate::restock`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RestockCandidate {
+    pub cardmarket_id: String,
+    pub name: String,
+    pub set_code: String,
+    pub cn: String,
+    pub condition: String,
+    pub language: String,
+    pub is_foil: bool,
+    pub rarity: String,
+    /// Total copies sold over the variant's lifetime (`sold_quantity`).
+    pub sold_copies: i64,
+    /// Σ copies × sale price from `sold_events`; copies sold before event
+    /// recording began are valued at the last listed price.
+    pub realized_revenue: f64,
+    /// The price the variant was last listed at, in EUR.
+    pub last_price: f64,
+    /// Effective listing date: `listed_at` when available, else `first_synced_at`.
+    pub listed_date: String,
+    /// Date of the last recorded sale; falls back to `last_synced_at` (the sync
+    /// that zeroed the variant) for pre-event-log history.
+    pub sold_out_date: String,
+    /// Lot the copies were sourced from (`L` part of the last known location,
+    /// e.g. `L2`); `None` when the location carries no lot number.
+    pub lot: Option<String>,
+}
+
+/// One daily inventory snapshot row. `sold_*_cumulative` are running totals since
+/// the first sync, so a period's activity is the difference between two rows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InventorySnapshot {
+    pub date: String,
+    pub in_stock_copies: i64,
+    pub in_stock_value: f64,
+    pub sold_copies_cumulative: i64,
+    pub sold_revenue_cumulative: f64,
+}
+
+/// Sales throughput derived from the snapshot history.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SalesVelocity {
+    /// Days spanned between the earliest and latest snapshot.
+    pub period_days: i64,
+    /// Copies sold across the whole tracked period.
+    pub sold_copies: i64,
+    /// Revenue earned across the whole tracked period, in EUR.
+    pub sold_revenue: f64,
+    /// Average copies sold per week over the whole tracked period.
+    pub copies_per_week: f64,
+    /// Average revenue per week over the whole tracked period, in EUR.
+    pub revenue_per_week: f64,
+    /// Copies sold in the trailing ~7 days, if a snapshot that old exists.
+    pub last7_copies: Option<i64>,
+    /// Copies sold in the trailing ~30 days, if a snapshot that old exists.
+    pub last30_copies: Option<i64>,
+    /// Bulk lots built within the tracked period. Their prices are part of
+    /// `sold_revenue`; their copies are not part of `sold_copies`.
+    pub bulk_lots: BulkLotTotals,
+}
+
+/// One age bucket in the dead-stock aging report.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgingBucket {
+    pub label: &'static str,
+    /// Inclusive lower age bound in days.
+    pub min_days: i64,
+    /// Inclusive upper age bound in days; `None` means open-ended.
+    pub max_days: Option<i64>,
+    /// Number of distinct in-stock variant rows in this bucket.
+    pub listings: i64,
+    /// Total copies in this bucket.
+    pub copies: i64,
+    /// Capital tied up in this bucket (Σ price × quantity), in EUR.
+    pub value: f64,
+}
+
+/// Aggregate statistics about the current inventory database contents.
+#[derive(Debug, Default, Clone)]
+pub struct DbStats {
+    /// Total number of article rows in the database (includes sold-out qty=0 listings)
+    pub total_articles: i64,
+    /// Articles currently in stock (quantity > 0)
+    pub in_stock_articles: i64,
+    /// Total copies across all in-stock listings
+    pub total_copies: i64,
+    /// Sum of (price × quantity) for all in-stock cards, in EUR
+    pub total_value: f64,
+    /// Number of foil card listings with quantity > 0
+    pub foil_count: i64,
+    /// Number of signed card listings with quantity > 0
+    pub signed_count: i64,
+    /// Top 5 cards by total copies: (name, total_quantity)
+    pub top_by_quantity: Vec<(String, i64)>,
+    /// Top 5 most expensive individual listings: (name, price)
+    pub top_by_price: Vec<(String, f64)>,
+    /// Top 5 cards that have been in stock the longest without selling.
+    pub top_oldest_in_stock: Vec<OldestInStockEntry>,
+    /// Oldest in-stock card by listed_at date: (name, date)
+    pub oldest_listed: Option<(String, String)>,
+    /// Most recently listed in-stock card: (name, date)
+    pub newest_listed: Option<(String, String)>,
+    /// Date of the very first sync recorded in the database
+    pub first_synced_date: Option<String>,
+    /// Total copies by language, sorted by count descending
+    pub language_breakdown: Vec<(String, i64)>,
+    /// Total copies by condition, sorted by count descending
+    pub condition_breakdown: Vec<(String, i64)>,
+    /// Total copies by rarity, sorted by count descending
+    pub rarity_breakdown: Vec<(String, i64)>,
+    /// Revenue and stock breakdown per lot (extracted from location field)
+    pub lot_breakdown: Vec<LotBreakdown>,
+    /// Dead-stock aging: in-stock cards bucketed by how long they've been listed.
+    pub aging_buckets: Vec<AgingBucket>,
+    /// Sales velocity derived from snapshot history; `None` until ≥2 days of data.
+    pub velocity: Option<SalesVelocity>,
+    /// All bulk lots ever built (whole business, every category).
+    pub bulk_totals: BulkLotTotals,
+}
+
+/// Statistics from a sync operation
+#[derive(Debug, Default)]
+pub struct SyncStats {
+    /// Number of unique card variants from the CSV that were inserted or updated
+    pub upserted: usize,
+    /// Number of card variants no longer in the CSV that were set to quantity 0
+    pub zeroed: usize,
+    /// Copies whose drop was a pending bulk-lot removal (not counted as sold).
+    pub bulk_removed: i64,
+}
+
+/// Read-only preview of what a sync would change — computed before any write
+/// so a bad CSV can be caught first.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SyncPreview {
+    /// Variants in the CSV not yet in the DB.
+    pub new_variants: usize,
+    /// Variants present in both CSV and DB.
+    pub updated_variants: usize,
+    /// In-stock variants that vanished from the CSV (would be zeroed).
+    pub zeroed_variants: usize,
+    /// Copies that would be recorded as sold (quantity drops + vanished rows),
+    /// not counting copies already sold as part of a bulk lot.
+    pub copies_sold: i64,
+    /// Copies whose drop is explained by a pending bulk-lot removal.
+    pub bulk_removed: i64,
+    /// Variants whose listed price would change.
+    pub price_changes: usize,
+    /// Total in-stock copies before / after the sync.
+    pub copies_before: i64,
+    pub copies_after: i64,
+}
+
+/// Guard threshold: the safety check only engages on inventories of at least
+/// this many copies (tiny/fresh DBs churn legitimately).
+pub const MIN_COPIES_FOR_GUARD: i64 = 100;
+
+/// A sync recording more than this share of the inventory as sold in one go is
+/// treated as a suspect CSV rather than real sales.
+pub const SUSPICIOUS_DROP_FRACTION: f64 = 0.5;
+
+impl SyncPreview {
+    /// True when the sync would wipe out a large share of a non-trivial
+    /// inventory at once — more likely a truncated or wrong CSV than sales.
+    pub fn is_suspicious(&self) -> bool {
+        self.copies_before >= MIN_COPIES_FOR_GUARD
+            && self.copies_sold as f64 > self.copies_before as f64 * SUSPICIOUS_DROP_FRACTION
+    }
+}
+
+/// Days of sale log [`sales_pace_conn`] averages over.
+pub const SALES_PACE_DAYS: i64 = 30;
+/// Below this many days of history there is no usual pace to compare with.
+pub const MIN_PACE_DAYS: i64 = 7;
+/// A sync counting more than this multiple of the expected sales is unusual.
+pub const UNUSUAL_SALES_FACTOR: f64 = 3.0;
+/// Fewer copies than this are never called unusual (small numbers swing).
+pub const MIN_UNUSUAL_COPIES: i64 = 10;
+
+/// How many copies of a category usually sell per day: the sale log of the
+/// [`SALES_PACE_DAYS`] days up to the category's last import.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SalesPace {
+    /// Average single-sale copies per day (bulk lots not counted, like
+    /// [`SyncPreview::copies_sold`]).
+    pub daily_copies: f64,
+    /// Days the average covers (at most [`SALES_PACE_DAYS`]).
+    pub days: i64,
+    /// Day of the category's last import (`YYYY-MM-DD`).
+    pub last_sync: String,
+}
+
+/// A sync that would count clearly more copies as sold than usual.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnusualSales {
+    pub daily_copies: f64,
+    /// Days since the last import (at least 1).
+    pub days_since_last_import: i64,
+    /// Usual copies for that many days.
+    pub expected_copies: f64,
+}
+
+impl SyncPreview {
+    /// `Some` when this sync counts more than [`UNUSUAL_SALES_FACTOR`] × the
+    /// copies that usually sell between two imports this far apart (and at
+    /// least [`MIN_UNUSUAL_COPIES`]). A warning only: unlike
+    /// [`SyncPreview::is_suspicious`] it never blocks.
+    pub fn unusual_sales(&self, pace: &SalesPace, today: &str) -> Option<UnusualSales> {
+        let day = |s: &str| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok();
+        let days = match (day(today), day(&pace.last_sync)) {
+            (Some(today), Some(last)) => (today - last).num_days().max(1),
+            _ => 1,
+        };
+        let expected = pace.daily_copies * days as f64;
+        (self.copies_sold >= MIN_UNUSUAL_COPIES
+            && self.copies_sold as f64 > UNUSUAL_SALES_FACTOR * expected)
+            .then_some(UnusualSales {
+                daily_copies: pace.daily_copies,
+                days_since_last_import: days,
+                expected_copies: expected,
+            })
+    }
+}
+
+/// The usual sales pace of `category`; `None` while it has less than
+/// [`MIN_PACE_DAYS`] days of history.
+pub fn sales_pace_conn(conn: &Connection, category: &str) -> DbResult<Option<SalesPace>> {
+    let (first, last): (Option<String>, Option<String>) = conn.query_row(
+        "SELECT MIN(first_synced_at), MAX(last_synced_at) FROM inventory_cards
+         WHERE category = ?1",
+        params![category],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let day = |s: &Option<String>| {
+        s.as_deref()
+            .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+    };
+    let (Some(first_day), Some(last_day), Some(last)) = (day(&first), day(&last), last) else {
+        return Ok(None);
+    };
+    let span = (last_day - first_day).num_days();
+    if span < MIN_PACE_DAYS {
+        return Ok(None);
+    }
+    let days = span.min(SALES_PACE_DAYS);
+    let from = (last_day - chrono::Duration::days(days))
+        .format("%Y-%m-%d")
+        .to_string();
+    let copies: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(copies), 0) FROM sold_events
+         WHERE category = ?1 AND date > ?2 AND date <= ?3",
+        params![category, from, last],
+        |r| r.get(0),
+    )?;
+    Ok(Some(SalesPace {
+        daily_copies: copies as f64 / days as f64,
+        days,
+        last_sync: last,
+    }))
+}
+
+/// Result of a guarded sync: either it ran, or the safety check blocked it and
+/// nothing was written (rerun via [`InventoryDb::sync_inventory_forced`] to override).
+#[derive(Debug)]
+pub enum SyncOutcome {
+    Synced(SyncStats),
+    Blocked(SyncPreview),
+}
+
+/// Statistics from a discard (write-off) operation.
+#[derive(Debug, Default, PartialEq)]
+pub struct DiscardStats {
+    /// Number of distinct DB variant rows whose quantity was reduced.
+    pub variants_updated: usize,
+    /// Total copies actually removed from stock (after clamping at the row's
+    /// available quantity).
+    pub copies_discarded: i64,
+}
+
+/// Where an inventory database lives. The app picks the location (the
+/// desktop app: the platform data dir); this crate never does.
+///
+/// Every operation opens its own connection and brings schema and data up to
+/// date first, so a handle is cheap to clone and to move to a worker thread.
+/// Dated backups (`inventory-YYYY-MM-DD.db.bak`) are written next to the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InventoryDb {
+    path: PathBuf,
+}
+
+impl InventoryDb {
+    /// File name of the database inside the application's data folder.
+    pub const FILE_NAME: &'static str = "inventory.db";
+
+    /// The database file at `path`.
+    pub fn at(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    /// The database inside the application's data folder (`<dir>/inventory.db`).
+    pub fn in_dir(data_dir: &Path) -> Self {
+        Self::at(data_dir.join(Self::FILE_NAME))
+    }
+
+    /// Path of the database file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Opens (or creates) the database, initialises the schema and repairs the
+    /// data (see `repair_data`). The methods of this type call it for every
+    /// operation; a caller that manages its own connections (the web server)
+    /// uses it once per connection and then the `_conn` functions.
+    pub fn open(&self) -> DbResult<Connection> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        log::info!("Inventory DB: {}", self.path.display());
+        let mut conn = Connection::open(&self.path)?;
+        init_schema(&conn)?;
+        repair_data(&mut conn, &self.path, &today_date())?;
+        Ok(conn)
+    }
+}
+
+/// Brings the *data* (as opposed to the schema) up to date on open: folds
+/// categories that older detection rules split apart back together, and seeds
+/// `lot_stock` for any category that has none yet. Both are no-ops on a healthy
+/// database.
+///
+/// A category merge rewrites rows wholesale, so a dedicated backup is taken
+/// first. It is named outside the `inventory-*.db.bak` pattern on purpose: the
+/// daily backups are pruned after [`BACKUP_KEEP`] days, this one is kept.
+fn repair_data(conn: &mut Connection, db_file: &std::path::Path, today: &str) -> DbResult<()> {
+    let merges = pending_category_merges(conn)?;
+    if !merges.is_empty() {
+        if let Some(dir) = db_file.parent() {
+            let dst = dir.join(format!("pre-category-merge-{today}.inventory.db.bak"));
+            if !dst.exists() {
+                conn.execute("VACUUM INTO ?1", [dst.to_string_lossy().as_ref()])?;
+                log::info!("Inventory DB backed up to {}", dst.display());
+            }
+        }
+        merge_categories_conn(conn, &merges, today)?;
+    }
+    backfill_lot_stock_conn(conn)
+}
+
+// DDL for the current schema (v4): one row per unique card variant, per category.
+// `cardmarketId` is a Cardmarket product ID shared across all language/condition
+// variants of the same card — NOT unique per article — and it is only unique
+// *within* a category. The composite key
+// (category, cardmarket_id, condition, language, is_foil, is_signed) identifies a variant.
+// Multiple physical locations of the same variant are merged: quantities are summed.
+const INVENTORY_CARDS_DDL: &str = "
+    CREATE TABLE inventory_cards (
+        category        TEXT NOT NULL DEFAULT 'Magic',
+        cardmarket_id   TEXT NOT NULL,
+        quantity        INTEGER NOT NULL,
+        name            TEXT NOT NULL,
+        set_name        TEXT NOT NULL,
+        set_code        TEXT NOT NULL,
+        cn              TEXT NOT NULL,
+        condition       TEXT NOT NULL,
+        language        TEXT NOT NULL,
+        is_foil         TEXT NOT NULL,
+        is_playset      TEXT,
+        is_signed       TEXT NOT NULL,
+        price           TEXT NOT NULL,
+        comment         TEXT NOT NULL,
+        location        TEXT,
+        name_de         TEXT NOT NULL,
+        name_es         TEXT NOT NULL,
+        name_fr         TEXT NOT NULL,
+        name_it         TEXT NOT NULL,
+        rarity          TEXT NOT NULL,
+        listed_at       TEXT NOT NULL,
+        first_synced_at TEXT NOT NULL,
+        last_synced_at  TEXT NOT NULL,
+        sold_quantity   INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE UNIQUE INDEX idx_inventory_article_key_v4
+        ON inventory_cards (category, cardmarket_id, condition, language, is_foil, is_signed);
+    CREATE INDEX IF NOT EXISTS idx_inventory_category ON inventory_cards (category);
+";
+
+// Daily point-in-time snapshot of the whole inventory, written once per sync day.
+// Enables period-over-period sales velocity: because `sold_copies` and
+// `sold_revenue` are stored *cumulatively*, the difference between any two
+// snapshot dates is exactly what sold (and was earned) in that window.
+// `date` is the primary key so re-syncing on the same day overwrites its row.
+const INVENTORY_SNAPSHOTS_DDL: &str = "
+    CREATE TABLE IF NOT EXISTS inventory_snapshots (
+        date                    TEXT PRIMARY KEY,
+        in_stock_copies         INTEGER NOT NULL,
+        in_stock_value          REAL NOT NULL,
+        sold_copies_cumulative  INTEGER NOT NULL,
+        sold_revenue_cumulative REAL NOT NULL
+    );
+";
+
+// Per-variant sale log: one row per sold delta detected during a sync. Whereas
+// `inventory_cards.sold_quantity` and the snapshots only carry cumulative totals,
+// these rows say *which* variant sold *when* and at what listed price — the basis
+// for per-card velocity, restock recommendations and realized-price analysis.
+// A same-day re-sync may append several rows for one variant; they are deltas,
+// so summing them is always correct.
+// Small key-value store for app bookkeeping (visit dates for the welcome
+// digest). Not card data — never touched by syncs.
+const APP_META_DDL: &str = "
+    CREATE TABLE IF NOT EXISTS app_meta (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+";
+
+const SOLD_EVENTS_DDL: &str = "
+    CREATE TABLE IF NOT EXISTS sold_events (
+        date          TEXT NOT NULL,
+        category      TEXT NOT NULL DEFAULT 'Magic',
+        cardmarket_id TEXT NOT NULL,
+        condition     TEXT NOT NULL,
+        language      TEXT NOT NULL,
+        is_foil       TEXT NOT NULL,
+        is_signed     TEXT NOT NULL,
+        copies        INTEGER NOT NULL,
+        price         REAL NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sold_events_variant
+        ON sold_events (category, cardmarket_id, condition, language, is_foil, is_signed);
+    CREATE INDEX IF NOT EXISTS idx_sold_events_date ON sold_events (date);
+";
+
+// Manually recorded acquisition cost per lot. One row per lot ID (e.g. `L12`),
+// storing the total price paid for that purchase. Orthogonal to the card schema;
+// created on every open like the snapshot and sold-event tables. `updated_at`
+// records when the figure was last edited so a correction is auditable.
+// Per-lot stock and sales, one row per (variant, lot).
+//
+// `inventory_cards` keeps a single row per variant with one representative
+// location, so it cannot say how many copies of a card sit in which lot once
+// the same card arrives in a second purchase. This table keeps that split, and
+// accumulates what each lot actually sold, at the price it sold for. Rows whose
+// location names no lot use `lot = ''`.
+const LOT_STOCK_DDL: &str = "
+    CREATE TABLE IF NOT EXISTS lot_stock (
+        category      TEXT NOT NULL,
+        cardmarket_id TEXT NOT NULL,
+        condition     TEXT NOT NULL,
+        language      TEXT NOT NULL,
+        is_foil       TEXT NOT NULL,
+        is_signed     TEXT NOT NULL,
+        lot           TEXT NOT NULL,
+        quantity      INTEGER NOT NULL,
+        stock_value   REAL NOT NULL,
+        sold_quantity INTEGER NOT NULL DEFAULT 0,
+        sold_revenue  REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (category, cardmarket_id, condition, language, is_foil, is_signed, lot)
+    );
+    CREATE INDEX IF NOT EXISTS idx_lot_stock_lot ON lot_stock (lot);
+";
+
+const LOT_COSTS_DDL: &str = "
+    CREATE TABLE IF NOT EXISTS lot_costs (
+        lot        TEXT PRIMARY KEY,
+        cost       REAL NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+";
+
+// Migration v1 → v2: replace single cardmarket_id PRIMARY KEY with composite UNIQUE key.
+const MIGRATION_V1_TO_V2: &str = "
+    BEGIN;
+    CREATE TABLE inventory_cards_v2 (
+        cardmarket_id   TEXT NOT NULL,
+        quantity        INTEGER NOT NULL,
+        name            TEXT NOT NULL,
+        set_name        TEXT NOT NULL,
+        set_code        TEXT NOT NULL,
+        cn              TEXT NOT NULL,
+        condition       TEXT NOT NULL,
+        language        TEXT NOT NULL,
+        is_foil         TEXT NOT NULL,
+        is_playset      TEXT,
+        is_signed       TEXT NOT NULL,
+        price           TEXT NOT NULL,
+        comment         TEXT NOT NULL,
+        location        TEXT,
+        name_de         TEXT NOT NULL,
+        name_es         TEXT NOT NULL,
+        name_fr         TEXT NOT NULL,
+        name_it         TEXT NOT NULL,
+        rarity          TEXT NOT NULL,
+        listed_at       TEXT NOT NULL,
+        first_synced_at TEXT NOT NULL,
+        last_synced_at  TEXT NOT NULL
+    );
+    INSERT OR IGNORE INTO inventory_cards_v2
+        SELECT cardmarket_id, quantity, name, set_name, set_code, cn,
+               condition, language, is_foil, is_playset, is_signed,
+               price, comment, location, name_de, name_es, name_fr, name_it,
+               rarity, listed_at, first_synced_at, last_synced_at
+        FROM inventory_cards;
+    DROP TABLE inventory_cards;
+    ALTER TABLE inventory_cards_v2 RENAME TO inventory_cards;
+    CREATE UNIQUE INDEX idx_inventory_article_key
+        ON inventory_cards (cardmarket_id, condition, language, is_foil, is_signed);
+    COMMIT;
+";
+
+// Migration v3 → v2: collapse per-location rows back into one row per card variant.
+// v3 stored one row per physical location (6-field key including location). v2 stores
+// one row per variant (5-field key), with quantities summed across all locations.
+// Keeps the earliest first_synced_at and latest last_synced_at across merged rows.
+const MIGRATION_V3_TO_V2: &str = "
+    BEGIN;
+    CREATE TABLE inventory_cards_merged (
+        cardmarket_id   TEXT NOT NULL,
+        quantity        INTEGER NOT NULL,
+        name            TEXT NOT NULL,
+        set_name        TEXT NOT NULL,
+        set_code        TEXT NOT NULL,
+        cn              TEXT NOT NULL,
+        condition       TEXT NOT NULL,
+        language        TEXT NOT NULL,
+        is_foil         TEXT NOT NULL,
+        is_playset      TEXT,
+        is_signed       TEXT NOT NULL,
+        price           TEXT NOT NULL,
+        comment         TEXT NOT NULL,
+        location        TEXT,
+        name_de         TEXT NOT NULL,
+        name_es         TEXT NOT NULL,
+        name_fr         TEXT NOT NULL,
+        name_it         TEXT NOT NULL,
+        rarity          TEXT NOT NULL,
+        listed_at       TEXT NOT NULL,
+        first_synced_at TEXT NOT NULL,
+        last_synced_at  TEXT NOT NULL
+    );
+    INSERT INTO inventory_cards_merged
+        SELECT
+            cardmarket_id,
+            SUM(quantity),
+            MIN(name),
+            MIN(set_name),
+            MIN(set_code),
+            MIN(cn),
+            condition,
+            language,
+            is_foil,
+            MIN(is_playset),
+            is_signed,
+            MIN(price),
+            MIN(comment),
+            MIN(NULLIF(location, '')),
+            MIN(name_de),
+            MIN(name_es),
+            MIN(name_fr),
+            MIN(name_it),
+            MIN(rarity),
+            MIN(listed_at),
+            MIN(first_synced_at),
+            MAX(last_synced_at)
+        FROM inventory_cards
+        GROUP BY cardmarket_id, condition, language, is_foil, is_signed;
+    DROP TABLE inventory_cards;
+    ALTER TABLE inventory_cards_merged RENAME TO inventory_cards;
+    CREATE UNIQUE INDEX idx_inventory_article_key
+        ON inventory_cards (cardmarket_id, condition, language, is_foil, is_signed);
+    COMMIT;
+";
+
+/// Migration v2 → v4: scope the article key by product category.
+///
+/// Adds the `category` column to `inventory_cards` and `sold_events`, backfilled
+/// with [`DEFAULT_CATEGORY`] — every row that predates category tracking came
+/// from a Magic export. The 5-field unique index is then replaced by the 6-field
+/// one so the same product ID can exist in two categories at once.
+///
+/// `ALTER TABLE ADD COLUMN` keeps all existing rows in place; no data is copied
+/// or rewritten, so `first_synced_at` / `sold_quantity` history survives intact.
+const MIGRATION_V2_TO_V4: &str = "
+    BEGIN;
+    ALTER TABLE inventory_cards ADD COLUMN category TEXT NOT NULL DEFAULT 'Magic';
+    DROP INDEX IF EXISTS idx_inventory_article_key;
+    CREATE UNIQUE INDEX idx_inventory_article_key_v4
+        ON inventory_cards (category, cardmarket_id, condition, language, is_foil, is_signed);
+    CREATE INDEX IF NOT EXISTS idx_inventory_category ON inventory_cards (category);
+    COMMIT;
+";
+
+/// Adds the matching `category` column to a pre-v4 `sold_events` table.
+///
+/// Split from [`MIGRATION_V2_TO_V4`] because `sold_events` is created on every
+/// open (it is orthogonal to the card-schema version), so it can be at any
+/// version independently of `inventory_cards`.
+const MIGRATION_SOLD_EVENTS_CATEGORY: &str = "
+    BEGIN;
+    ALTER TABLE sold_events ADD COLUMN category TEXT NOT NULL DEFAULT 'Magic';
+    DROP INDEX IF EXISTS idx_sold_events_variant;
+    CREATE INDEX idx_sold_events_variant
+        ON sold_events (category, cardmarket_id, condition, language, is_foil, is_signed);
+    COMMIT;
+";
+
+/// Creates or migrates the `inventory_cards` table to the current schema (v4).
+///
+/// Migration chain:
+/// - Fresh DB  → create v4 schema directly.
+/// - v1 (cardmarket_id PRIMARY KEY, no composite index) → v2 → v4.
+/// - v2 (composite 5-field key, `idx_inventory_article_key`) → v4 (adds `category`).
+/// - v3 (composite 6-field key with location, `idx_inventory_article_key_v3`) → v2 → v4
+///   (collapses per-location rows, sums quantities).
+/// - v4 (composite 6-field key with category, `idx_inventory_article_key_v4`) → no-op.
+fn init_schema(conn: &Connection) -> DbResult<()> {
+    let table_exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='inventory_cards'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+
+    if !table_exists {
+        conn.execute_batch(INVENTORY_CARDS_DDL)?;
+        conn.execute_batch(INVENTORY_SNAPSHOTS_DDL)?;
+        // Still goes through the migration helper: `sold_events` can predate
+        // `inventory_cards` in a partially-created DB.
+        migrate_sold_events(conn)?;
+        conn.execute_batch(LOT_COSTS_DDL)?;
+        conn.execute_batch(LOT_STOCK_DDL)?;
+        conn.execute_batch(bulk_lots::BULK_LOTS_DDL)?;
+        return conn.execute_batch(APP_META_DDL);
+    }
+
+    // v3 is identified by idx_inventory_article_key_v3 (6-field key including location).
+    // Downgrade to v2 by aggregating per-location rows.
+    let v3_index_exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master \
+             WHERE type='index' AND name='idx_inventory_article_key_v3'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+
+    if v3_index_exists {
+        log::info!("Migrating inventory_db: collapsing location rows into variants (v3 → v2)");
+        conn.execute_batch(MIGRATION_V3_TO_V2)?;
+    } else {
+        // v2 is identified by idx_inventory_article_key (5-field key, no location).
+        let v2_index_exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master \
+                 WHERE type='index' AND name='idx_inventory_article_key'",
+                [],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+
+        // Neither the v2 nor the v4 index means this is the v1 schema (single
+        // cardmarket_id PRIMARY KEY). Checking v4 too keeps this a no-op for an
+        // already-migrated DB.
+        if !v2_index_exists && !has_category_column(conn)? {
+            log::info!("Migrating inventory_db: adding composite article key (v1 → v2)");
+            conn.execute_batch(MIGRATION_V1_TO_V2)?;
+        }
+    }
+
+    // Add sold_quantity column if missing (added for lot revenue tracking).
+    let has_sold_quantity: bool = conn
+        .query_row(
+            "SELECT 1 FROM pragma_table_info('inventory_cards') WHERE name='sold_quantity'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+
+    if !has_sold_quantity {
+        log::info!("Adding sold_quantity column to inventory_cards");
+        conn.execute_batch(
+            "ALTER TABLE inventory_cards ADD COLUMN sold_quantity INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+
+    // v2 → v4: scope the article key by category. Runs after the v1/v3 branches
+    // above so every older schema converges here.
+    if !has_category_column(conn)? {
+        log::info!("Migrating inventory_db: scoping article key by category (v2 → v4)");
+        conn.execute_batch(MIGRATION_V2_TO_V4)?;
+    }
+
+    // Snapshot and sold-event tables are orthogonal to the card-schema migrations;
+    // ensure they exist on every open regardless of which card-schema version we
+    // came from.
+    conn.execute_batch(INVENTORY_SNAPSHOTS_DDL)?;
+    migrate_sold_events(conn)?;
+    conn.execute_batch(LOT_COSTS_DDL)?;
+    conn.execute_batch(LOT_STOCK_DDL)?;
+    conn.execute_batch(bulk_lots::BULK_LOTS_DDL)?;
+    conn.execute_batch(APP_META_DDL)?;
+
+    Ok(())
+}
+
+/// Ensures `sold_events` exists and carries the v4 `category` column.
+///
+/// The column migration must run *before* [`SOLD_EVENTS_DDL`], because that DDL
+/// creates an index over `category`: on a pre-v4 table the index would fail with
+/// "no such column" and abort the whole open.
+fn migrate_sold_events(conn: &Connection) -> DbResult<()> {
+    let table_exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sold_events'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+
+    if table_exists && !table_has_column(conn, "sold_events", "category")? {
+        log::info!("Migrating inventory_db: adding category to sold_events");
+        conn.execute_batch(MIGRATION_SOLD_EVENTS_CATEGORY)?;
+    }
+
+    conn.execute_batch(SOLD_EVENTS_DDL)
+}
+
+/// Returns true if `table` has a column named `column`.
+fn table_has_column(conn: &Connection, table: &str, column: &str) -> DbResult<bool> {
+    // pragma_table_info is a table-valued function; its argument is bound as a
+    // parameter rather than interpolated, keeping this injection-free.
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2",
+            params![table, column],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+/// Returns true if `inventory_cards` already carries the v4 `category` column.
+fn has_category_column(conn: &Connection) -> DbResult<bool> {
+    table_has_column(conn, "inventory_cards", "category")
+}
+
+/// The five fields that identify a variant within a category.
+type VariantKey = (String, String, String, String, String);
+
+/// A set of stored categories that are really one: `members` (which may include
+/// `canonical` itself) all fold into `canonical`.
+#[derive(Debug, Clone, PartialEq)]
+struct CategoryMerge {
+    canonical: String,
+    members: Vec<String>,
+}
+
+/// Finds categories that older filename rules split off from their real one —
+/// `Magic (1)` from a re-downloaded export, `Game5173` from a numeric report
+/// name — grouped by the category they belong to.
+fn pending_category_merges(conn: &Connection) -> DbResult<Vec<CategoryMerge>> {
+    let categories: Vec<String> = conn
+        .prepare(
+            "SELECT category FROM inventory_cards
+             UNION SELECT category FROM sold_events ORDER BY 1",
+        )?
+        .query_map([], |r| r.get(0))?
+        .collect::<DbResult<_>>()?;
+
+    let mut groups: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for category in &categories {
+        let has_card_metadata: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM inventory_cards
+                           WHERE category = ?1
+                             AND (TRIM(set_name) != '' OR TRIM(set_code) != ''
+                                  OR TRIM(cn) != '' OR TRIM(rarity) != ''))",
+            params![category],
+            |r| r.get(0),
+        )?;
+        let canonical =
+            canonical_category(category, has_card_metadata).unwrap_or_else(|| category.clone());
+        groups.entry(canonical).or_default().push(category.clone());
+    }
+
+    Ok(groups
+        .into_iter()
+        .filter(|(canonical, members)| members.iter().any(|m| m != canonical))
+        .map(|(canonical, members)| CategoryMerge { canonical, members })
+        .collect())
+}
+
+/// One stored row of a variant, as seen by one member category of a merge.
+struct MemberRow {
+    rowid: i64,
+    category: String,
+    quantity: i64,
+    sold_quantity: i64,
+    first_synced_at: String,
+    last_synced_at: String,
+}
+
+/// Folds each group of split categories back into its canonical category.
+///
+/// Every member holds a partial history of the *same* inventory, so the rows
+/// cannot simply be relabelled or summed — a sale seen by two members would
+/// count twice. Per variant:
+///
+/// - **quantity** comes from the member that was synced last: each sync is a
+///   complete report, so the latest one is the truth and a variant it does not
+///   list is out of stock.
+/// - **sold_quantity** is the most copies any member ever knew of
+///   (`quantity + sold_quantity`) minus the current quantity. That recovers
+///   sales which fell between two members' syncs without double counting the
+///   ones several members saw.
+/// - **sold events** are kept from the single member that recorded the most
+///   copies for the variant; the others are overlapping views of the same sales.
+///
+/// Snapshots taken while the split existed counted every member's rows; their
+/// cumulative sold figures are rebuilt from the merged data.
+fn merge_categories_conn(
+    conn: &mut Connection,
+    merges: &[CategoryMerge],
+    today: &str,
+) -> DbResult<()> {
+    let tx = conn.transaction()?;
+    let mut split_since: Option<String> = None;
+
+    for merge in merges {
+        log::warn!(
+            "Inventory DB: merging split categories {:?} into '{}'",
+            merge.members,
+            merge.canonical
+        );
+        // Preference order for ties: the canonical category first, then by name.
+        let rank = |category: &str| (category != merge.canonical, category.to_string());
+
+        let mut latest: Option<(String, String)> = None; // (last sync date, category)
+        let mut variants: std::collections::HashMap<VariantKey, Vec<MemberRow>> =
+            std::collections::HashMap::new();
+        for member in &merge.members {
+            let mut stmt = tx.prepare(
+                "SELECT rowid, cardmarket_id, condition, language, is_foil, is_signed,
+                        quantity, sold_quantity, first_synced_at, last_synced_at
+                 FROM inventory_cards WHERE category = ?1",
+            )?;
+            let rows = stmt.query_map(params![member], |r| {
+                Ok((
+                    (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?),
+                    MemberRow {
+                        rowid: r.get(0)?,
+                        category: member.clone(),
+                        quantity: r.get(6)?,
+                        sold_quantity: r.get(7)?,
+                        first_synced_at: r.get(8)?,
+                        last_synced_at: r.get(9)?,
+                    },
+                ))
+            })?;
+            let mut member_latest: Option<String> = None;
+            for row in rows {
+                let (key, row): (VariantKey, MemberRow) = row?;
+                if member_latest.as_ref() < Some(&row.last_synced_at) {
+                    member_latest = Some(row.last_synced_at.clone());
+                }
+                if member != &merge.canonical
+                    && split_since
+                        .as_ref()
+                        .is_none_or(|d| &row.first_synced_at < d)
+                {
+                    split_since = Some(row.first_synced_at.clone());
+                }
+                variants.entry(key).or_default().push(row);
+            }
+            if let Some(date) = member_latest {
+                let better = match &latest {
+                    None => true,
+                    Some((best_date, best)) => {
+                        date > *best_date || (date == *best_date && rank(member) < rank(best))
+                    }
+                };
+                if better {
+                    latest = Some((date, member.clone()));
+                }
+            }
+        }
+        let latest = latest.map(|(_, category)| category);
+
+        // Decide every variant first, then delete the surplus rows before any
+        // survivor is relabelled, so the unique article key is never violated.
+        let mut survivors: Vec<(i64, i64, i64, String, String)> = Vec::new();
+        let mut surplus: Vec<i64> = Vec::new();
+        for rows in variants.values() {
+            let current = rows.iter().find(|r| Some(&r.category) == latest.as_ref());
+            let quantity = current.map_or(0, |r| r.quantity.max(0));
+            let peak = rows
+                .iter()
+                .map(|r| r.quantity.max(0) + r.sold_quantity)
+                .max()
+                .unwrap_or(0);
+            // The survivor carries the descriptive fields (price, location, …):
+            // the latest member's row when it has one, else the freshest row.
+            let survivor = current.unwrap_or_else(|| {
+                rows.iter()
+                    .max_by(|a, b| {
+                        a.last_synced_at
+                            .cmp(&b.last_synced_at)
+                            .then_with(|| rank(&b.category).cmp(&rank(&a.category)))
+                    })
+                    .expect("a variant group always holds at least one row")
+            });
+            let first = rows.iter().map(|r| &r.first_synced_at).min();
+            let last = rows.iter().map(|r| &r.last_synced_at).max();
+            survivors.push((
+                survivor.rowid,
+                quantity,
+                (peak - quantity).max(0),
+                first.cloned().unwrap_or_default(),
+                last.cloned().unwrap_or_default(),
+            ));
+            surplus.extend(
+                rows.iter()
+                    .filter(|r| r.rowid != survivor.rowid)
+                    .map(|r| r.rowid),
+            );
+        }
+        {
+            let mut delete = tx.prepare("DELETE FROM inventory_cards WHERE rowid = ?1")?;
+            for rowid in &surplus {
+                delete.execute(params![rowid])?;
+            }
+            let mut update = tx.prepare(
+                "UPDATE inventory_cards
+                 SET category = ?1, quantity = ?2, sold_quantity = ?3,
+                     first_synced_at = ?4, last_synced_at = ?5
+                 WHERE rowid = ?6",
+            )?;
+            for (rowid, quantity, sold, first, last) in &survivors {
+                update.execute(params![merge.canonical, quantity, sold, first, last, rowid])?;
+            }
+        }
+
+        // Sold events: keep one member's view per variant, then relabel.
+        let mut event_copies: std::collections::HashMap<VariantKey, Vec<(String, i64)>> =
+            std::collections::HashMap::new();
+        for member in &merge.members {
+            let mut stmt = tx.prepare(
+                "SELECT cardmarket_id, condition, language, is_foil, is_signed, SUM(copies)
+                 FROM sold_events WHERE category = ?1
+                 GROUP BY cardmarket_id, condition, language, is_foil, is_signed",
+            )?;
+            let rows = stmt.query_map(params![member], |r| {
+                Ok((
+                    (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?),
+                    r.get::<_, i64>(5)?,
+                ))
+            })?;
+            for row in rows {
+                let (key, copies): (VariantKey, i64) = row?;
+                event_copies
+                    .entry(key)
+                    .or_default()
+                    .push((member.clone(), copies));
+            }
+        }
+        {
+            let mut delete = tx.prepare(
+                "DELETE FROM sold_events
+                 WHERE category = ?1 AND cardmarket_id = ?2 AND condition = ?3
+                   AND language = ?4 AND is_foil = ?5 AND is_signed = ?6",
+            )?;
+            for ((id, cond, lang, foil, signed), members) in &event_copies {
+                let keep = members
+                    .iter()
+                    .max_by(|a, b| a.1.cmp(&b.1).then_with(|| rank(&b.0).cmp(&rank(&a.0))))
+                    .map(|(category, _)| category.clone());
+                for (member, _) in members {
+                    if Some(member) != keep.as_ref() {
+                        delete.execute(params![member, id, cond, lang, foil, signed])?;
+                    }
+                }
+            }
+        }
+        for member in &merge.members {
+            tx.execute(
+                "UPDATE sold_events SET category = ?1 WHERE category = ?2",
+                params![merge.canonical, member],
+            )?;
+            // Rebuilt from the merged rows by `backfill_lot_stock_conn`.
+            tx.execute("DELETE FROM lot_stock WHERE category = ?1", params![member])?;
+        }
+    }
+
+    // Snapshots from the split period summed every member's rows. Rebuild their
+    // cumulative sold figures by walking back from the merged totals through
+    // the dated sold events. Their in-stock columns stay as recorded (nothing
+    // reads them, and the stock on a past date cannot be reconstructed).
+    if let Some(since) = split_since {
+        tx.execute(
+            "UPDATE inventory_snapshots SET
+                sold_copies_cumulative = MAX(0,
+                    (SELECT COALESCE(SUM(sold_quantity), 0) FROM inventory_cards)
+                    - (SELECT COALESCE(SUM(copies), 0) FROM sold_events
+                       WHERE sold_events.date > inventory_snapshots.date)),
+                sold_revenue_cumulative = MAX(0.0,
+                    (SELECT COALESCE(SUM(CAST(price AS REAL) * sold_quantity), 0.0)
+                     FROM inventory_cards)
+                    - (SELECT COALESCE(SUM(copies * price), 0.0) FROM sold_events
+                       WHERE sold_events.date > inventory_snapshots.date))
+             WHERE date >= ?1",
+            params![since],
+        )?;
+    }
+    write_snapshot(&tx, today)?;
+    tx.commit()
+}
+
+/// Seeds `lot_stock` for every category that has inventory rows but no lot rows
+/// yet — a database from before lot tracking, or a category just merged.
+///
+/// `inventory_cards` only knows one location per variant, so each variant's
+/// whole stock and sales history starts out in that location's lot; the next
+/// sync redistributes the stock across the lots the CSV actually lists. Past
+/// revenue is taken from the recorded sold events where they exist, and from
+/// the current price for sales older than the event log.
+fn backfill_lot_stock_conn(conn: &mut Connection) -> DbResult<()> {
+    let categories: Vec<String> = conn
+        .prepare(
+            "SELECT DISTINCT category FROM inventory_cards
+             WHERE category NOT IN (SELECT DISTINCT category FROM lot_stock)",
+        )?
+        .query_map([], |r| r.get(0))?
+        .collect::<DbResult<_>>()?;
+    if categories.is_empty() {
+        return Ok(());
+    }
+
+    let tx = conn.transaction()?;
+    for category in &categories {
+        log::info!("Inventory DB: seeding per-lot stock for category '{category}'");
+        let mut events: std::collections::HashMap<VariantKey, (i64, f64)> =
+            std::collections::HashMap::new();
+        {
+            let mut stmt = tx.prepare(
+                "SELECT cardmarket_id, condition, language, is_foil, is_signed,
+                        SUM(copies), SUM(copies * price)
+                 FROM sold_events WHERE category = ?1
+                 GROUP BY cardmarket_id, condition, language, is_foil, is_signed",
+            )?;
+            let rows = stmt.query_map(params![category], |r| {
+                Ok((
+                    (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?),
+                    (r.get::<_, i64>(5)?, r.get::<_, f64>(6)?),
+                ))
+            })?;
+            for row in rows {
+                let (key, totals): (VariantKey, (i64, f64)) = row?;
+                events.insert(key, totals);
+            }
+        }
+
+        let mut select = tx.prepare(
+            "SELECT cardmarket_id, condition, language, is_foil, is_signed,
+                    quantity, sold_quantity, CAST(price AS REAL), COALESCE(location, '')
+             FROM inventory_cards WHERE category = ?1",
+        )?;
+        let mut insert = tx.prepare(
+            "INSERT INTO lot_stock
+                (category, cardmarket_id, condition, language, is_foil, is_signed, lot,
+                 quantity, stock_value, sold_quantity, sold_revenue)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        )?;
+        let rows = select.query_map(params![category], |r| {
+            Ok((
+                (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?),
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, f64>(7)?,
+                r.get::<_, String>(8)?,
+            ))
+        })?;
+        for row in rows {
+            let (key, quantity, sold, price, location): (VariantKey, i64, i64, f64, String) = row?;
+            let quantity = quantity.max(0);
+            let (event_copies, event_revenue) = events.get(&key).copied().unwrap_or((0, 0.0));
+            let sold_revenue = if event_copies >= sold && event_copies > 0 {
+                event_revenue * sold as f64 / event_copies as f64
+            } else {
+                event_revenue + (sold - event_copies) as f64 * price
+            };
+            let (id, cond, lang, foil, signed) = &key;
+            insert.execute(params![
+                category,
+                id,
+                cond,
+                lang,
+                foil,
+                signed,
+                extract_lot_number(&location).unwrap_or(""),
+                quantity,
+                price * quantity as f64,
+                sold,
+                sold_revenue,
+            ])?;
+        }
+    }
+    tx.commit()
+}
+
+/// Records today's whole-business snapshot from the current table state.
+///
+/// Cumulative sold figures let later reads diff any two dates into a period
+/// velocity. `INSERT OR REPLACE` keyed on `date` keeps at most one row per day
+/// (same-day re-syncs overwrite it with the latest numbers).
+///
+/// Deliberately spans *all* categories: a snapshot is the whole-business
+/// position (capital tied up, revenue earned), not a per-category one. Since
+/// it is recomputed from the full table after every sync, syncing either
+/// category alone still produces a correct combined figure.
+///
+/// Revenue includes the price of every bulk lot built up to `today`; copies
+/// sold count singles only (a lot's copies are not single sales).
+fn write_snapshot(conn: &Connection, today: &str) -> DbResult<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO inventory_snapshots
+            (date, in_stock_copies, in_stock_value,
+             sold_copies_cumulative, sold_revenue_cumulative)
+         SELECT
+            ?1,
+            COALESCE(SUM(CASE WHEN quantity > 0 THEN quantity ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN quantity > 0 THEN CAST(price AS REAL) * quantity ELSE 0 END), 0.0),
+            COALESCE(SUM(sold_quantity), 0),
+            COALESCE(SUM(CAST(price AS REAL) * sold_quantity), 0.0)
+                + (SELECT COALESCE(SUM(b.price), 0.0) FROM bulk_lots b WHERE b.created_at <= ?1)
+         FROM inventory_cards",
+        params![today],
+    )?;
+    Ok(())
+}
+
+/// Builds a stable composite key string identifying a unique card variant.
+///
+/// Used during sync to detect which DB rows are no longer present in the CSV.
+/// ASCII unit separator (0x1F) is used as delimiter — it cannot appear in field values.
+///
+/// The category leads the key because Cardmarket product IDs are only unique
+/// within a category: without it, a sleeve and a card sharing an ID would
+/// collapse onto the same row.
+fn article_key(
+    category: &str,
+    id: &str,
+    condition: &str,
+    language: &str,
+    is_foil: &str,
+    is_signed: &str,
+) -> String {
+    format!("{category}\x1F{id}\x1F{condition}\x1F{language}\x1F{is_foil}\x1F{is_signed}")
+}
+
+/// Returns today's date as `YYYY-MM-DD` using local system time.
+fn today_date() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+impl InventoryDb {
+    /// Syncs a slice of cards (from a freshly loaded inventory CSV) to the local DB,
+    /// with two safety layers in front of the write:
+    ///
+    /// 1. A dated backup of the DB file is taken (first write of the day) so a bad
+    ///    import can always be rolled back.
+    /// 2. The change is previewed first; a sync that would record most of the
+    ///    inventory as sold is blocked and returned as [`SyncOutcome::Blocked`]
+    ///    with nothing written — the caller decides whether to
+    ///    [`InventoryDb::sync_inventory_forced`].
+    ///
+    /// Sync semantics:
+    /// - The sync is scoped to `category`: only rows in that category are read,
+    ///   updated or zeroed. Loading the Generic export therefore leaves the Magic
+    ///   inventory completely untouched, and vice versa.
+    /// - Cards are pre-aggregated by variant (category + cardmarket_id + condition +
+    ///   language + foil + signed): quantities across multiple locations are summed
+    ///   into a single DB row.
+    /// - Existing variants are updated; new variants are inserted.
+    /// - Variants of this category not in `cards` that have `quantity > 0` are zeroed out.
+    /// - Timestamps are only advanced once per day.
+    ///
+    /// Errors are returned to the caller; call sites treat them as non-fatal.
+    pub fn sync_inventory(&self, cards: &[Card], category: &str) -> DbResult<SyncOutcome> {
+        let mut conn = self.open()?;
+        self.backup(&conn, &today_date());
+        let preview = preview_sync_conn(&conn, cards, category)?;
+        if preview.is_suspicious() {
+            log::warn!(
+                "Inventory sync blocked for category '{}': would record {} of {} copies as sold ({} variants zeroed)",
+                category,
+                preview.copies_sold,
+                preview.copies_before,
+                preview.zeroed_variants
+            );
+            return Ok(SyncOutcome::Blocked(preview));
+        }
+        Ok(SyncOutcome::Synced(sync_inventory_conn(
+            &mut conn,
+            cards,
+            category,
+            &today_date(),
+        )?))
+    }
+}
+
+impl InventoryDb {
+    /// Runs the sync without the suspicious-change guard (still takes the daily
+    /// backup first). Use only after the user has confirmed a blocked sync.
+    pub fn sync_inventory_forced(&self, cards: &[Card], category: &str) -> DbResult<SyncStats> {
+        let mut conn = self.open()?;
+        self.backup(&conn, &today_date());
+        sync_inventory_conn(&mut conn, cards, category, &today_date())
+    }
+}
+
+impl InventoryDb {
+    /// Writes off (discards) copies of card variants **without** recording them as
+    /// sales.
+    ///
+    /// Each `(card, quantity)` pair reduces the matching DB row's `quantity` by
+    /// `quantity`, clamped so it never goes below zero. Crucially, `sold_quantity`
+    /// is left untouched — a discard is stock leaving the shelf that was *not* sold,
+    /// so it must not inflate tracked revenue. Multiple pairs targeting the same
+    /// variant (e.g. the same card picked from two locations) are summed first.
+    ///
+    /// The caller is expected to also export a stock-update CSV of the same copies
+    /// and import it into Cardmarket, so the next full inventory sync sees the drop
+    /// already reflected in both places and records no phantom sale.
+    ///
+    /// Errors are returned to the caller; call sites treat them as non-fatal.
+    pub fn discard_cards(
+        &self,
+        discards: &[(Card, i64)],
+        category: &str,
+    ) -> DbResult<DiscardStats> {
+        let mut conn = self.open()?;
+        discard_cards_conn(&mut conn, discards, category)
+    }
+}
+
+/// Inner discard that accepts an explicit connection — used in tests.
+fn discard_cards_conn(
+    conn: &mut Connection,
+    discards: &[(Card, i64)],
+    category: &str,
+) -> DbResult<DiscardStats> {
+    let tx = conn.transaction()?;
+    let stats = discard_cards_in_tx(&tx, discards, category)?;
+    tx.commit()?;
+    Ok(stats)
+}
+
+/// The variant key the database uses for a card: product id, condition,
+/// language, foil and signed flags, normalised as by the sync.
+pub fn db_variant_key(card: &Card) -> (String, String, String, String, String) {
+    db_variant_key_of(
+        &card.cardmarket_id,
+        &card.condition,
+        &card.language,
+        &card.is_foil,
+        &card.is_signed,
+    )
+}
+
+/// [`db_variant_key`] from the raw fields.
+pub fn db_variant_key_of(
+    cardmarket_id: &str,
+    condition: &str,
+    language: &str,
+    is_foil: &str,
+    is_signed: &str,
+) -> (String, String, String, String, String) {
+    (
+        cardmarket_id.to_string(),
+        canonical_condition(condition),
+        normalize_language(language),
+        normalize_flag(is_foil),
+        normalize_flag(is_signed),
+    )
+}
+
+/// The stock of the variant with `key` (see [`db_variant_key`]); `None`
+/// when the database has no such variant.
+pub fn variant_quantity_conn(
+    conn: &Connection,
+    key: &(String, String, String, String, String),
+    category: &str,
+) -> DbResult<Option<i64>> {
+    let (id, condition, language, foil, signed) = key;
+    conn.query_row(
+        "SELECT quantity FROM inventory_cards
+         WHERE category = ?6 AND cardmarket_id = ?1 AND condition = ?2 AND language = ?3
+           AND is_foil = ?4 AND is_signed = ?5",
+        params![id, condition, language, foil, signed, category],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+/// The discard of [`InventoryDb::discard_cards`] inside the caller's
+/// transaction (the server checks first and records more in it).
+pub fn discard_cards_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    discards: &[(Card, i64)],
+    category: &str,
+) -> DbResult<DiscardStats> {
+    // Aggregate requested copies by the same canonical variant key the sync uses,
+    // so two rows for the same variant (different physical locations) collapse into
+    // a single UPDATE and clamp against the one merged DB row.
+    let mut agg: std::collections::HashMap<(String, String, String, String, String), i64> =
+        std::collections::HashMap::new();
+    for (card, qty) in discards {
+        if *qty <= 0 {
+            continue;
+        }
+        let key = (
+            card.cardmarket_id.clone(),
+            canonical_condition(&card.condition),
+            normalize_language(&card.language),
+            normalize_flag(&card.is_foil),
+            normalize_flag(&card.is_signed),
+        );
+        *agg.entry(key).or_insert(0) += *qty;
+    }
+
+    let mut stats = DiscardStats::default();
+
+    // Take the copies out of the lot they were picked from as well, so the lot
+    // table does not keep showing written-off stock until the next sync. Like
+    // the variant row below, the lot's sold figures are never touched.
+    for (card, qty) in discards {
+        if *qty <= 0 {
+            continue;
+        }
+        tx.execute(
+            "UPDATE lot_stock SET
+                stock_value = CASE WHEN quantity > ?1
+                                   THEN stock_value * (quantity - ?1) / quantity
+                                   ELSE 0.0 END,
+                quantity = MAX(quantity - ?1, 0)
+             WHERE category = ?2 AND cardmarket_id = ?3 AND condition = ?4 AND language = ?5
+               AND is_foil = ?6 AND is_signed = ?7 AND lot = ?8",
+            params![
+                qty,
+                category,
+                card.cardmarket_id,
+                canonical_condition(&card.condition),
+                normalize_language(&card.language),
+                normalize_flag(&card.is_foil),
+                normalize_flag(&card.is_signed),
+                card_lot(card),
+            ],
+        )?;
+    }
+
+    for ((id, cond, lang, foil, signed), requested) in &agg {
+        // Read the current quantity so we can clamp and report the true amount
+        // removed. sold_quantity is deliberately never referenced here.
+        let current: Option<i64> = tx
+            .query_row(
+                "SELECT quantity FROM inventory_cards
+                 WHERE category = ?6 AND cardmarket_id = ?1 AND condition = ?2 AND language = ?3
+                   AND is_foil = ?4 AND is_signed = ?5",
+                params![id, cond, lang, foil, signed, category],
+                |r| r.get(0),
+            )
+            .optional()?;
+
+        let Some(current) = current else {
+            log::warn!(
+                "Discard skipped: no DB row for variant {id}/{cond}/{lang} \
+                 (foil={foil}, signed={signed}, category={category})"
+            );
+            continue;
+        };
+
+        let removed = (*requested).min(current.max(0));
+        if removed == 0 {
+            continue;
+        }
+
+        tx.execute(
+            "UPDATE inventory_cards SET quantity = quantity - ?1
+             WHERE category = ?7 AND cardmarket_id = ?2 AND condition = ?3 AND language = ?4
+               AND is_foil = ?5 AND is_signed = ?6",
+            params![removed, id, cond, lang, foil, signed, category],
+        )?;
+        stats.variants_updated += 1;
+        stats.copies_discarded += removed;
+    }
+
+    if stats.variants_updated > 0 {
+        log::info!(
+            "Inventory DB discard: {} copies written off across {} variants (revenue unaffected)",
+            stats.copies_discarded,
+            stats.variants_updated
+        );
+    }
+    Ok(stats)
+}
+
+impl InventoryDb {
+    /// Queries aggregate statistics for one category of the local inventory database.
+    ///
+    /// Pass [`DEFAULT_CATEGORY`] for the Magic figures. Breakdowns by rarity,
+    /// condition and language are card concepts, so mixing accessories into them
+    /// would only add noise.
+    pub fn get_db_stats(&self, category: &str) -> DbResult<DbStats> {
+        let conn = self.open()?;
+        get_db_stats_conn(&conn, category, &today_date())
+    }
+}
+
+impl InventoryDb {
+    /// Returns the distinct categories present in the database, alphabetically.
+    ///
+    /// Lets the UI offer a category switcher without hardcoding the list.
+    pub fn get_categories(&self) -> DbResult<Vec<String>> {
+        let conn = self.open()?;
+        get_categories_conn(&conn)
+    }
+}
+
+/// Inner query that accepts an explicit connection — used in tests.
+fn get_categories_conn(conn: &Connection) -> DbResult<Vec<String>> {
+    conn.prepare("SELECT DISTINCT category FROM inventory_cards ORDER BY category ASC")?
+        .query_map([], |r| r.get(0))?
+        .collect()
+}
+
+impl InventoryDb {
+    /// Records (or corrects) the total acquisition cost for a lot, in EUR.
+    ///
+    /// Upserts by lot ID: entering a cost for a lot that already has one overwrites
+    /// it, so a mistaken buy price can be fixed. `cost` must be non-negative.
+    pub fn set_lot_cost(&self, lot: &str, cost: f64) -> DbResult<()> {
+        let conn = self.open()?;
+        set_lot_cost_conn(&conn, lot, cost, &today_date())
+    }
+}
+
+/// Inner upsert that accepts an explicit connection and date — used in tests.
+pub fn set_lot_cost_conn(conn: &Connection, lot: &str, cost: f64, today: &str) -> DbResult<()> {
+    if !cost.is_finite() || cost < 0.0 {
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            format!("lot cost must be a finite, non-negative amount, got {cost}").into(),
+        ));
+    }
+    conn.execute(
+        "INSERT INTO lot_costs (lot, cost, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(lot) DO UPDATE SET cost = excluded.cost, updated_at = excluded.updated_at",
+        params![lot, cost, today],
+    )?;
+    Ok(())
+}
+
+impl InventoryDb {
+    /// Removes the recorded acquisition cost for a lot, if any.
+    pub fn delete_lot_cost(&self, lot: &str) -> DbResult<()> {
+        let conn = self.open()?;
+        delete_lot_cost_conn(&conn, lot)
+    }
+}
+
+/// The recorded acquisition cost of `lot`, if any.
+pub fn lot_cost_conn(conn: &Connection, lot: &str) -> DbResult<Option<f64>> {
+    conn.query_row("SELECT cost FROM lot_costs WHERE lot = ?1", [lot], |r| {
+        r.get(0)
+    })
+    .optional()
+}
+
+/// Whether `lot` is a purchase lot the data knows: it held stock at some
+/// point (`lot_stock`) or already has a cost.
+pub fn lot_known_conn(conn: &Connection, lot: &str) -> DbResult<bool> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM lot_stock WHERE lot = ?1)
+             OR EXISTS (SELECT 1 FROM lot_costs WHERE lot = ?1)",
+        [lot],
+        |r| r.get(0),
+    )
+}
+
+/// Whether `lot` has the form of a purchase lot id (`L12`).
+pub fn is_lot_id(lot: &str) -> bool {
+    lot.len() > 1
+        && lot.len() <= 12
+        && lot.starts_with('L')
+        && lot[1..].bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Removes the recorded acquisition cost for a lot, if any.
+pub fn delete_lot_cost_conn(conn: &Connection, lot: &str) -> DbResult<()> {
+    conn.execute("DELETE FROM lot_costs WHERE lot = ?1", params![lot])?;
+    Ok(())
+}
+
+impl InventoryDb {
+    /// Returns every in-stock card variant (quantity > 0) in the given category.
+    ///
+    /// Pass [`DEFAULT_CATEGORY`] for the Magic inventory. Card-analysis features
+    /// (mispricing, aging) want a single category: accessories carry no rarity or
+    /// set and their prices are unrelated to card prices, so blending them in would
+    /// distort the results.
+    pub fn get_in_stock_cards(&self, category: &str) -> DbResult<Vec<InStockCard>> {
+        let conn = self.open()?;
+        get_in_stock_cards_conn(&conn, category)
+    }
+}
+
+/// Inner query that accepts an explicit connection — used in tests.
+pub fn get_in_stock_cards_conn(conn: &Connection, category: &str) -> DbResult<Vec<InStockCard>> {
+    conn.prepare(
+        "SELECT cardmarket_id, name, set_code, cn, condition, language,
+                (is_foil = '1' OR LOWER(is_foil) = 'true') AS foil,
+                rarity, quantity, CAST(price AS REAL),
+                COALESCE(location, ''),
+                COALESCE(NULLIF(listed_at, ''), first_synced_at) AS effective_date
+         FROM inventory_cards
+         WHERE quantity > 0 AND category = ?1",
+    )?
+    .query_map(params![category], |r| {
+        Ok(InStockCard {
+            cardmarket_id: r.get(0)?,
+            name: r.get(1)?,
+            set_code: r.get(2)?,
+            cn: r.get(3)?,
+            condition: r.get(4)?,
+            language: r.get(5)?,
+            is_foil: r.get(6)?,
+            rarity: r.get(7)?,
+            quantity: r.get(8)?,
+            price: r.get(9)?,
+            location: r.get(10)?,
+            effective_date: r.get(11)?,
+        })
+    })?
+    .collect()
+}
+
+impl InventoryDb {
+    /// Returns every recorded sold event in the given category, oldest first.
+    pub fn get_sold_events(&self, category: &str) -> DbResult<Vec<SoldEvent>> {
+        let conn = self.open()?;
+        get_sold_events_conn(&conn, category)
+    }
+}
+
+/// Inner query that accepts an explicit connection — used in tests.
+fn get_sold_events_conn(conn: &Connection, category: &str) -> DbResult<Vec<SoldEvent>> {
+    conn.prepare(
+        "SELECT date, cardmarket_id, condition, language, is_foil, is_signed, copies, price
+         FROM sold_events WHERE category = ?1 ORDER BY date ASC, rowid ASC",
+    )?
+    .query_map(params![category], |r| {
+        Ok(SoldEvent {
+            date: r.get(0)?,
+            cardmarket_id: r.get(1)?,
+            condition: r.get(2)?,
+            language: r.get(3)?,
+            is_foil: r.get(4)?,
+            is_signed: r.get(5)?,
+            copies: r.get(6)?,
+            price: r.get(7)?,
+        })
+    })?
+    .collect()
+}
+
+impl InventoryDb {
+    /// Sale history per variant of a category, keyed by article key (the key
+    /// [`card_variant_key`] builds for a CSV row): `(date, copies)` pairs, oldest
+    /// first. Discards and bulk-lot removals never appear (they record no sales).
+    pub fn get_sales_by_variant(
+        &self,
+        category: &str,
+    ) -> DbResult<HashMap<String, Vec<(String, i64)>>> {
+        let conn = self.open()?;
+        sales_by_variant_conn(&conn, category)
+    }
+}
+
+/// Sale history per card variant (`card_variant_key`): `(date, copies)`,
+/// on an explicit connection (tests, the server).
+pub fn sales_by_variant_conn(
+    conn: &Connection,
+    category: &str,
+) -> DbResult<HashMap<String, Vec<(String, i64)>>> {
+    let mut out: HashMap<String, Vec<(String, i64)>> = HashMap::new();
+    let mut stmt = conn.prepare(
+        "SELECT cardmarket_id, condition, language, is_foil, is_signed, date, copies
+         FROM sold_events WHERE category = ?1 ORDER BY date ASC, rowid ASC",
+    )?;
+    let rows = stmt.query_map(params![category], |r| {
+        Ok((
+            article_key(
+                category,
+                &r.get::<_, String>(0)?,
+                &r.get::<_, String>(1)?,
+                &r.get::<_, String>(2)?,
+                &r.get::<_, String>(3)?,
+                &r.get::<_, String>(4)?,
+            ),
+            r.get::<_, String>(5)?,
+            r.get::<_, i64>(6)?,
+        ))
+    })?;
+    for row in rows {
+        let (key, date, copies) = row?;
+        out.entry(key).or_default().push((date, copies));
+    }
+    Ok(out)
+}
+
+impl InventoryDb {
+    /// Returns every sold-out variant (quantity 0, sold copies > 0) in the given
+    /// category, enriched with its sale history — the raw input for the restock
+    /// recommendations report.
+    ///
+    /// Pass `None` to span all categories. Restocking is a purchasing decision, and
+    /// fast-moving accessories (sleeves, deck boxes) are as worth re-buying as
+    /// cards, so the report defaults to everything.
+    pub fn get_restock_candidates(
+        &self,
+        category: Option<&str>,
+    ) -> DbResult<Vec<RestockCandidate>> {
+        let conn = self.open()?;
+        get_restock_candidates_conn(&conn, category)
+    }
+}
+
+/// Reads one value from the app bookkeeping store.
+fn get_meta(conn: &Connection, key: &str) -> DbResult<Option<String>> {
+    conn.query_row("SELECT value FROM app_meta WHERE key = ?1", [key], |r| {
+        r.get(0)
+    })
+    .optional()
+}
+
+/// Writes one value to the app bookkeeping store.
+fn set_meta(conn: &Connection, key: &str, value: &str) -> DbResult<()> {
+    conn.execute(
+        "INSERT INTO app_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [key, value],
+    )?;
+    Ok(())
+}
+
+/// Most recent day any variant was synced: the date of the last inventory
+/// import, i.e. how current the data is. `None` for an empty database.
+pub fn last_sync_date_conn(conn: &Connection) -> DbResult<Option<String>> {
+    conn.query_row("SELECT MAX(last_synced_at) FROM inventory_cards", [], |r| {
+        r.get(0)
+    })
+}
+
+/// What changed since the previous visit — shown on the welcome screen.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct VisitDigest {
+    /// Baseline date the digest is measured against (the previous day the app
+    /// was started); `None` on the very first visit.
+    pub since: Option<String>,
+    /// Copies recorded as sold since the baseline, and their revenue.
+    pub sold_copies: i64,
+    pub sold_revenue: f64,
+    /// Variants first seen by a sync after the baseline.
+    pub new_listings: i64,
+    /// Most recent day any variant was synced (proxy for "last CSV import").
+    pub last_sync: Option<String>,
+    /// Current number of restock candidates (sold out, worth re-buying).
+    pub restock_candidates: i64,
+    /// Bulk lots built since the baseline (not part of `sold_*`, which count
+    /// single sales).
+    pub bulk_lots: BulkLotTotals,
+}
+
+impl InventoryDb {
+    /// Builds the since-last-visit digest and records today as the latest visit.
+    ///
+    /// Visits are tracked per day: starting the app again on the same day keeps
+    /// the same baseline instead of resetting the digest to empty.
+    pub fn visit_digest(&self) -> DbResult<VisitDigest> {
+        let conn = self.open()?;
+        visit_digest_conn(&conn, &today_date())
+    }
+}
+
+/// Inner digest that accepts an explicit connection and date — used in tests.
+///
+/// Spans all categories on purpose: the welcome screen answers "what happened
+/// while I was away" across the whole business, not per product line.
+fn visit_digest_conn(conn: &Connection, today: &str) -> DbResult<VisitDigest> {
+    let last = get_meta(conn, "last_visit")?;
+    let baseline = match last {
+        Some(d) if d != today => {
+            set_meta(conn, "prev_visit", &d)?;
+            set_meta(conn, "last_visit", today)?;
+            Some(d)
+        }
+        Some(_) => get_meta(conn, "prev_visit")?,
+        None => {
+            set_meta(conn, "last_visit", today)?;
+            None
+        }
+    };
+
+    digest_since_conn(conn, baseline.as_deref())
+}
+
+/// The digest measured from `since` (exclusive; `None` = only the current
+/// figures), without recording a visit: for callers that keep their own
+/// visit dates (the server, per user).
+pub fn digest_since_conn(conn: &Connection, since: Option<&str>) -> DbResult<VisitDigest> {
+    let mut digest = VisitDigest {
+        since: since.map(str::to_string),
+        ..VisitDigest::default()
+    };
+    if let Some(since) = since {
+        let (copies, revenue): (Option<i64>, Option<f64>) = conn.query_row(
+            "SELECT SUM(copies), SUM(copies * price) FROM sold_events WHERE date > ?1",
+            [since],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        digest.sold_copies = copies.unwrap_or(0);
+        digest.sold_revenue = revenue.unwrap_or(0.0);
+        digest.new_listings = conn.query_row(
+            "SELECT COUNT(*) FROM inventory_cards WHERE first_synced_at > ?1",
+            [since],
+            |r| r.get(0),
+        )?;
+        digest.bulk_lots = bulk_lots::totals_between(conn, Some(since), None)?;
+    }
+    digest.last_sync = last_sync_date_conn(conn)?;
+    // Same rule as the restock report: variants that went into a bulk lot are
+    // dumped stock, not sell-outs worth buying again.
+    digest.restock_candidates = conn.query_row(
+        "SELECT COUNT(*) FROM inventory_cards c
+         WHERE c.quantity = 0 AND c.sold_quantity > 0
+           AND NOT EXISTS (SELECT 1 FROM bulk_lot_cards b
+                           WHERE b.category = c.category
+                             AND b.cardmarket_id = c.cardmarket_id
+                             AND b.condition = c.condition
+                             AND b.language = c.language
+                             AND b.is_foil = c.is_foil
+                             AND b.is_signed = c.is_signed)",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(digest)
+}
+
+/// Inner query that accepts an explicit connection — used in tests.
+///
+/// Realized revenue sums the per-sale prices from `sold_events`; any copies sold
+/// before event recording existed (sold_quantity larger than the events' total)
+/// are valued at the variant's last listed price. The sold-out date prefers the
+/// last event date and falls back to `last_synced_at`, which for a zeroed row is
+/// the day the sync zeroed it.
+///
+/// Variants that went into a bulk lot are left out: they were dumped as bulk,
+/// so selling out says nothing about demand.
+pub fn get_restock_candidates_conn(
+    conn: &Connection,
+    category: Option<&str>,
+) -> DbResult<Vec<RestockCandidate>> {
+    conn.prepare(
+        "SELECT c.cardmarket_id, c.name, c.set_code, c.cn, c.condition, c.language,
+                (c.is_foil = '1' OR LOWER(c.is_foil) = 'true') AS foil,
+                c.rarity, c.sold_quantity,
+                CAST(c.price AS REAL) AS last_price,
+                COALESCE(NULLIF(c.listed_at, ''), c.first_synced_at) AS listed_date,
+                COALESCE(e.last_sale_date, c.last_synced_at) AS sold_out_date,
+                COALESCE(e.revenue, 0.0)
+                    + MAX(c.sold_quantity - COALESCE(e.copies, 0), 0)
+                      * CAST(c.price AS REAL) AS realized_revenue,
+                COALESCE(c.location, '') AS location
+         FROM inventory_cards c
+         LEFT JOIN (
+             SELECT category, cardmarket_id, condition, language, is_foil, is_signed,
+                    MAX(date) AS last_sale_date,
+                    SUM(copies) AS copies,
+                    SUM(copies * price) AS revenue
+             FROM sold_events
+             GROUP BY category, cardmarket_id, condition, language, is_foil, is_signed
+         ) e ON e.category = c.category
+            AND e.cardmarket_id = c.cardmarket_id
+            AND e.condition = c.condition
+            AND e.language = c.language
+            AND e.is_foil = c.is_foil
+            AND e.is_signed = c.is_signed
+         WHERE c.quantity = 0 AND c.sold_quantity > 0
+           AND (?1 IS NULL OR c.category = ?1)
+           AND NOT EXISTS (SELECT 1 FROM bulk_lot_cards b
+                           WHERE b.category = c.category
+                             AND b.cardmarket_id = c.cardmarket_id
+                             AND b.condition = c.condition
+                             AND b.language = c.language
+                             AND b.is_foil = c.is_foil
+                             AND b.is_signed = c.is_signed)",
+    )?
+    .query_map(params![category], |r| {
+        let location: String = r.get(13)?;
+        Ok(RestockCandidate {
+            cardmarket_id: r.get(0)?,
+            name: r.get(1)?,
+            set_code: r.get(2)?,
+            cn: r.get(3)?,
+            condition: r.get(4)?,
+            language: r.get(5)?,
+            is_foil: r.get(6)?,
+            rarity: r.get(7)?,
+            sold_copies: r.get(8)?,
+            last_price: r.get(9)?,
+            listed_date: r.get(10)?,
+            sold_out_date: r.get(11)?,
+            realized_revenue: r.get(12)?,
+            lot: extract_lot_number(&location).map(str::to_string),
+        })
+    })?
+    .collect()
+}
+
+/// Reads all snapshot rows ordered by date ascending.
+fn read_snapshots_conn(conn: &Connection) -> DbResult<Vec<InventorySnapshot>> {
+    conn.prepare(
+        "SELECT date, in_stock_copies, in_stock_value,
+                sold_copies_cumulative, sold_revenue_cumulative
+         FROM inventory_snapshots ORDER BY date ASC",
+    )?
+    .query_map([], |r| {
+        Ok(InventorySnapshot {
+            date: r.get(0)?,
+            in_stock_copies: r.get(1)?,
+            in_stock_value: r.get(2)?,
+            sold_copies_cumulative: r.get(3)?,
+            sold_revenue_cumulative: r.get(4)?,
+        })
+    })?
+    .collect()
+}
+
+/// Parses a `YYYY-MM-DD` snapshot date.
+fn parse_date(s: &str) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+}
+
+/// Computes sales velocity from an ascending-by-date slice of snapshots.
+///
+/// Pure and deterministic: all figures are derived from the cumulative sold
+/// counters carried by the snapshots, so no wall-clock access is needed.
+/// Returns `None` until there are at least two snapshots spanning ≥1 day.
+fn compute_velocity(snaps: &[InventorySnapshot]) -> Option<SalesVelocity> {
+    let earliest = snaps.first()?;
+    let latest = snaps.last()?;
+    let start = parse_date(&earliest.date)?;
+    let end = parse_date(&latest.date)?;
+    let period_days = (end - start).num_days();
+    if period_days < 1 {
+        return None;
+    }
+
+    let sold_copies = (latest.sold_copies_cumulative - earliest.sold_copies_cumulative).max(0);
+    let sold_revenue = (latest.sold_revenue_cumulative - earliest.sold_revenue_cumulative).max(0.0);
+    let weeks = period_days as f64 / 7.0;
+    let copies_per_week = sold_copies as f64 / weeks;
+    let revenue_per_week = sold_revenue / weeks;
+
+    // Trailing-window sold counts: find the most recent snapshot on or before the
+    // target cutoff and diff its cumulative counter against the latest.
+    let window_sold = |days: i64| -> Option<i64> {
+        let cutoff = end - chrono::Duration::days(days);
+        let base = snaps
+            .iter()
+            .rev()
+            .find(|s| parse_date(&s.date).is_some_and(|d| d <= cutoff))?;
+        // Only meaningful if the base snapshot is strictly before the latest one.
+        if base.date == latest.date {
+            return None;
+        }
+        Some((latest.sold_copies_cumulative - base.sold_copies_cumulative).max(0))
+    };
+
+    Some(SalesVelocity {
+        period_days,
+        sold_copies,
+        sold_revenue,
+        copies_per_week,
+        revenue_per_week,
+        last7_copies: window_sold(7),
+        last30_copies: window_sold(30),
+        bulk_lots: BulkLotTotals::default(),
+    })
+}
+
+/// Extracts the lot number (e.g. `L0`, `L12`) from a location string.
+///
+/// Location format: `A-0-0-31-L0-R` — the lot is the first `-`-separated
+/// segment that starts with `L` followed by one or more digits.
+fn extract_lot_number(location: &str) -> Option<&str> {
+    location.split('-').find(|part| {
+        part.len() > 1 && part.starts_with('L') && part[1..].bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
+/// Loads all recorded per-lot acquisition costs into a `lot → cost` map.
+fn lot_costs_map(conn: &Connection) -> DbResult<std::collections::HashMap<String, f64>> {
+    conn.prepare("SELECT lot, cost FROM lot_costs")?
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))?
+        .collect()
+}
+
+/// Builds the per-lot stock and revenue breakdown from `lot_stock`.
+///
+/// Deliberately spans **all categories**, unlike the rest of the stats. A lot is
+/// a purchase, and `lot_costs` records one acquisition cost for the whole
+/// purchase — sleeves and other accessories bought alongside the cards included.
+/// Splitting a lot per category would measure both halves against that single
+/// cost and make margin and payback meaningless for any mixed lot.
+///
+/// `L0` is the catch-all for stock that belongs to no purchase and is left out.
+fn lot_breakdown_from(conn: &Connection) -> DbResult<Vec<LotBreakdown>> {
+    let costs = lot_costs_map(conn)?;
+
+    let mut result: Vec<LotBreakdown> = conn
+        .prepare(
+            "SELECT lot,
+                    COALESCE(SUM(quantity > 0), 0),
+                    COALESCE(SUM(quantity), 0),
+                    COALESCE(SUM(stock_value), 0.0),
+                    COALESCE(SUM(sold_quantity), 0),
+                    COALESCE(SUM(sold_revenue), 0.0)
+             FROM lot_stock
+             WHERE lot != '' AND lot != 'L0'
+             GROUP BY lot",
+        )?
+        .query_map([], |r| {
+            let lot: String = r.get(0)?;
+            Ok(LotBreakdown {
+                cost: costs.get(&lot).copied(),
+                lot,
+                in_stock_listings: r.get(1)?,
+                in_stock_copies: r.get(2)?,
+                in_stock_value: r.get(3)?,
+                sold_copies: r.get(4)?,
+                sold_revenue: r.get(5)?,
+                bulk_copies: 0,
+                bulk_revenue: 0.0,
+            })
+        })?
+        .collect::<DbResult<_>>()?;
+
+    // Copies sold in bulk lots earn their purchase lot a share of the lot price.
+    for (lot, (copies, revenue)) in bulk_lots::revenue_by_purchase_lot(conn)? {
+        if lot.is_empty() || lot == "L0" {
+            continue;
+        }
+        let entry = match result.iter().position(|l| l.lot == lot) {
+            Some(i) => &mut result[i],
+            None => {
+                result.push(LotBreakdown {
+                    cost: costs.get(&lot).copied(),
+                    lot,
+                    in_stock_listings: 0,
+                    in_stock_copies: 0,
+                    in_stock_value: 0.0,
+                    sold_copies: 0,
+                    sold_revenue: 0.0,
+                    bulk_copies: 0,
+                    bulk_revenue: 0.0,
+                });
+                result.last_mut().expect("just pushed")
+            }
+        };
+        entry.sold_copies += copies;
+        entry.sold_revenue += revenue;
+        entry.bulk_copies += copies;
+        entry.bulk_revenue += revenue;
+    }
+
+    // Sort by lot number numerically (L1, L2, …)
+    result.sort_by(|a, b| {
+        let num_a: i64 = a.lot[1..].parse().unwrap_or(i64::MAX);
+        let num_b: i64 = b.lot[1..].parse().unwrap_or(i64::MAX);
+        num_a.cmp(&num_b)
+    });
+
+    Ok(result)
+}
+
+/// Inner stats query that accepts an explicit connection and reference date —
+/// used in tests. `today` (as `YYYY-MM-DD`) anchors the dead-stock aging report.
+/// Every figure is scoped to `category`.
+pub fn get_db_stats_conn(conn: &Connection, category: &str, today: &str) -> DbResult<DbStats> {
+    let (total_articles, in_stock_articles, total_copies, total_value): (i64, i64, i64, f64) = conn
+        .query_row(
+            "SELECT
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN quantity > 0 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(quantity), 0),
+                COALESCE(SUM(CAST(price AS REAL) * quantity), 0.0)
+             FROM inventory_cards WHERE category = ?1",
+            params![category],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?;
+
+    let foil_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM inventory_cards
+         WHERE quantity > 0 AND category = ?1 AND (is_foil = '1' OR LOWER(is_foil) = 'true')",
+        params![category],
+        |r| r.get(0),
+    )?;
+
+    let signed_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM inventory_cards
+         WHERE quantity > 0 AND category = ?1 AND (is_signed = '1' OR LOWER(is_signed) = 'true')",
+        params![category],
+        |r| r.get(0),
+    )?;
+
+    let top_by_quantity: Vec<(String, i64)> = conn
+        .prepare(
+            "SELECT name, SUM(quantity) AS total FROM inventory_cards
+             WHERE quantity > 0 AND category = ?1
+             GROUP BY name ORDER BY total DESC LIMIT 5",
+        )?
+        .query_map(params![category], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<DbResult<Vec<_>>>()?;
+
+    let top_by_price: Vec<(String, f64)> = conn
+        .prepare(
+            "SELECT name, CAST(price AS REAL) AS p FROM inventory_cards
+             WHERE quantity > 0 AND category = ?1 AND CAST(price AS REAL) > 0
+             ORDER BY p DESC LIMIT 5",
+        )?
+        .query_map(params![category], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<DbResult<Vec<_>>>()?;
+
+    // Use listed_at when available; fall back to first_synced_at when empty.
+    let top_oldest_in_stock: Vec<OldestInStockEntry> = conn
+        .prepare(
+            "SELECT name,
+                    COALESCE(NULLIF(listed_at, ''), first_synced_at) AS effective_date,
+                    CAST(price AS REAL),
+                    quantity,
+                    COALESCE(location, '')
+             FROM inventory_cards
+             WHERE quantity > 0 AND category = ?1
+             ORDER BY effective_date ASC, quantity DESC LIMIT 5",
+        )?
+        .query_map(params![category], |r| {
+            Ok(OldestInStockEntry {
+                name: r.get(0)?,
+                date: r.get(1)?,
+                price: r.get(2)?,
+                quantity: r.get(3)?,
+                location: r.get(4)?,
+            })
+        })?
+        .collect::<DbResult<Vec<_>>>()?;
+
+    let oldest_listed: Option<(String, String)> = conn
+        .query_row(
+            "SELECT name, COALESCE(NULLIF(listed_at, ''), first_synced_at)
+             FROM inventory_cards WHERE quantity > 0 AND category = ?1
+             ORDER BY COALESCE(NULLIF(listed_at, ''), first_synced_at) ASC LIMIT 1",
+            params![category],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+
+    let newest_listed: Option<(String, String)> = conn
+        .query_row(
+            "SELECT name, COALESCE(NULLIF(listed_at, ''), first_synced_at)
+             FROM inventory_cards WHERE quantity > 0 AND category = ?1
+             ORDER BY COALESCE(NULLIF(listed_at, ''), first_synced_at) DESC LIMIT 1",
+            params![category],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+
+    // MIN on an empty table returns a single row with NULL, so we use Option<String>
+    let first_synced_date: Option<String> = conn.query_row(
+        "SELECT MIN(first_synced_at) FROM inventory_cards WHERE category = ?1",
+        params![category],
+        |r| r.get(0),
+    )?;
+
+    let language_breakdown: Vec<(String, i64)> = conn
+        .prepare(
+            "SELECT language, SUM(quantity) AS total FROM inventory_cards
+             WHERE quantity > 0 AND category = ?1 GROUP BY language ORDER BY total DESC",
+        )?
+        .query_map(params![category], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<DbResult<Vec<_>>>()?;
+
+    let condition_breakdown: Vec<(String, i64)> = conn
+        .prepare(
+            "SELECT condition, SUM(quantity) AS total FROM inventory_cards
+             WHERE quantity > 0 AND category = ?1 GROUP BY condition ORDER BY total DESC",
+        )?
+        .query_map(params![category], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<DbResult<Vec<_>>>()?;
+
+    let rarity_breakdown: Vec<(String, i64)> = conn
+        .prepare(
+            "SELECT rarity, SUM(quantity) AS total FROM inventory_cards
+             WHERE quantity > 0 AND category = ?1 GROUP BY rarity ORDER BY total DESC",
+        )?
+        .query_map(params![category], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<DbResult<Vec<_>>>()?;
+
+    // Lots span all categories on purpose — see `lot_breakdown_from`. A lot's
+    // recorded cost covers the whole purchase, so its revenue must too.
+    let lot_breakdown = lot_breakdown_from(conn)?;
+
+    // Dead-stock aging: bucket in-stock cards by listing age relative to `today`.
+    let in_stock = get_in_stock_cards_conn(conn, category)?;
+    let aging_buckets = parse_date(today)
+        .map(|d| crate::aging::bucket_cards(&in_stock, d))
+        .unwrap_or_default();
+
+    // Sales velocity from snapshot history, with the bulk lots its revenue
+    // includes (built after the first snapshot, up to the latest one).
+    let snapshots = read_snapshots_conn(conn)?;
+    let mut velocity = compute_velocity(&snapshots);
+    if let (Some(v), Some(first), Some(last)) = (&mut velocity, snapshots.first(), snapshots.last())
+    {
+        v.bulk_lots = bulk_lots::totals_between(conn, Some(&first.date), Some(&last.date))?;
+    }
+    let bulk_totals = bulk_lots::totals_between(conn, None, None)?;
+
+    Ok(DbStats {
+        total_articles,
+        in_stock_articles,
+        total_copies,
+        total_value,
+        foil_count,
+        signed_count,
+        top_by_quantity,
+        top_by_price,
+        top_oldest_in_stock,
+        oldest_listed,
+        newest_listed,
+        first_synced_date,
+        language_breakdown,
+        condition_breakdown,
+        rarity_breakdown,
+        lot_breakdown,
+        aging_buckets,
+        velocity,
+        bulk_totals,
+    })
+}
+
+/// Pre-aggregates CSV rows by (category, cardmarket_id, condition, language,
+/// is_foil, is_signed), summing quantities. The key components are normalised to
+/// the canonical form stored in the DB so the legacy Cardmarket export and the new
+/// inventory-report CSV produce identical variant keys (see `normalize_flag` /
+/// `normalize_language` / `canonical_condition` for the encodings used).
+///
+/// All rows in one CSV share the same `category` — Cardmarket exports one report
+/// per category — so it is passed in rather than derived per row.
+///
+/// The inventory-report CSV emits a placeholder "summary" row (quantity 0,
+/// empty location) *before* the real per-location row for a variant; the
+/// representative card therefore prefers any row with a non-empty location.
+#[allow(clippy::type_complexity)]
+fn aggregate_by_variant<'a>(
+    cards: &'a [Card],
+    category: &str,
+) -> std::collections::HashMap<(String, String, String, String, String, String), (&'a Card, i64)> {
+    let mut agg: std::collections::HashMap<
+        (String, String, String, String, String, String),
+        (&Card, i64),
+    > = std::collections::HashMap::new();
+    for card in cards {
+        let key = (
+            category.to_string(),
+            card.cardmarket_id.clone(),
+            canonical_condition(&card.condition),
+            normalize_language(&card.language),
+            normalize_flag(&card.is_foil),
+            normalize_flag(&card.is_signed),
+        );
+        let qty: i64 = card.quantity.trim().parse().unwrap_or(0);
+        let entry = agg.entry(key).or_insert((card, 0));
+        entry.1 += qty;
+
+        let rep_has_loc = card_has_location(entry.0);
+        let new_has_loc = card_has_location(card);
+        if new_has_loc && !rep_has_loc {
+            entry.0 = card;
+        }
+    }
+    agg
+}
+
+/// Parses a CSV price string (both `.` and `,` decimal separators).
+fn parse_csv_price(price: &str) -> Option<f64> {
+    price.trim().replace(',', ".").parse::<f64>().ok()
+}
+
+/// Computes what a sync of `cards` would change, without writing anything.
+///
+/// Scoped to `category`: rows in other categories are neither counted in
+/// `copies_before` nor reported as zeroed, so the suspicious-change guard
+/// measures only the slice this sync actually owns.
+/// What syncing `cards` into `category` would change, without writing
+/// anything (the guard of [`InventoryDb::sync_inventory`] decides on it).
+pub fn preview_sync_conn(
+    conn: &Connection,
+    cards: &[Card],
+    category: &str,
+) -> DbResult<SyncPreview> {
+    let agg = aggregate_by_variant(cards, category);
+    let mut preview = SyncPreview::default();
+
+    // Current DB state keyed like the sync keys it.
+    let mut db: std::collections::HashMap<String, (i64, f64)> = std::collections::HashMap::new();
+    let rows = conn
+        .prepare(
+            "SELECT cardmarket_id, condition, language, is_foil, is_signed,
+                    quantity, CAST(price AS REAL) FROM inventory_cards
+             WHERE category = ?1",
+        )?
+        .query_map(params![category], |row| {
+            Ok((
+                article_key(
+                    category,
+                    &row.get::<_, String>(0)?,
+                    &row.get::<_, String>(1)?,
+                    &row.get::<_, String>(2)?,
+                    &row.get::<_, String>(3)?,
+                    &row.get::<_, String>(4)?,
+                ),
+                row.get::<_, i64>(5)?,
+                row.get::<_, f64>(6)?,
+            ))
+        })?
+        .collect::<DbResult<Vec<_>>>()?;
+    for (key, qty, price) in rows {
+        if qty > 0 {
+            preview.copies_before += qty;
+        }
+        db.insert(key, (qty, price));
+    }
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for ((cat, id, cond, lang, foil, signed), (card, qty)) in &agg {
+        let key = article_key(cat, id, cond, lang, foil, signed);
+        preview.copies_after += *qty;
+        match db.get(&key) {
+            None => preview.new_variants += 1,
+            Some((db_qty, db_price)) => {
+                preview.updated_variants += 1;
+                if qty < db_qty {
+                    preview.copies_sold += db_qty - qty;
+                }
+                if let Some(p) = parse_csv_price(&card.price) {
+                    if (p - db_price).abs() > 0.005 {
+                        preview.price_changes += 1;
+                    }
+                }
+            }
+        }
+        seen.insert(key);
+    }
+
+    // In-stock DB variants that vanished from the CSV would be zeroed (and
+    // their remaining copies recorded as sold).
+    for (key, (qty, _)) in &db {
+        if *qty > 0 && !seen.contains(key) {
+            preview.zeroed_variants += 1;
+            preview.copies_sold += qty;
+        }
+    }
+
+    // Copies already sold in a bulk lot are not sales; the sync takes them out
+    // the same way, so the guard must not count them either.
+    let removals = RemovalPlan::plan(
+        &variant_drops(&db, &aggregated_totals(&agg)),
+        &bulk_lots::pending_removals_conn(conn, category)?,
+    );
+    preview.bulk_removed = removals.total();
+    preview.copies_sold -= preview.bulk_removed;
+
+    Ok(preview)
+}
+
+/// CSV rows aggregated per variant key, as [`aggregate_by_variant`] returns them.
+type VariantAggregate<'a> =
+    std::collections::HashMap<(String, String, String, String, String, String), (&'a Card, i64)>;
+
+/// Per-variant CSV quantity totals of an aggregation, keyed by article key.
+fn aggregated_totals(agg: &VariantAggregate<'_>) -> std::collections::HashMap<String, i64> {
+    agg.iter()
+        .map(|((cat, id, cond, lang, foil, signed), (_, qty))| {
+            (article_key(cat, id, cond, lang, foil, signed), *qty)
+        })
+        .collect()
+}
+
+/// Copies each variant loses in a sync: the drop from its DB quantity to its
+/// CSV total, or its whole stock when the CSV no longer lists it. Variants
+/// that did not drop are left out.
+fn variant_drops(
+    old: &std::collections::HashMap<String, (i64, f64)>,
+    new: &std::collections::HashMap<String, i64>,
+) -> std::collections::HashMap<String, i64> {
+    old.iter()
+        .filter_map(|(key, (old_qty, _))| {
+            let drop = old_qty - new.get(key).copied().unwrap_or(0);
+            (drop > 0).then(|| (key.clone(), drop))
+        })
+        .collect()
+}
+
+/// Stock of one variant in one lot, before and after a sync.
+#[derive(Default, Clone)]
+struct LotDelta {
+    old_quantity: i64,
+    new_quantity: i64,
+    new_value: f64,
+}
+
+/// The lots of one variant with the copies that left in bulk lots taken out
+/// of each lot's drop, so a sale is never credited to the lot those copies
+/// left. A lot gives up at most its own drop.
+fn without_bulk_removals(
+    lots: &std::collections::BTreeMap<String, LotDelta>,
+    removed_by_lot: &std::collections::HashMap<String, i64>,
+) -> std::collections::BTreeMap<String, LotDelta> {
+    lots.iter()
+        .map(|(lot, delta)| {
+            let drop = (delta.old_quantity - delta.new_quantity).max(0);
+            let removed = removed_by_lot.get(lot).copied().unwrap_or(0).min(drop);
+            let mut adjusted = delta.clone();
+            adjusted.old_quantity -= removed;
+            (lot.clone(), adjusted)
+        })
+        .collect()
+}
+
+/// Returns the lot a CSV row belongs to, or `""` when its location names none.
+fn card_lot(card: &Card) -> &str {
+    card.location
+        .as_deref()
+        .and_then(extract_lot_number)
+        .unwrap_or("")
+}
+
+/// Splits a variant's `sold` copies across the lots whose stock dropped.
+///
+/// Lots are served largest drop first, each at most by its own drop, so stock
+/// that merely moved to another lot is not mistaken for a sale. Copies the
+/// drops cannot explain (lot rows out of step with the variant total) go to the
+/// lot that held the most. Returns `lot → copies sold`.
+fn allocate_sold_to_lots(
+    lots: &std::collections::BTreeMap<String, LotDelta>,
+    sold: i64,
+) -> std::collections::HashMap<&str, i64> {
+    let mut allocation = std::collections::HashMap::new();
+    let mut remaining = sold;
+    let mut drops: Vec<(&str, i64)> = lots
+        .iter()
+        .map(|(lot, d)| (lot.as_str(), d.old_quantity - d.new_quantity))
+        .filter(|(_, drop)| *drop > 0)
+        .collect();
+    drops.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    for (lot, drop) in drops {
+        if remaining <= 0 {
+            break;
+        }
+        let take = drop.min(remaining);
+        allocation.insert(lot, take);
+        remaining -= take;
+    }
+    if remaining > 0 {
+        if let Some((lot, _)) = lots.iter().max_by(|a, b| {
+            a.1.old_quantity
+                .cmp(&b.1.old_quantity)
+                .then_with(|| b.0.cmp(a.0))
+        }) {
+            *allocation.entry(lot.as_str()).or_insert(0) += remaining;
+        }
+    }
+    allocation
+}
+
+/// Detects a relabel: the variant's whole stock was in one lot before the sync
+/// and is in exactly one *other* lot after it, without having grown. Returns
+/// `(old lot, new lot)`.
+///
+/// More copies than before means a further purchase arrived, which is new
+/// stock in its own lot rather than the old stock under a corrected label.
+fn relabelled_lot(lots: &std::collections::BTreeMap<String, LotDelta>) -> Option<(&str, &str)> {
+    let mut old = lots.iter().filter(|(_, d)| d.old_quantity > 0);
+    let mut new = lots.iter().filter(|(_, d)| d.new_quantity > 0);
+    let (from, before) = old.next()?;
+    let (to, after) = new.next()?;
+    let single = old.next().is_none() && new.next().is_none();
+    (single && from != to && after.new_quantity <= before.old_quantity)
+        .then_some((from.as_str(), to.as_str()))
+}
+
+/// Brings `lot_stock` for `category` in line with a freshly loaded CSV.
+///
+/// Stock is recorded per lot exactly as the CSV lists it. Sales are the same
+/// per-variant drops the sync records as sold events (`old_variants` is the
+/// pre-sync `quantity`/`price` per article key), credited to the lots the
+/// copies left and valued at the price they were listed at. A variant that was
+/// merely relabelled takes its history along (see [`relabelled_lot`]). Copies
+/// that left in a bulk lot (`removals`) are not sales: their purchase lot is
+/// credited from the bulk lot price instead (see `bulk_lots`).
+fn sync_lot_stock(
+    conn: &Connection,
+    cards: &[Card],
+    category: &str,
+    old_variants: &std::collections::HashMap<String, (i64, f64)>,
+    removals: &RemovalPlan,
+) -> DbResult<()> {
+    let mut variants: std::collections::HashMap<
+        VariantKey,
+        std::collections::BTreeMap<String, LotDelta>,
+    > = std::collections::HashMap::new();
+
+    {
+        let mut stmt = conn.prepare(
+            "SELECT cardmarket_id, condition, language, is_foil, is_signed, lot, quantity
+             FROM lot_stock WHERE category = ?1",
+        )?;
+        let rows = stmt.query_map(params![category], |r| {
+            Ok((
+                (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?),
+                r.get::<_, String>(5)?,
+                r.get::<_, i64>(6)?,
+            ))
+        })?;
+        for row in rows {
+            let (key, lot, quantity): (VariantKey, String, i64) = row?;
+            variants
+                .entry(key)
+                .or_default()
+                .entry(lot)
+                .or_default()
+                .old_quantity = quantity;
+        }
+    }
+
+    for card in cards {
+        let quantity: i64 = card.quantity.trim().parse().unwrap_or(0);
+        if quantity <= 0 {
+            continue;
+        }
+        let key = (
+            card.cardmarket_id.clone(),
+            canonical_condition(&card.condition),
+            normalize_language(&card.language),
+            normalize_flag(&card.is_foil),
+            normalize_flag(&card.is_signed),
+        );
+        let delta = variants
+            .entry(key)
+            .or_default()
+            .entry(card_lot(card).to_string())
+            .or_default();
+        delta.new_quantity += quantity;
+        delta.new_value += parse_csv_price(&card.price).unwrap_or(0.0) * quantity as f64;
+    }
+
+    let mut upsert = conn.prepare_cached(
+        "INSERT INTO lot_stock
+            (category, cardmarket_id, condition, language, is_foil, is_signed, lot,
+             quantity, stock_value, sold_quantity, sold_revenue)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         ON CONFLICT(category, cardmarket_id, condition, language, is_foil, is_signed, lot)
+         DO UPDATE SET
+            quantity      = excluded.quantity,
+            stock_value   = excluded.stock_value,
+            sold_quantity = lot_stock.sold_quantity + excluded.sold_quantity,
+            sold_revenue  = lot_stock.sold_revenue + excluded.sold_revenue",
+    )?;
+    for ((id, cond, lang, foil, signed), lots) in &variants {
+        let key = article_key(category, id, cond, lang, foil, signed);
+        let (old_total, old_price) = old_variants.get(&key).copied().unwrap_or((0, 0.0));
+        let new_total: i64 = lots.values().map(|d| d.new_quantity).sum();
+        let sold = ((old_total - new_total).max(0) - removals.removed(&key)).max(0);
+
+        // A variant that sat in one lot and now sits, no larger, in a single
+        // other one was relabelled, not sold and rebought: its history follows
+        // it, and this sync's sales are credited to the lot it is in now.
+        if let Some((from, to)) = relabelled_lot(lots) {
+            let history: Option<(i64, f64)> = conn
+                .query_row(
+                    "SELECT sold_quantity, sold_revenue FROM lot_stock
+                     WHERE category = ?1 AND cardmarket_id = ?2 AND condition = ?3
+                       AND language = ?4 AND is_foil = ?5 AND is_signed = ?6 AND lot = ?7",
+                    params![category, id, cond, lang, foil, signed, from],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            let (past_sold, past_revenue) = history.unwrap_or((0, 0.0));
+            conn.execute(
+                "DELETE FROM lot_stock
+                 WHERE category = ?1 AND cardmarket_id = ?2 AND condition = ?3
+                   AND language = ?4 AND is_foil = ?5 AND is_signed = ?6 AND lot = ?7",
+                params![category, id, cond, lang, foil, signed, from],
+            )?;
+            let target = &lots[to];
+            upsert.execute(params![
+                category,
+                id,
+                cond,
+                lang,
+                foil,
+                signed,
+                to,
+                target.new_quantity,
+                target.new_value,
+                past_sold + sold,
+                past_revenue + sold as f64 * old_price,
+            ])?;
+            continue;
+        }
+
+        let adjusted;
+        let basis = match removals.removed_by_lot(&key) {
+            Some(removed_by_lot) => {
+                adjusted = without_bulk_removals(lots, removed_by_lot);
+                &adjusted
+            }
+            None => lots,
+        };
+        let allocation = allocate_sold_to_lots(basis, sold);
+        for (lot, delta) in lots {
+            let sold = allocation.get(lot.as_str()).copied().unwrap_or(0);
+            if sold == 0 && delta.old_quantity == 0 && delta.new_quantity == 0 {
+                continue;
+            }
+            upsert.execute(params![
+                category,
+                id,
+                cond,
+                lang,
+                foil,
+                signed,
+                lot,
+                delta.new_quantity,
+                delta.new_value,
+                sold,
+                sold as f64 * old_price,
+            ])?;
+        }
+    }
+    Ok(())
+}
+
+/// How many daily backups of the inventory DB file to keep.
+const BACKUP_KEEP: usize = 3;
+
+impl InventoryDb {
+    /// Takes a dated snapshot of the inventory DB next to it
+    /// (`inventory-YYYY-MM-DD.db.bak`) before the first write of the day, and
+    /// prunes old backups. Uses SQLite's `VACUUM INTO` so the snapshot is
+    /// consistent regardless of journal mode. Failures are logged, never fatal —
+    /// a backup must not block a sync.
+    fn backup(&self, conn: &Connection, today: &str) {
+        if let Err(e) = backup_db_at(conn, &self.backup_dir(), today, BACKUP_KEEP) {
+            log::warn!("Inventory DB backup failed: {e}");
+        }
+    }
+
+    /// Folder the dated backups go to: the database's own folder (`.` for a
+    /// bare file name such as `inventory.db`).
+    fn backup_dir(&self) -> PathBuf {
+        match self.path.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+            _ => PathBuf::from("."),
+        }
+    }
+}
+
+/// Inner backup that accepts explicit connection and directory — used in tests.
+/// Dated file names sort lexicographically = chronologically, so pruning keeps
+/// the `keep` newest.
+fn backup_db_at(
+    conn: &Connection,
+    dir: &std::path::Path,
+    today: &str,
+    keep: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dst = dir.join(format!("inventory-{today}.db.bak"));
+    if !dst.exists() {
+        conn.execute("VACUUM INTO ?1", [dst.to_string_lossy().as_ref()])?;
+        log::info!("Inventory DB backed up to {}", dst.display());
+    }
+    let mut backups: Vec<PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("inventory-") && n.ends_with(".db.bak"))
+        })
+        .collect();
+    backups.sort();
+    while backups.len() > keep {
+        let old = backups.remove(0);
+        std::fs::remove_file(&old)?;
+    }
+    Ok(())
+}
+
+/// Inner sync that accepts an explicit connection and date — used in tests.
+/// [`sync_inventory_conn`] on a given day, for other crates' tests
+/// (`test-support` feature; inventory history needs fixed dates).
+#[cfg(any(test, feature = "test-support"))]
+pub fn sync_inventory_on_conn(
+    conn: &mut Connection,
+    cards: &[Card],
+    category: &str,
+    today: &str,
+) -> DbResult<SyncStats> {
+    sync_inventory_conn(conn, cards, category, today)
+}
+
+fn sync_inventory_conn(
+    conn: &mut Connection,
+    cards: &[Card],
+    category: &str,
+    today: &str,
+) -> DbResult<SyncStats> {
+    let tx = conn.transaction()?;
+    let stats = sync_inventory_in_tx(&tx, cards, category, today)?;
+    tx.commit()?;
+    Ok(stats)
+}
+
+/// The sync of [`InventoryDb::sync_inventory`] inside the caller's
+/// transaction, without guard or backup: for a caller that runs its own
+/// checks and backup first and records more in the same transaction (the
+/// server's import with its version row and audit entry). Nothing is
+/// written unless the caller commits.
+pub fn sync_inventory_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    cards: &[Card],
+    category: &str,
+    today: &str,
+) -> DbResult<SyncStats> {
+    log::debug!(
+        "Syncing {} cards to inventory DB (category '{}', {})",
+        cards.len(),
+        category,
+        today
+    );
+    let mut stats = SyncStats::default();
+    let agg = aggregate_by_variant(cards, category);
+
+    // Pre-sync DB state for *this category only*, read once: used to detect
+    // per-variant sold deltas (this sync's quantity drops) and to find rows that
+    // vanished from the CSV (phase 2). Scoping the read is what stops a Generic
+    // sync from treating every Magic row as vanished.
+    // Tuple layout: key fields, quantity, listed price, last_synced_at.
+    #[allow(clippy::type_complexity)]
+    let db_rows: Vec<(String, String, String, String, String, i64, f64, String)> = tx
+        .prepare(
+            "SELECT cardmarket_id, condition, language, is_foil, is_signed,
+                    quantity, CAST(price AS REAL), last_synced_at FROM inventory_cards
+             WHERE category = ?1",
+        )?
+        .query_map(params![category], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+            ))
+        })?
+        .collect::<DbResult<Vec<_>>>()?;
+
+    let db_qty_price: std::collections::HashMap<String, (i64, f64)> = db_rows
+        .iter()
+        .map(|(id, cond, lang, foil, signed, qty, price, _)| {
+            (
+                article_key(category, id, cond, lang, foil, signed),
+                (*qty, *price),
+            )
+        })
+        .collect();
+
+    // Copies of cards already sold as part of a bulk lot explain this sync's
+    // quantity drops first (see `bulk_lots`); only the rest is recorded as sold.
+    let new_totals = aggregated_totals(&agg);
+    let removals = RemovalPlan::plan(
+        &variant_drops(&db_qty_price, &new_totals),
+        &bulk_lots::pending_removals_conn(tx, category)?,
+    );
+
+    // Sold events detected this sync: (key fields..., copies, price at sale).
+    let mut sold_events: Vec<(String, String, String, String, String, i64, f64)> = Vec::new();
+
+    // Phase 1: upsert all aggregated card variants
+    {
+        let mut stmt = tx.prepare_cached(
+            "INSERT INTO inventory_cards (
+                category, cardmarket_id, quantity, name, set_name, set_code, cn,
+                condition, language, is_foil, is_playset, is_signed,
+                price, comment, location, name_de, name_es, name_fr, name_it,
+                rarity, listed_at, first_synced_at, last_synced_at
+            ) VALUES (
+                ?22, ?1, ?2, ?3, ?4, ?5, ?6,
+                ?7, ?8, ?9, ?10, ?11,
+                ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+                ?19, ?20, ?21, ?21
+            )
+            ON CONFLICT(category, cardmarket_id, condition, language, is_foil, is_signed) DO UPDATE SET
+                -- ?23: copies sold this sync, computed below (quantity drop minus
+                -- copies that left as part of a bulk lot).
+                sold_quantity   = inventory_cards.sold_quantity + ?23,
+                quantity        = excluded.quantity,
+                name            = excluded.name,
+                set_name        = excluded.set_name,
+                set_code        = excluded.set_code,
+                cn              = excluded.cn,
+                is_playset      = excluded.is_playset,
+                price           = excluded.price,
+                comment         = excluded.comment,
+                location        = excluded.location,
+                name_de         = excluded.name_de,
+                name_es         = excluded.name_es,
+                name_fr         = excluded.name_fr,
+                name_it         = excluded.name_it,
+                rarity          = excluded.rarity,
+                listed_at       = excluded.listed_at,
+                last_synced_at  = CASE
+                    WHEN last_synced_at = excluded.last_synced_at THEN last_synced_at
+                    ELSE excluded.last_synced_at
+                END
+                -- condition/language/is_foil/is_signed are the unique key; they don't change.
+                -- first_synced_at is intentionally excluded: preserved from the original INSERT.",
+        )?;
+
+        for ((cat, id, cond, lang, foil, signed), (rep_card, total_qty)) in &agg {
+            // A lower CSV quantity than the stored one means the difference sold,
+            // at the price it was listed at — except copies that left in a bulk lot.
+            let key = article_key(cat, id, cond, lang, foil, signed);
+            let mut sold = 0;
+            if let Some((old_qty, old_price)) = db_qty_price.get(&key) {
+                sold = ((old_qty - total_qty).max(0) - removals.removed(&key)).max(0);
+                if sold > 0 {
+                    sold_events.push((
+                        id.clone(),
+                        cond.clone(),
+                        lang.clone(),
+                        foil.clone(),
+                        signed.clone(),
+                        sold,
+                        *old_price,
+                    ));
+                }
+            }
+            stmt.execute(params![
+                id,
+                total_qty,
+                rep_card.name,
+                rep_card.set,
+                rep_card.set_code,
+                rep_card.cn,
+                cond,
+                lang,
+                foil,
+                rep_card.is_playset,
+                signed,
+                rep_card.price,
+                rep_card.comment,
+                rep_card.location,
+                rep_card.name_de,
+                rep_card.name_es,
+                rep_card.name_fr,
+                rep_card.name_it,
+                rep_card.rarity,
+                rep_card.listed_at,
+                today,
+                category,
+                sold,
+            ])?;
+            stats.upserted += 1;
+        }
+    }
+
+    // Phase 2: zero out card variants no longer in the CSV (identified by composite key).
+    // Normalise the same way as the aggregation above so keys line up with DB rows.
+    // `db_rows` only holds this category's rows, so other categories can never be
+    // considered "missing from the CSV" and are left entirely alone.
+    let csv_keys: HashSet<String> = cards
+        .iter()
+        .map(|c| {
+            article_key(
+                category,
+                &c.cardmarket_id,
+                &canonical_condition(&c.condition),
+                &normalize_language(&c.language),
+                &normalize_flag(&c.is_foil),
+                &normalize_flag(&c.is_signed),
+            )
+        })
+        .collect();
+
+    // Phase 1 only touched CSV variants, so the pre-sync rows read above are still
+    // accurate for everything the CSV no longer contains.
+    for (id, condition, language, is_foil, is_signed, quantity, price, last_synced_at) in &db_rows {
+        let key = article_key(category, id, condition, language, is_foil, is_signed);
+        if !csv_keys.contains(&key) && *quantity > 0 {
+            let new_date = if last_synced_at == today {
+                last_synced_at.as_str()
+            } else {
+                today
+            };
+            // The whole stock left; copies that went into a bulk lot did not sell.
+            let sold = (*quantity - removals.removed(&key)).max(0);
+            tx.execute(
+                "UPDATE inventory_cards
+                 SET sold_quantity = sold_quantity + ?8,
+                     quantity = 0,
+                     last_synced_at = ?1
+                 WHERE category = ?7 AND cardmarket_id = ?2 AND condition = ?3 AND language = ?4
+                   AND is_foil = ?5 AND is_signed = ?6",
+                params![new_date, id, condition, language, is_foil, is_signed, category, sold],
+            )?;
+            if sold > 0 {
+                sold_events.push((
+                    id.clone(),
+                    condition.clone(),
+                    language.clone(),
+                    is_foil.clone(),
+                    is_signed.clone(),
+                    sold,
+                    *price,
+                ));
+            }
+            stats.zeroed += 1;
+        }
+    }
+
+    // Phase 2a: use up the pending bulk-lot removals this sync has seen happen.
+    removals.apply(tx)?;
+    stats.bulk_removed = removals.total();
+
+    // Phase 2b: persist the sold deltas detected above. Rows are appended, never
+    // updated — a same-day re-sync that sells more copies simply adds another
+    // delta row for the same variant/date.
+    if !sold_events.is_empty() {
+        let mut stmt = tx.prepare_cached(
+            "INSERT INTO sold_events
+                (date, category, cardmarket_id, condition, language, is_foil, is_signed,
+                 copies, price)
+             VALUES (?1, ?9, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )?;
+        for (id, cond, lang, foil, signed, copies, price) in &sold_events {
+            stmt.execute(params![
+                today, id, cond, lang, foil, signed, copies, price, category
+            ])?;
+        }
+        log::info!(
+            "Inventory DB sync: recorded {} sold event(s)",
+            sold_events.len()
+        );
+    }
+
+    // Phase 2c: split the new stock across lots and credit this sync's sales
+    // to the lots they left.
+    sync_lot_stock(tx, cards, category, &db_qty_price, &removals)?;
+
+    // Phase 3: record today's snapshot from the now-current table state.
+    write_snapshot(tx, today)?;
+
+    if stats.upserted > 0 || stats.zeroed > 0 {
+        log::info!(
+            "Inventory DB sync: {} variants updated, {} zeroed, {} bulk-lot copies removed",
+            stats.upserted,
+            stats.zeroed,
+            stats.bulk_removed
+        );
+    } else {
+        log::debug!("Inventory DB sync: no changes (same-day re-sync)");
+    }
+    Ok(stats)
+}
+
+#[cfg(test)]
+#[path = "inventory_db_tests.rs"]
+mod tests;

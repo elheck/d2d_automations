@@ -1,0 +1,11 @@
+{
+  "exceptions": [
+    {
+      "advisory": "GHSA-fc5q-39xc-vjpf",
+      "package": "picomatch",
+      "reason": "ReDoS through single-branch repeated extglobs; no fixed release yet (every version up to 4.0.7, the newest, is affected). Only build and test tools use it (vite, vitest, tinyglobby, typescript-eslint), with glob patterns from our own config files; it is not in the built app. npm's suggested fix downgrades vite and vitest by major versions. Remove this once a fixed picomatch is released (npm update).",
+      "added": "2026-11-17",
+      "until": "2027-02-15"
+    }
+  ]
+}

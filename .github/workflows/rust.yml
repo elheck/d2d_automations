@@ -90,12 +90,13 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     
+    # Like the other jobs: cargo then uses the version pinned in
+    # rust-toolchain.toml. (actions-rs/toolchain with `override: true` set a
+    # directory override that beat the pin, so this job ran the newest stable
+    # and broke on every new clippy lint.)
     - name: Install Rust toolchain
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@stable
       with:
-        profile: minimal
-        toolchain: stable
-        override: true
         components: clippy, rustfmt
     
     - name: Install cargo-audit
@@ -108,8 +109,10 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           ~/.cargo/advisory-db
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          check_stock/target
+        key: ${{ runner.os }}-check-stock-cargo-${{ hashFiles('check_stock/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-check-stock-cargo-
     
     - name: Install system dependencies for check_stock
       run: |
@@ -127,6 +130,25 @@ jobs:
           libx11-dev \
           libwayland-dev
     
+    - name: Set up Node.js (web UI)
+      uses: actions/setup-node@v4
+      with:
+        node-version-file: check_stock/web/.nvmrc
+        cache: npm
+        cache-dependency-path: check_stock/web/package-lock.json
+
+    # Before the Rust builds: the server embeds web/dist.
+    - name: Web UI checks
+      working-directory: ./check_stock/web
+      run: |
+        npm ci --no-fund --no-audit
+        npm run format:check
+        npm run typecheck
+        npm run lint
+        npm test
+        npm run audit:check
+        npm run build
+
     - name: Check code formatting
       run: cargo fmt --all -- --check
       working-directory: ./check_stock
@@ -161,6 +183,18 @@ jobs:
     - name: Test documentation
       run: cargo test --doc --verbose
       working-directory: ./check_stock
+
+    # `cargo test` regenerates the web UI's TypeScript API types (ts-rs).
+    - name: Generated API types are committed and up to date
+      working-directory: ./check_stock
+      run: |
+        changes=$(git status --porcelain -- web/src/api/generated)
+        if [ -n "$changes" ]; then
+          echo "::error::The TypeScript API types differ from the committed ones. Run cargo test in check_stock/ and commit web/src/api/generated."
+          echo "$changes"
+          git diff -- web/src/api/generated
+          exit 1
+        fi
     
     - name: Clippy
       run: cargo clippy --all-targets --all-features -- -D warnings
@@ -385,6 +419,9 @@ jobs:
         docker run --rm inventory_sync:latest --help || true
         echo "✅ Production image built successfully"
 
+    # Images are what gets deployed: only pushes to main publish one (never
+    # pull requests or other branches; this workflow does not even run for
+    # pushes to other branches).
     - name: Log in to GitHub Container Registry
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       uses: docker/login-action@v3

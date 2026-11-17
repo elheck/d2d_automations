@@ -26,7 +26,11 @@ impl WelcomeScreen {
     pub fn show(ui: &mut egui::Ui, app_state: &mut AppState) {
         // Computed once per app run; local SQLite, so a blocking read is fine.
         if app_state.digest.is_none() {
-            app_state.digest = Some(crate::inventory_db::visit_digest().map_err(|e| e.to_string()));
+            app_state.digest = Some(
+                crate::paths::inventory_db()
+                    .visit_digest()
+                    .map_err(|e| e.to_string()),
+            );
         }
         let current_screen = &mut app_state.current_screen;
         let available = ui.available_size();

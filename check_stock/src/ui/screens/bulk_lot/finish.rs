@@ -4,7 +4,7 @@
 use super::widgets::{self, Tone};
 use super::{BulkLotState, DoneInfo, FinishDialog, Tab};
 use crate::bulk_lot::{export_file_name, powertools_csv};
-use crate::inventory_db::{self, per_card_share, MAX_LOT_NAME_CHARS, MAX_LOT_PRICE_EUR};
+use crate::inventory_db::{per_card_share, MAX_LOT_NAME_CHARS, MAX_LOT_PRICE_EUR};
 use crate::ui::state::AppState;
 use crate::ui::style;
 use chrono::NaiveDate;
@@ -278,7 +278,7 @@ fn perform(app_state: &mut AppState, state: &mut BulkLotState, today: NaiveDate)
         }
     };
 
-    match inventory_db::record_bulk_lot(&name, dialog.price, &lines, &category) {
+    match crate::paths::inventory_db().record_bulk_lot(&name, dialog.price, &lines, &category) {
         Ok(_) => {
             let price = dialog.price;
             state.name = name.clone();

@@ -2,6 +2,22 @@
 
 egui desktop app for Magic: The Gathering card inventory management.
 
+This folder is a Cargo workspace: the desktop app (`src/`, egui UI only),
+[`core/`](core/) (`check_stock_core`), which holds all logic and data access,
+and [`server/`](server/) (`check_stock_server`), the web version that is being
+built on top of core, with its browser interface in [`web/`](web/). Try the
+web version locally with `./dev.sh` (needs Node.js 24; see the server README):
+it works on a copy of the desktop database and asks for a password for your
+local login on the first start. Ported so far: the Magic Singles Listing
+(Cardmarket prices from inventory_sync, set with `--inventory-sync-url`), the
+Card Buy Helper, Precon EV, the reports Restock, Price Movers, Mispricing
+Stock Analysis and Bin Analysis with move lists (read-only; revenue, costs
+and margins only for users with "View revenue and costs"), the inventory
+import, Search with discards, the Stock Checker, Picking, lot-cost editing,
+Bulk Lots and Repricing (writes only on the test copy until the move: keep
+importing, discarding, building lots and exporting prices in the desktop
+app).
+
 The welcome screen shows a **since-last-visit digest** (copies sold and revenue
 since the previous day the app was opened, new listings, bulk lots built,
 restock candidates, and how old the last inventory import is — with a warning
@@ -30,6 +46,11 @@ showing exactly what would change before anything is written.
   the bulk lot's price (hover a lot's Sold/Revenue cell for the split); sales
   velocity revenue includes bulk-lot prices, its copy counts are single sales
   only.
+  Also in the web version (`/stock-analysis`): money figures (stock value,
+  revenue, capital per age bucket, lot value/cost/margin/payback) only for
+  users with "View revenue and costs"; users who may edit lot costs click a
+  cost to change it (a save is refused when someone changed it meanwhile;
+  every change is logged).
 - **Bin Analysis** — Bin capacity utilization and free-slot analysis, plus two
   consolidation tools:
   - **Consolidation suggestions** — empties sparse bins into fuller ones (preferring
@@ -45,7 +66,13 @@ showing exactly what would change before anything is written.
   tick as moved**, so it reflects what you actually did. Read-only — never writes to
   the inventory DB; moves apply when you re-load an updated CSV, and each card keeps
   its lot/side so per-lot revenue is unaffected.
-- **Magic Singles Listing** — Card lookup via Scryfall by set code + collector number, with images and Cardmarket prices
+  Also in the web version (`/bins` under Reports, `/bin-moves` under Tools):
+  it works on the file of the last inventory import on the server (no file
+  to pick), the move list is saved per user (made on the PC, ticked on the
+  phone), and after a newer import it has to be made again before the CSV
+  can be downloaded (ticks of unchanged moves stay), so the CSV never
+  carries quantities or prices of an older export.
+- **Magic Singles Listing** — Card lookup via Scryfall by set code + collector number (`hou120`, or `120` with a default set), with images and Cardmarket prices. Also in the web version (`/singles`), where the server caches Scryfall data and images and the prices come from inventory_sync instead of the 50 MB price guide
 - **Search Cards** — Interactive inventory search with filtering. Each result row
   has a **price-history button (📈)** that opens a floating window with the card's
   trend-price sparkline and 7/30-day movement, fetched from the inventory_sync
@@ -60,6 +87,13 @@ showing exactly what would change before anything is written.
   import still contains the cards, brings them back as stock, and their later
   disappearance would count as a sale.
 - **Picking** — Order picking workflow (reached via Stock Checker results)
+- **Web version of Search, Stock Checker and Picking** (`/search`,
+  `/stock-checker`, `/picking`): they work on the last inventory import on the
+  server (no file to load); a discard takes a backup first, is refused when
+  fewer copies are left than asked for, and an export that still holds
+  discarded cards is blocked by the import check; the Stock Checker takes
+  pasted or uploaded lists only (no deck links); picking lists are saved per
+  user (made on the PC, ticked on the phone)
 - **Repricing** — Reprice the whole stock by your own ruleset, review every
   change, and export the result. Three steps:
   1. **Stock** — load the Cardmarket inventory export (it is synced into the
@@ -97,7 +131,23 @@ showing exactly what would change before anything is written.
   CSV with the inventory export's columns and the new prices, plus an
   `_undo.csv` with the current prices to roll back. Check the import with a few
   cards first.
-- **Card Buy Helper** — Value a purchase offer from a card export CSV: split cards into individually-priced singles (by rarity and/or price threshold) versus bulk (flat rate per N cards), see the total offer, and export a breakdown CSV. Strictly read-only — never writes to the inventory database.
+
+  Also in the web version (`/repricing`): one ruleset shared by everyone, with
+  a revision number. Editors change a draft of their own (saved on the server
+  as they type, its prices shown live) and **publish** it; when someone else
+  published in the meantime, a dialog offers to take their rules or to
+  overwrite them on purpose. Ticks and hand prices are per user and belong to
+  one inventory import. The export always uses the published rules and is
+  refused when the rules, the stock or the market data changed since the
+  check; the last 20 exports (new prices and undo file) stay downloadable.
+  Because it is not known whether the Powertools price import also sets the
+  stock, the file carries each card's copies of the last import minus
+  write-offs, cards with copies reserved for a bulk lot are held back, and
+  the export warns about an import older than a day and about changing more
+  than a quarter of all listings. Market prices come from the shared daily
+  tracker load (no price-guide download on the web). `dev.sh` publishes the
+  desktop's rules on its copy.
+- **Card Buy Helper** — Value a purchase offer from a card export CSV: split cards into individually-priced singles (by rarity and/or price threshold) versus bulk (flat rate per N cards), see the total offer, and export a breakdown CSV. Values are the prices in the seller's file. Text from the seller's file that could run as a spreadsheet formula (`=…`, `+…`, `-…`, `@…`) is exported with a leading `'`. Strictly read-only — never writes to the inventory database. Also in the web version (`/buy-helper`), where each user's split rules and rates are saved on the server; the card list itself is never stored
 - **Mispricing Report** — Compare every in-stock listing against a market
   reference (trend/avg/low, foil-aware) to surface under- and over-priced
   cards, the revenue upside of repricing, and capital stuck above market. The
@@ -165,9 +215,14 @@ showing exactly what would change before anything is written.
   (cheaper ones count as unsellable in Liquid EV). The ranking appears as soon
   as prices are loaded; sales history follows in the background, and the foil
   check and Liquid EV apply when it finishes. Changing the cutoff, a price
-  selector or the foil option recomputes locally.
+  selector or the foil option recomputes locally. A dropped price answer from
+  the tracker is retried once before the load fails.
   Clicking a sealed price (ranking or detail) or a card name in the breakdown
   opens that exact product/printing on Cardmarket in the browser.
+  Also in the web version (`/precon-ev`): there the server loads the precons
+  once for everyone (a background job with progress; another load is possible
+  30 s after the last one ended), and each user's price columns, cutoff,
+  foil option and sorting are saved on the server.
 - **Bulk Lots** — Bundle old, cheap singles into one Cardmarket lot such as
   "100 commons" or "100 non-basic lands". Three steps:
   1. **Choose cards** — load the Magic inventory export, start from a preset
@@ -206,6 +261,13 @@ showing exactly what would change before anything is written.
   lists every lot with its status ("awaiting import" turns into a warning
   after 7 days), lets you correct the price it sold for, mark the removal as
   done by hand, list its cards, or undo it.
+
+  Also in the web version (`/bulk-lots`): the lot in progress is saved per
+  user (choose on the PC, pick on the phone); finishing checks again that no
+  other lot or discard took the picked copies meanwhile (then "Replace"),
+  takes a backup, and keeps the CSV to download again; undoing a lot whose
+  copies an import already took out needs that number typed in; card types
+  are looked up on the server and shared.
 
 ## Data Sources
 
@@ -254,6 +316,12 @@ category, so every sync is scoped to one:
   accessory in another.
 - The safety guard that blocks a suspicious import measures only the category
   being synced, so it stays meaningful for both.
+- The web version's import (`/inventory-import`) is stricter: every import
+  is checked first and confirmed, a blocked one needs the number of copies
+  it would count as sold typed in, more than 3× the usual sales gives a
+  warning, and a backup is taken before each import
+  (`check_stock_server restore-inventory` puts one back; see the
+  [server README](server/README.md)).
 
 The category is taken from the filename (`inventory-report-<game id or name>`);
 if the file has been renamed, it is inferred from the rows instead (accessory
@@ -329,5 +397,12 @@ cargo run
 ## Development
 
 ```bash
-./run_quality_checks.sh
+./run_quality_checks.sh   # fmt, clippy, tests and builds for the app and core
 ```
+
+Run `cargo` commands from this folder: the workspace's default members are the
+desktop app, `core/` and `server/`, so `cargo test` covers all of them. The
+quality script also runs the web UI's checks (format, types, lint, tests,
+build, `npm audit` with the reviewed exceptions in `web/audit-exceptions.json`)
+when Node.js is installed. File locations (DB,
+caches, ruleset) are chosen in `src/paths.rs`; core never picks them itself.

@@ -4,13 +4,16 @@
 //! Runs continuously with daily sync scheduling.
 
 use clap::Parser;
+use inventory_sync::web::{WebConfig, WebOptions, DEFAULT_BIND};
 use inventory_sync::{
     has_price_data_for_today, init_schema, insert_price_history, upsert_products, PriceGuide,
     ProductCatalog,
 };
+use mtg_common::net::{HostAllowlist, TrustedProxies};
 use rusqlite::Connection;
+use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 use tokio::time::interval;
 
@@ -34,6 +37,55 @@ struct Args {
     /// Enable web UI on specified port (default: disabled)
     #[arg(long)]
     web_port: Option<u16>,
+
+    /// Address the web UI listens on: this machine only unless set (the
+    /// Docker image sets 0.0.0.0, which it needs inside the container)
+    #[arg(long, env = "INVENTORY_SYNC_WEB_BIND", default_value_t = DEFAULT_BIND)]
+    web_bind: IpAddr,
+
+    /// Proxy (IP or CIDR range) whose X-Forwarded-For is believed, e.g. Caddy
+    /// (repeatable; env: comma-separated)
+    #[arg(
+        long = "trusted-proxy",
+        env = "INVENTORY_SYNC_TRUSTED_PROXIES",
+        value_delimiter = ','
+    )]
+    trusted_proxies: Vec<String>,
+
+    /// Host name the web UI answers to, besides localhost (repeatable; env:
+    /// comma-separated). Without any, the Host header is not checked
+    #[arg(
+        long = "allowed-host",
+        env = "INVENTORY_SYNC_ALLOWED_HOSTS",
+        value_delimiter = ','
+    )]
+    allowed_hosts: Vec<String>,
+}
+
+impl Args {
+    /// The web server's settings, or what is wrong with them.
+    fn web_config(&self, port: u16) -> Result<WebConfig, String> {
+        let trusted_proxies = TrustedProxies::parse(&self.trusted_proxies)?;
+        let allowed_hosts = if self.allowed_hosts.is_empty() {
+            None
+        } else {
+            Some(HostAllowlist::new(&self.allowed_hosts)?)
+        };
+        Ok(WebConfig {
+            bind: self.web_bind,
+            port,
+            options: WebOptions {
+                trusted_proxies,
+                allowed_hosts,
+                ..WebOptions::default()
+            },
+        })
+    }
+}
+
+/// The database, also after a panic elsewhere poisoned the lock.
+fn lock(db: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
+    db.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Returns the default database path: ~/.local/share/inventory_sync/inventory.db
@@ -91,10 +143,17 @@ async fn main() {
 
     // Spawn web server if --web-port specified
     if let Some(port) = args.web_port {
+        let config = match args.web_config(port) {
+            Ok(config) => config,
+            Err(e) => {
+                log::error!("Invalid web settings: {e}");
+                std::process::exit(1);
+            }
+        };
         let web_db = Arc::clone(&db);
         let web_db_path = db_path.clone();
         tokio::spawn(async move {
-            if let Err(e) = inventory_sync::web::serve(web_db, &web_db_path, port).await {
+            if let Err(e) = inventory_sync::web::serve(web_db, &web_db_path, config).await {
                 log::error!("Web server error: {}", e);
             }
         });
@@ -132,7 +191,7 @@ async fn run_daemon(db: &Arc<Mutex<Connection>>, interval_hours: u64) {
 async fn run_sync(db: &Arc<Mutex<Connection>>) {
     // Check if we already have price data for today
     let should_sync = {
-        let conn = db.lock().unwrap();
+        let conn = lock(db);
         match has_price_data_for_today(&conn) {
             Ok(true) => {
                 log::info!("Price data for today already exists in database, skipping download");
@@ -172,7 +231,7 @@ async fn run_sync(db: &Arc<Mutex<Connection>>) {
 
     // Upsert products into database
     {
-        let mut conn = db.lock().unwrap();
+        let mut conn = lock(db);
         match upsert_products(&mut conn, &catalog) {
             Ok(count) => {
                 log::info!("Synced {} products to database", count);
@@ -202,7 +261,7 @@ async fn run_sync(db: &Arc<Mutex<Connection>>) {
 
     // Insert price history (only if not already present for this date)
     {
-        let mut conn = db.lock().unwrap();
+        let mut conn = lock(db);
         match insert_price_history(&mut conn, &guide, &catalog) {
             Ok(result) => {
                 if result.inserted > 0 {
@@ -229,3 +288,7 @@ async fn run_sync(db: &Arc<Mutex<Connection>>) {
 
     log::info!("Sync completed successfully.");
 }
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod tests;
