@@ -120,6 +120,12 @@ pub struct ImportArgs {
     /// sessions and the audit log stay (a backup is kept first).
     #[arg(long)]
     pub refresh: bool,
+
+    /// The desktop app's `repricing_ruleset.json`: published as the next
+    /// revision of the repricing rules (unless they are the same). Read
+    /// first, so a bad file stops the import.
+    #[arg(long)]
+    pub ruleset: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -186,6 +192,11 @@ pub fn run_command(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             result?;
         }
         Command::ImportDesktop(args) => {
+            let ruleset = args
+                .ruleset
+                .as_deref()
+                .map(import::read_ruleset)
+                .transpose()?;
             let report = if args.refresh {
                 import::refresh_desktop(&args.source, &args.data_dir)?
             } else {
@@ -199,6 +210,16 @@ pub fn run_command(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             );
             if let Some(previous) = report.previous_kept_as {
                 println!("The previous database is kept as {}.", previous.display());
+            }
+            if let Some(ruleset) = ruleset {
+                match import::publish_ruleset(&ruleset, &args.data_dir)? {
+                    import::RulesetImport::Published(r) => {
+                        println!("Published the repricing rules as revision {r}.")
+                    }
+                    import::RulesetImport::Unchanged(r) => {
+                        println!("The repricing rules are already published (revision {r}).")
+                    }
+                }
             }
         }
         Command::RestoreInventory(args) => {

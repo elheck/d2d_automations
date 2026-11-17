@@ -19,6 +19,7 @@ export type NavPath =
   | "/stock-checker"
   | "/picking"
   | "/bulk-lots"
+  | "/repricing"
   | "/users"
   | "/audit";
 
@@ -62,6 +63,12 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "Bulk lots",
         permission: "bulk_lot.build",
         description: "Bundle old, cheap singles into one Cardmarket lot, pick them and record the sale.",
+      },
+      {
+        to: "/repricing",
+        label: "Repricing",
+        permission: "repricing.view",
+        description: "Reprice the whole stock by one shared set of rules, review the changes and export them.",
       },
       {
         to: "/singles",

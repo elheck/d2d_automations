@@ -1058,3 +1058,39 @@ fn ruleset_file_name_is_stable() {
     // Renaming it would lose every saved working ruleset.
     assert_eq!(RULESET_FILE_NAME, "repricing_ruleset.json");
 }
+
+#[test]
+fn export_file_names() {
+    let day = NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
+    assert_eq!(export_file_name(day), "repricing_2026-11-16.csv");
+    assert_eq!(
+        undo_file_name("repricing_2026-11-16.csv"),
+        "repricing_2026-11-16_undo.csv"
+    );
+    assert_eq!(undo_file_name("prices"), "prices_undo.csv");
+    assert_eq!(undo_file_name(".csv"), "repricing_undo.csv");
+}
+
+/// The web UI's `PriceField` type lists the names the rulesets store.
+#[cfg(feature = "ts")]
+#[test]
+fn field_names_match_the_typescript_shape() {
+    use ts_rs::TS;
+    let decl = PriceFieldTs::decl(&ts_rs::Config::default());
+    for field in PriceField::all() {
+        let name = serde_json::to_string(field).unwrap();
+        assert!(decl.contains(&name), "{name} missing in {decl}");
+    }
+    assert_eq!(decl.matches('"').count(), 2 * PriceField::all().len());
+}
+
+#[test]
+fn every_condition_kind_has_a_label_and_help() {
+    let templates = Condition::templates();
+    for c in &templates {
+        assert!(!c.kind_label().is_empty());
+        assert!(c.help().len() > 10, "{}", c.kind_label());
+    }
+    let helps: std::collections::HashSet<_> = templates.iter().map(Condition::help).collect();
+    assert_eq!(helps.len(), templates.len());
+}

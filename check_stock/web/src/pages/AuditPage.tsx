@@ -30,6 +30,8 @@ export const ACTION_LABELS: Record<string, string> = {
   "bulk_lot.price_changed": "Bulk lot price corrected",
   "bulk_lot.marked_removed": "Bulk lot removal marked done",
   "bulk_lot.undone": "Bulk lot undone",
+  "repricing.published": "Repricing rules published",
+  "repricing.exported": "New prices exported",
 };
 
 /** Why a login failed, in words. */

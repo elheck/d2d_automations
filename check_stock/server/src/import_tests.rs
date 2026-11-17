@@ -675,3 +675,81 @@ fn restore_refuses_files_that_are_not_databases() {
     ));
     assert_eq!(rows(inventory_db_in(data.path()).path()), 1);
 }
+
+fn published_rules(data: &Path) -> repricing::Published {
+    let conn = Connection::open(inventory_db_in(data).path()).unwrap();
+    repricing::published(&conn).unwrap()
+}
+
+#[test]
+fn the_desktop_ruleset_is_published_once() {
+    let desktop = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    import_desktop(&desktop_db(desktop.path(), 1), data.path(), false).unwrap();
+    let file = desktop.path().join("repricing_ruleset.json");
+    let mut ruleset = Ruleset::starter();
+    ruleset.name = "Desktop rules".to_string();
+    ruleset.rules[0].action.percent = 5000.0;
+    std::fs::write(&file, ruleset.to_json()).unwrap();
+
+    let read = read_ruleset(&file).unwrap();
+    assert_eq!(read.rules[0].action.percent, 1000.0, "sanitized");
+    assert_eq!(
+        publish_ruleset(&read, data.path()).unwrap(),
+        RulesetImport::Published(1)
+    );
+    assert_eq!(
+        publish_ruleset(&read, data.path()).unwrap(),
+        RulesetImport::Unchanged(1)
+    );
+    let p = published_rules(data.path());
+    assert_eq!((p.revision, p.ruleset.name.as_str()), (1, "Desktop rules"));
+    assert_eq!(p.updated_by.as_deref(), Some("import-desktop"));
+    let conn = Connection::open(inventory_db_in(data.path()).path()).unwrap();
+    let entries = audit::list(&conn, None, 10).unwrap();
+    let entry = entries
+        .iter()
+        .find(|e| e.action == action::REPRICING_PUBLISHED)
+        .unwrap();
+    assert_eq!(
+        (entry.actor.as_str(), entry.details["source"].as_str()),
+        ("cli", Some("desktop"))
+    );
+    drop(conn);
+
+    // The starter rules are published too when the server never had any.
+    let fresh = tempfile::tempdir().unwrap();
+    import_desktop(&desktop_db(desktop.path(), 1), fresh.path(), false).unwrap();
+    assert_eq!(
+        publish_ruleset(&Ruleset::starter(), fresh.path()).unwrap(),
+        RulesetImport::Published(1)
+    );
+}
+
+#[test]
+fn a_bad_ruleset_file_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("repricing_ruleset.json");
+    std::fs::write(&file, "{\"nodes\": []}").unwrap();
+    let err = read_ruleset(&file).unwrap_err().to_string();
+    assert!(
+        err.contains("not a repricing ruleset") && err.ends_with("nothing was imported"),
+        "{err}"
+    );
+    std::fs::write(&file, vec![b' '; 1024 * 1024 + 1]).unwrap();
+    assert!(read_ruleset(&file)
+        .unwrap_err()
+        .to_string()
+        .contains("too large"));
+    assert!(matches!(
+        read_ruleset(&dir.path().join("missing.json")),
+        Err(ImportError::Ruleset(_))
+    ));
+    // Never into a folder without a server database.
+    let empty = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        publish_ruleset(&Ruleset::starter(), empty.path()),
+        Err(ImportError::NothingToRefresh(_))
+    ));
+    assert!(!inventory_db_in(empty.path()).path().exists());
+}

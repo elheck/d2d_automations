@@ -206,6 +206,48 @@ const MIGRATIONS: &[(u32, &str)] = &[
              kind TEXT NOT NULL
          ) STRICT;",
     ),
+    (
+        9,
+        // Repricing (4d): the one published ruleset (with its revision),
+        // one unpublished draft per editor, each user's review of the
+        // current import (tick overrides and hand prices per pile), and the
+        // last exports (new prices + undo file) to download again.
+        "CREATE TABLE srv_repricing_ruleset (
+             id         INTEGER PRIMARY KEY CHECK (id = 1),
+             revision   INTEGER NOT NULL CHECK (revision > 0),
+             ruleset    TEXT NOT NULL CHECK (json_valid(ruleset)),
+             updated_at TEXT NOT NULL,
+             updated_by TEXT NOT NULL
+         ) STRICT;
+         CREATE TABLE srv_repricing_drafts (
+             user_id       INTEGER PRIMARY KEY REFERENCES srv_users (id) ON DELETE CASCADE,
+             base_revision INTEGER NOT NULL CHECK (base_revision >= 0),
+             ruleset       TEXT NOT NULL CHECK (json_valid(ruleset)),
+             updated_at    TEXT NOT NULL
+         ) STRICT;
+         CREATE TABLE srv_repricing_review (
+             user_id      INTEGER NOT NULL REFERENCES srv_users (id) ON DELETE CASCADE,
+             version      INTEGER NOT NULL,
+             pile         TEXT NOT NULL,
+             ticked       INTEGER CHECK (ticked IN (0, 1)),
+             manual_cents INTEGER CHECK (manual_cents > 0),
+             PRIMARY KEY (user_id, pile)
+         ) STRICT, WITHOUT ROWID;
+         CREATE TABLE srv_repricing_exports (
+             id         INTEGER PRIMARY KEY,
+             created_at TEXT NOT NULL,
+             user_id    INTEGER REFERENCES srv_users (id) ON DELETE SET NULL,
+             username   TEXT NOT NULL,
+             revision   INTEGER NOT NULL,
+             version    INTEGER NOT NULL,
+             changes    INTEGER NOT NULL,
+             raises     INTEGER NOT NULL,
+             lowers     INTEGER NOT NULL,
+             file_name  TEXT NOT NULL,
+             csv        BLOB NOT NULL,
+             undo_csv   BLOB NOT NULL
+         ) STRICT;",
+    ),
 ];
 
 /// Newest schema version this build knows.

@@ -15,6 +15,9 @@
 # Environment:
 #   DESKTOP_DB    desktop database to copy
 #                 (default: $XDG_DATA_HOME or ~/.local/share, then d2d_automations/inventory.db)
+#   DESKTOP_RULESET  desktop repricing rules, published with the copy when
+#                 the file exists (default: $XDG_CONFIG_HOME or ~/.config,
+#                 then d2d_automations/repricing_ruleset.json; only read)
 #   DEV_DATA_DIR  data folder (default: ./dev-data)
 #   DEV_PORT      port (default: 8080)
 #   DEV_ADMIN     login name of the local admin (default: your user name)
@@ -31,6 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 DESKTOP_DB="${DESKTOP_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/d2d_automations/inventory.db}"
+DESKTOP_RULESET="${DESKTOP_RULESET:-${XDG_CONFIG_HOME:-$HOME/.config}/d2d_automations/repricing_ruleset.json}"
 DATA_DIR="${DEV_DATA_DIR:-dev-data}"
 PORT="${DEV_PORT:-8080}"
 ADMIN="${DEV_ADMIN:-${USER:-admin}}"
@@ -59,11 +63,15 @@ copy_desktop_db() {
         exit 1
     fi
     echo "Copying $DESKTOP_DB into $DATA_DIR (the desktop file is not changed)..."
+    local ruleset=()
+    if [[ -f "$DESKTOP_RULESET" ]]; then
+        ruleset=(--ruleset "$DESKTOP_RULESET")
+    fi
     if [[ -f "$DATA_DIR/inventory.db" ]]; then
         # Keeps users, sessions and the audit log; swaps only the desktop data.
-        server "$profile" import-desktop --db "$DESKTOP_DB" --data-dir "$DATA_DIR" --refresh
+        server "$profile" import-desktop --db "$DESKTOP_DB" --data-dir "$DATA_DIR" --refresh ${ruleset[@]+"${ruleset[@]}"}
     else
-        server "$profile" import-desktop --db "$DESKTOP_DB" --data-dir "$DATA_DIR"
+        server "$profile" import-desktop --db "$DESKTOP_DB" --data-dir "$DATA_DIR" ${ruleset[@]+"${ruleset[@]}"}
     fi
 }
 

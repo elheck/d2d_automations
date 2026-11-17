@@ -1838,8 +1838,9 @@ impl InventoryDb {
     }
 }
 
-/// Inner query that accepts an explicit connection — used in tests.
-fn sales_by_variant_conn(
+/// Sale history per card variant (`card_variant_key`): `(date, copies)`,
+/// on an explicit connection (tests, the server).
+pub fn sales_by_variant_conn(
     conn: &Connection,
     category: &str,
 ) -> DbResult<HashMap<String, Vec<(String, i64)>>> {

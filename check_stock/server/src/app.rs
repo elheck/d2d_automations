@@ -12,6 +12,7 @@ use crate::market::MarketService;
 use crate::password::{self, PasswordError};
 use crate::precon::PreconService;
 use crate::rate_limit::LoginRateLimiter;
+use crate::repricing::RepricingService;
 use crate::stock::StockService;
 use axum::Router;
 use check_stock_core::api::inventory_sync::InventorySyncClient;
@@ -47,6 +48,8 @@ pub struct AppState {
     pub bins: Arc<BinsService>,
     /// Bulk lots: card-type cache and lookup job (shared).
     pub bulk: Arc<BulkService>,
+    /// Repricing: the prepared stock and recent evaluations (shared).
+    pub repricing: Arc<RepricingService>,
 }
 
 impl AppState {
@@ -78,6 +81,7 @@ impl AppState {
             stock: Arc::new(StockService::default()),
             bins: Arc::new(BinsService::default()),
             bulk: Arc::new(bulk),
+            repricing: Arc::new(RepricingService::default()),
         })
     }
 

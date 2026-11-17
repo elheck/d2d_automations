@@ -8,8 +8,12 @@ description = "Logic and data layer of the MTG stock checker: no UI, no platform
 # Test helpers (e.g. `Card::test_default`) for crates that test against this
 # one. Never enabled in a release build.
 test-support = []
+# TypeScript bindings (ts-rs) of the repricing ruleset types, for the web UI.
+# Enabled by the server, whose `cargo test` writes the files.
+ts = ["dep:ts-rs"]
 
 [dependencies]
+ts-rs = { version = "12", optional = true }
 mtg_common = { path = "../../mtg_common", features = ["blocking"] }
 csv = "1.3.1"
 serde = { version = "1.0.219", features = ["derive"] }

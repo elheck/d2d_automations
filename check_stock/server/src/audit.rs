@@ -80,6 +80,10 @@ pub mod action {
     pub const LOT_COST_CHANGED: &str = "lot_cost.changed";
     /// A user made a picking list (target: number of piles).
     pub const PICKING_CREATED: &str = "picking.created";
+    /// The repricing ruleset was published (target: the new revision).
+    pub const REPRICING_PUBLISHED: &str = "repricing.published";
+    /// New prices were exported (target: the export's number).
+    pub const REPRICING_EXPORTED: &str = "repricing.exported";
 }
 
 /// Adds an entry.

@@ -459,7 +459,7 @@ fn rule_editor(ui: &mut egui::Ui, rule: &mut Rule, choices: &Choices, id: usize)
             let taken = rule.conditions.iter().any(|c| c.same_kind(&template));
             if ui
                 .add_enabled(!taken, egui::Button::new(template.kind_label()))
-                .on_hover_text(condition_help(&template))
+                .on_hover_text(template.help())
                 .clicked()
             {
                 ui.close_menu();
@@ -483,29 +483,6 @@ fn section_label(ui: &mut egui::Ui, title: &str, sub: &str) {
         );
         muted(ui, sub);
     });
-}
-
-fn condition_help(c: &Condition) -> &'static str {
-    match c {
-        Condition::Rarity(_) => "Rarity is one of the picked ones",
-        Condition::CardCondition(_) => "Card condition is one of the picked ones",
-        Condition::Language(_) => "Card language is one of the picked ones",
-        Condition::Finish(_) => "Foil or non-foil",
-        Condition::ListedPrice { .. } => "Your current price is in a range",
-        Condition::MarketPrice { .. } => {
-            "The market price (column set in the guardrails) is in a range"
-        }
-        Condition::Name(_) => "Card name contains a word (comma-separate several)",
-        Condition::Set(_) => "Set name or code contains a word (comma-separate several)",
-        Condition::Location(_) => "Storage location contains a word (comma-separate several)",
-        Condition::AgeDays { .. } => "Days since the listing first appeared in an imported export",
-        Condition::NoSaleDays(_) => {
-            "Days since this exact listing last sold (or appeared, if it never sold)"
-        }
-        Condition::MinSold30d(_) => "Copies of this exact listing sold in the last 30 days",
-        Condition::MinQuantity(_) => "Copies of this listing in stock",
-        Condition::Moving(_) => "Market direction from Cardmarket's 1/7/30-day averages",
-    }
 }
 
 fn condition_widget(ui: &mut egui::Ui, cond: &mut Condition, choices: &Choices) {

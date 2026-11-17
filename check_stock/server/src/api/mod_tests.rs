@@ -183,6 +183,7 @@ fn concrete(path: &str) -> String {
         .replace("{number}", "120")
         .replace("{product}", "101")
         .replace("{lot}", "L1")
+        .replace("{pile}", "0123456789abcdef")
 }
 
 const METHODS: [Method; 5] = [

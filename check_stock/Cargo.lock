@@ -755,6 +755,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-test",
+ "ts-rs",
  "wiremock",
 ]
 

@@ -36,6 +36,7 @@ pub mod permissions;
 pub mod picking;
 pub mod precon;
 pub mod rate_limit;
+pub mod repricing;
 pub mod sessions;
 pub mod stock;
 pub mod user_settings;

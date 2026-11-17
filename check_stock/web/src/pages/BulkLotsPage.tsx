@@ -5,7 +5,7 @@
 // the TCG Powertools CSV downloads), and manage recorded lots.
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import {
   can,
   downloadBulkCsv,
@@ -25,6 +25,7 @@ import {
   useReplaceBulkPile,
 } from "../api/queries";
 import type { BulkLotView, BulkOptions, BulkPreview, DraftView, LotLine, SpecView } from "../api/types";
+import { Chip, Field, RuleGroup, Stat } from "../components/Controls";
 import { ErrorMessage } from "../components/ErrorMessage";
 import { JobProgress } from "../components/JobProgress";
 import { Modal } from "../components/Modal";
@@ -97,43 +98,6 @@ export function BulkLotsPage() {
 
 // ── 1. Choose ──────────────────────────────────────────────────────────────
 
-/** A titled group of rules. */
-function RuleGroup({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="rule-group" role="group" aria-label={title}>
-      <h3 className="rule-group__title">{title}</h3>
-      {children}
-    </div>
-  );
-}
-
-/** A label above its control, with an optional hint below. */
-function Field({
-  label,
-  htmlFor,
-  hint,
-  children,
-}: {
-  label: string;
-  htmlFor?: string;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="rule-field">
-      {htmlFor ? (
-        <label className="rule-field__label" htmlFor={htmlFor}>
-          {label}
-        </label>
-      ) : (
-        <span className="rule-field__label">{label}</span>
-      )}
-      {children}
-      {hint && <span className="rule-field__hint">{hint}</span>}
-    </div>
-  );
-}
-
 /** A number input with a unit after it. */
 function NumberInput({
   id,
@@ -160,35 +124,6 @@ function NumberInput({
       />
       {unit && <span className="unit-input__unit">{unit}</span>}
     </span>
-  );
-}
-
-/** A toggle chip (pressed = included). */
-function Chip({
-  on,
-  onClick,
-  children,
-  title,
-}: {
-  on: boolean;
-  onClick: () => void;
-  children: ReactNode;
-  title?: string;
-}) {
-  return (
-    <button type="button" className="chip" aria-pressed={on} onClick={onClick} title={title}>
-      {children}
-    </button>
-  );
-}
-
-function Stat({ label, value, sub, tone }: { label: string; value: string; sub: string; tone?: "good" | "warning" }) {
-  return (
-    <div className={tone ? `stat stat--${tone}` : "stat"}>
-      <span className="stat__label">{label}</span>
-      <span className="stat__value">{value}</span>
-      <span className="stat__sub">{sub}</span>
-    </div>
   );
 }
 

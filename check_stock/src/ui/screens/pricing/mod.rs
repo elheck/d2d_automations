@@ -742,9 +742,7 @@ pub(crate) fn undo_path(path: &Path) -> PathBuf {
 }
 
 /// File name offered when exporting: `repricing_<date>.csv`.
-pub(crate) fn export_file_name(today: NaiveDate) -> String {
-    format!("repricing_{}.csv", today.format("%Y-%m-%d"))
-}
+pub(crate) use crate::repricing::export_file_name;
 
 /// Values found in the stock first, then defaults not seen there.
 fn merge_defaults(mut found: Vec<String>, defaults: &[&str]) -> Vec<String> {

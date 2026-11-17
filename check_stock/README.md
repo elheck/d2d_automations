@@ -13,9 +13,10 @@ local login on the first start. Ported so far: the Magic Singles Listing
 Card Buy Helper, Precon EV, the reports Restock, Price Movers, Mispricing
 Stock Analysis and Bin Analysis with move lists (read-only; revenue, costs
 and margins only for users with "View revenue and costs"), the inventory
-import, Search with discards, the Stock Checker, Picking, lot-cost editing
-and Bulk Lots (writes only on the test copy until the move: keep importing,
-discarding and building lots in the desktop app).
+import, Search with discards, the Stock Checker, Picking, lot-cost editing,
+Bulk Lots and Repricing (writes only on the test copy until the move: keep
+importing, discarding, building lots and exporting prices in the desktop
+app).
 
 The welcome screen shows a **since-last-visit digest** (copies sold and revenue
 since the previous day the app was opened, new listings, bulk lots built,
@@ -130,6 +131,22 @@ showing exactly what would change before anything is written.
   CSV with the inventory export's columns and the new prices, plus an
   `_undo.csv` with the current prices to roll back. Check the import with a few
   cards first.
+
+  Also in the web version (`/repricing`): one ruleset shared by everyone, with
+  a revision number. Editors change a draft of their own (saved on the server
+  as they type, its prices shown live) and **publish** it; when someone else
+  published in the meantime, a dialog offers to take their rules or to
+  overwrite them on purpose. Ticks and hand prices are per user and belong to
+  one inventory import. The export always uses the published rules and is
+  refused when the rules, the stock or the market data changed since the
+  check; the last 20 exports (new prices and undo file) stay downloadable.
+  Because it is not known whether the Powertools price import also sets the
+  stock, the file carries each card's copies of the last import minus
+  write-offs, cards with copies reserved for a bulk lot are held back, and
+  the export warns about an import older than a day and about changing more
+  than a quarter of all listings. Market prices come from the shared daily
+  tracker load (no price-guide download on the web). `dev.sh` publishes the
+  desktop's rules on its copy.
 - **Card Buy Helper** — Value a purchase offer from a card export CSV: split cards into individually-priced singles (by rarity and/or price threshold) versus bulk (flat rate per N cards), see the total offer, and export a breakdown CSV. Values are the prices in the seller's file. Text from the seller's file that could run as a spreadsheet formula (`=…`, `+…`, `-…`, `@…`) is exported with a leading `'`. Strictly read-only — never writes to the inventory database. Also in the web version (`/buy-helper`), where each user's split rules and rates are saved on the server; the card list itself is never stored
 - **Mispricing Report** — Compare every in-stock listing against a market
   reference (trend/avg/low, foil-aware) to surface under- and over-priced
@@ -386,5 +403,6 @@ cargo run
 Run `cargo` commands from this folder: the workspace's default members are the
 desktop app, `core/` and `server/`, so `cargo test` covers all of them. The
 quality script also runs the web UI's checks (format, types, lint, tests,
-build, `npm audit`) when Node.js is installed. File locations (DB,
+build, `npm audit` with the reviewed exceptions in `web/audit-exceptions.json`)
+when Node.js is installed. File locations (DB,
 caches, ruleset) are chosen in `src/paths.rs`; core never picks them itself.

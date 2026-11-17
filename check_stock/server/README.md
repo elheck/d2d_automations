@@ -26,8 +26,11 @@ cd check_stock
 
 The first start copies the desktop app's `inventory.db` into
 `check_stock/dev-data/` (gitignored) and asks for a password for your local
-login (user name: your Linux user, or `DEV_ADMIN`). The desktop file is only
-read, never changed, and the desktop app keeps working alongside.
+login (user name: your Linux user, or `DEV_ADMIN`). When the desktop's
+repricing rules (`~/.config/d2d_automations/repricing_ruleset.json`, or
+`DESKTOP_RULESET`) exist, they are published on the copy too. The desktop
+files are only read, never changed, and the desktop app keeps working
+alongside.
 
 The API can also be used with `curl`:
 
@@ -46,7 +49,7 @@ check_stock_server serve --data-dir <DIR> [--bind 127.0.0.1:8080] \
     [--allowed-host stock.example.com] [--trusted-proxy 172.18.0.0/16] \
     [--read-connections 4] [--create-empty] \
     [--inventory-sync-url http://cardscanner.local:3000]
-check_stock_server import-desktop --data-dir <DIR> --db <desktop inventory.db> [--refresh | --replace]
+check_stock_server import-desktop --data-dir <DIR> --db <desktop inventory.db> [--refresh | --replace] [--ruleset <repricing_ruleset.json>]
 check_stock_server create-admin --data-dir <DIR> --username <NAME> [--display-name <NAME>] [--if-none]
 check_stock_server reset-password --data-dir <DIR> --username <NAME>
 check_stock_server restore-inventory --data-dir <DIR> --backup <inventory.db.import-….bak>
@@ -62,6 +65,7 @@ check_stock_server restore-inventory --data-dir <DIR> --backup <inventory.db.imp
 | `--create-empty` | | Start with an empty database if none exists (otherwise the server refuses, so a forgotten import is noticed) |
 | `--refresh` | | `import-desktop`: swap only the desktop data of an existing database; users, sessions and the audit log stay |
 | `--replace` | | `import-desktop`: replace the whole database file |
+| `--ruleset` | | `import-desktop`: publish the desktop's repricing rules as the next revision (read first, so a bad file stops the import; nothing happens when they are already published) |
 | `--if-none` | | `create-admin`: do nothing if any user exists |
 
 `--refresh` and `--replace` keep the previous database as
@@ -133,6 +137,16 @@ standard input; passwords are never command-line arguments.
 | `POST /api/bulk-lots/finish` | Finish bulk lots | `{name, price}`: re-checks that every picked copy is still free (409 `taken`), takes a backup, records the lot (revenue, reserved copies) with its kept CSV and an audit entry |
 | `GET /api/bulk-lots/{id}/csv` | Finish bulk lots | the lot's TCG Powertools CSV (negative quantities, exact values) |
 | `PUT /api/bulk-lots/{id}/price`, `POST /api/bulk-lots/{id}/removed`, `POST /api/bulk-lots/{id}/undo` | Manage bulk lots | price correction (`expected` checked), removal declared done, undo (`confirm_removed` = copies an import already took out, when there are any); backups before removal and undo |
+| `GET /api/repricing/setup` | View repricing | the published ruleset (revision, who, when), the user's draft (editors only), the import it works on, what the rule editor offers (columns, conditions, ready-made rules, the stock's rarities and languages) |
+| `GET /api/repricing/review` | View repricing | `?draft&filter&rule&search&sort&desc&offset&limit` (at most 500 rows): what the published rules (or the editor's draft) do to every listing: key figures, per-rule counts, one page of rows with the user's ticks; ticks and hand prices of an older import are counted as dropped |
+| `GET /api/repricing/listings/{pile}` | View repricing | how one listing got its price, step by step, with all market columns, its facts and up to 30 sales |
+| `GET /api/repricing/ruleset.json` | View repricing | `?draft`: the published rules (or the editor's draft) as a desktop-compatible file |
+| `POST /api/repricing/market/load`, `GET /api/repricing/market/status` | View repricing | the shared market data (as for price movers) |
+| `PUT` / `DELETE /api/repricing/draft`, `POST /api/repricing/draft/file` | Edit repricing rules | the editor's draft (`{base_revision, ruleset}`, cleaned up like every ruleset; equal to the published rules = no draft); a JSON file (≤ 1 MB) becomes the draft, never the published rules |
+| `POST /api/repricing/publish` | Edit repricing rules | `{expected_revision}`: publishes the draft; another published revision → 409 `ruleset_conflict` |
+| `PUT /api/repricing/review/ticks`, `PUT /api/repricing/review/manual`, `POST /api/repricing/review/reset` | Export new prices | the user's ticks (named piles or every change shown), hand prices (0.02–100,000 €), back to the proposals; checked against the current import |
+| `POST /api/repricing/export` | Export new prices | `{revision, data_version, market_version}`: the ticked changes by the published rules, refused (409) when anything changed since the check; keeps the new-prices CSV and the undo CSV (exact values) and logs the export |
+| `GET /api/repricing/exports`, `GET /api/repricing/exports/{id}/csv`, `…/undo` | Export new prices | the last 20 exports and their two files |
 | `GET /api/bins/image/{set}/{number}` | Bin moves | card images for the move list (same rules and cache as the singles listing's) |
 | `GET /api/inventory/imports` | Import inventory | the last 20 changes of the inventory data (import, forced import, restore, desktop copy) with who, when and the numbers |
 | `GET /api/restock?min_copies=&sort=&desc=` | View reports | sold-out variants ranked by sell-through speed (first 300; `total`, `copies`); `realized_revenue` / `revenue` only with "View revenue and costs", and `sort=revenue` is refused (403) without it |
@@ -210,7 +224,8 @@ files are out of date.
   of CSV, 50,000 rows, quantities and prices up to 1,000,000; and the
   inventory import (preview and confirm only): at most 16 MB of CSV, 200,000
   rows, quantities 1–1,000,000, prices 0–1,000,000, a category name of
-  letters and digits. Checked only after the session, so anonymous callers
+  letters and digits; and the repricing draft and rules file (2 MiB body, a
+  ruleset of at most 1 MB). Checked only after the session, so anonymous callers
   cannot make the server read a large body. Errors about a file name the
   line or the card, never other content of the file.
 - **Inventory import** (`src/inventory_import.rs`), stricter than the desktop
@@ -251,6 +266,19 @@ files are out of date.
   finish or manage lots; every change counts as a data change (banner, open
   import checks redone). Discards refuse copies reserved for a lot. Card
   types from Scryfall for cards of the stock only, cached in the data folder.
+- **Repricing** (`src/repricing.rs`, owner-confirmed 2026-11-16): one
+  published ruleset with a revision; publishing checks it (409, no silent
+  overwrite) and is logged. Every ruleset from a browser or a file passes
+  core's `Ruleset::sanitize` (at most 100 rules, 30 conditions each, prices
+  up to 100,000 €); text conditions are plain "contains" matches, never
+  regular expressions. Drafts are seen only by editors. Exports come only
+  from the published rules and are refused when the rules, the stock (import,
+  discard, bulk lot) or the market data changed since the user's check,
+  checked again in the writing transaction. It is unknown whether the
+  Powertools price import also sets the stock, so the export never brings
+  copies back: quantities after pending write-offs, cards with copies
+  reserved for a bulk lot held back. Evaluations run on blocking threads, at
+  most 2 at a time, and are reused (keyed by a SHA-256 of all their inputs).
 - **Stock Checker**: no deck links (owner's decision, 2026-11-15: the server
   never fetches a page a user names); wantslists at most 256 KB / 2,000
   lines, quantities up to 10,000, never stored.
@@ -277,7 +305,9 @@ files are out of date.
   inventory imports (file name, fingerprint, numbers, backup), forced
   imports and restores, discards with every pile, move lists made and
   discarded, picking lists made, lot-cost changes, bulk lots recorded,
-  corrected, marked removed and undone (ticks are work state and not logged). Written in the same transaction as the change.
+  corrected, marked removed and undone, repricing rules published (also by
+  `import-desktop --ruleset`) and prices exported (ticks, hand prices and
+  drafts are work state and not logged). Written in the same transaction as the change.
 - **One process per data folder.** `serve`, `import-desktop`, `create-admin`,
   `reset-password` and `restore-inventory` hold an OS file lock on
   `<data-dir>/.lock`.
@@ -344,6 +374,13 @@ newer server version is refused.
 | `srv_discards` | Discards: who, when, the piles (id, card, location, copies), the stock-update CSV (newest 20), settled by a later import or not |
 | `srv_picking_sessions` | One picking list per user: card, location, copies, picked, the stock it was made on; deleted with the user |
 | `srv_user_visits` | Last and previous visit day per user, the baseline of the start page's digest; deleted with the user |
+| `srv_bulk_lot_drafts` | One bulk lot in progress per user: rules, chosen piles with picked ticks, piles swapped out; deleted with the user |
+| `srv_bulk_lot_csvs` | The TCG Powertools CSV of each recorded bulk lot, to download again |
+| `srv_data_changes` | A counter of data changes other than imports and discards (bulk lots finished, corrected, removed, undone); part of the data version |
+| `srv_repricing_ruleset` | The published repricing ruleset (one row): revision, rules as JSON, who and when |
+| `srv_repricing_drafts` | One unpublished ruleset per editor and the revision it started from; deleted with the user |
+| `srv_repricing_review` | Each user's tick overrides and hand prices (cents) per pile, for one inventory version; deleted with the user |
+| `srv_repricing_exports` | The last 20 price exports: who (name kept), rules revision, inventory version, numbers, new-prices CSV and undo CSV |
 | `srv_user_settings` | Per-user settings of the screens (`src/user_settings.rs`): one JSON value (≤ 16 KiB) per user and setting, deleted with the user; read back through each screen's validation, defaults if it no longer fits |
 
 ## Development

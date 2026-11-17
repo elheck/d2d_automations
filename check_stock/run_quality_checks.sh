@@ -77,7 +77,8 @@ if command -v node &> /dev/null; then
     run_check "web lint" "(cd web && npm run --silent lint)"
     run_check "web tests" "(cd web && npm run --silent test)"
     run_check "web build" "(cd web && npm run --silent build)"
-    run_check "npm audit" "(cd web && npm audit --audit-level=moderate)"
+    # npm audit with the reviewed exceptions in web/audit-exceptions.json.
+    run_check "npm audit" "(cd web && npm run --silent audit:check)"
 else
     print_warning "Node.js not installed: web UI checks skipped (needs Node $(cat web/.nvmrc))"
 fi

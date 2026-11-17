@@ -146,7 +146,7 @@ jobs:
         npm run typecheck
         npm run lint
         npm test
-        npm audit --audit-level=moderate
+        npm run audit:check
         npm run build
 
     - name: Check code formatting

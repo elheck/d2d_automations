@@ -44,9 +44,28 @@ const MAX_NAME_CHARS: usize = 80;
 const MAX_TERM_CHARS: usize = 300;
 const MAX_PCT: f64 = 1000.0;
 
+// The TypeScript shape of `PriceField` (mtg_common, serialized by variant
+// name; `field_names_match_the_typescript_shape` keeps both in step). Only
+// for `#[ts(as = …)]`, never a value.
+/// A Cardmarket price-guide column, as rulesets store it.
+#[cfg(feature = "ts")]
+#[derive(ts_rs::TS)]
+#[ts(rename = "PriceField")]
+#[allow(dead_code)]
+pub enum PriceFieldTs {
+    Trend,
+    Avg,
+    Low,
+    Avg1,
+    Avg7,
+    Avg30,
+}
+
 // ── Conditions ──────────────────────────────────────────────────────────────
 
 /// Card finish a rule can require.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "RuleFinish"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Finish {
     Foil,
@@ -65,6 +84,7 @@ impl Finish {
 }
 
 /// Market direction, judged from Cardmarket's 1/7/30-day averages.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MarketMove {
     Rising,
@@ -100,6 +120,8 @@ impl MarketMove {
 /// empty list matches everything. Text conditions take comma-separated terms
 /// and match when any term is contained (case-insensitive). Conditions that
 /// need data a listing lacks (no market row, unknown age) do not match.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "RuleCondition"))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Condition {
     Rarity(Vec<String>),
@@ -183,6 +205,32 @@ impl Condition {
             Condition::MinSold30d(_) => "Sold recently",
             Condition::MinQuantity(_) => "Copies in stock",
             Condition::Moving(_) => "Market trend",
+        }
+    }
+
+    /// What the condition tests, for menus and tooltips.
+    pub fn help(&self) -> &'static str {
+        match self {
+            Condition::Rarity(_) => "Rarity is one of the picked ones",
+            Condition::CardCondition(_) => "Card condition is one of the picked ones",
+            Condition::Language(_) => "Card language is one of the picked ones",
+            Condition::Finish(_) => "Foil or non-foil",
+            Condition::ListedPrice { .. } => "Your current price is in a range",
+            Condition::MarketPrice { .. } => {
+                "The market price (column set in the guardrails) is in a range"
+            }
+            Condition::Name(_) => "Card name contains a word (comma-separate several)",
+            Condition::Set(_) => "Set name or code contains a word (comma-separate several)",
+            Condition::Location(_) => "Storage location contains a word (comma-separate several)",
+            Condition::AgeDays { .. } => {
+                "Days since the listing first appeared in an imported export"
+            }
+            Condition::NoSaleDays(_) => {
+                "Days since this exact listing last sold (or appeared, if it never sold)"
+            }
+            Condition::MinSold30d(_) => "Copies of this exact listing sold in the last 30 days",
+            Condition::MinQuantity(_) => "Copies of this listing in stock",
+            Condition::Moving(_) => "Market direction from Cardmarket's 1/7/30-day averages",
         }
     }
 
@@ -297,6 +345,8 @@ impl Condition {
 // ── Price actions ───────────────────────────────────────────────────────────
 
 /// How a market base combines its two columns.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "PriceCombine"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Combine {
     /// Use the first column only.
@@ -320,13 +370,16 @@ impl Combine {
 }
 
 /// Where a rule's price starts.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PriceBase {
     /// A Cardmarket price column (foil column for foils), optionally combined
     /// with a second column.
     Market {
+        #[cfg_attr(feature = "ts", ts(as = "PriceFieldTs"))]
         field: PriceField,
         combine: Combine,
+        #[cfg_attr(feature = "ts", ts(as = "PriceFieldTs"))]
         other: PriceField,
     },
     /// The listing's current price.
@@ -358,6 +411,8 @@ impl PriceBase {
 }
 
 /// Which way a rule may move a price.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "PriceDirection"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {
     Both,
@@ -380,6 +435,8 @@ impl Direction {
 /// What a rule does to a matching listing's price:
 /// `base × percent + offset`, × condition/language factors when `adjust` is
 /// set (market base only), then clamped to the rule's limits.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "RulePrice"))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PriceAction {
@@ -471,6 +528,7 @@ impl PriceAction {
 }
 
 /// A named, ordered pricing rule.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rule {
     pub name: String,
@@ -523,6 +581,8 @@ impl Rule {
 // ── Guardrails & adjustments ────────────────────────────────────────────────
 
 /// Price rounding applied to every price a rule sets.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "PriceRounding"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Rounding {
     Cent,
@@ -552,6 +612,7 @@ impl Rounding {
 
 /// Lowest price per rarity. Floors always win: a listing below its floor is
 /// lifted to it whenever a rule (other than "keep") applies.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RarityFloors {
@@ -590,6 +651,7 @@ impl RarityFloors {
 }
 
 /// Shop-wide limits applied to every price a rule sets.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Guardrails {
@@ -606,6 +668,7 @@ pub struct Guardrails {
     pub review_min_eur: f64,
     /// Market column used by the "market price" condition and the review
     /// table's market column.
+    #[cfg_attr(feature = "ts", ts(as = "PriceFieldTs"))]
     pub reference: PriceField,
 }
 
@@ -647,6 +710,7 @@ impl Guardrails {
 /// Condition and language factors (in %) for market-based prices. The price
 /// guide is roughly near-mint, language-blind pricing; these scale it per
 /// listing. Missing entries count as 100%.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Adjustments {
@@ -699,6 +763,7 @@ impl Adjustments {
 // ── Ruleset ─────────────────────────────────────────────────────────────────
 
 /// A complete, saveable repricing configuration.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Ruleset {
     #[serde(default = "ruleset_version")]
@@ -1682,6 +1747,18 @@ pub fn ticked_changes(
         .collect();
     out.sort_by_key(|c| c.row);
     out
+}
+
+/// File name of an export: `repricing_<date>.csv`.
+pub fn export_file_name(today: NaiveDate) -> String {
+    format!("repricing_{}.csv", today.format("%Y-%m-%d"))
+}
+
+/// File name of the undo file next to an export: `x.csv` → `x_undo.csv`.
+pub fn undo_file_name(file_name: &str) -> String {
+    let stem = file_name.strip_suffix(".csv").unwrap_or(file_name);
+    let stem = if stem.is_empty() { "repricing" } else { stem };
+    format!("{stem}_undo.csv")
 }
 
 // ── Rounding ────────────────────────────────────────────────────────────────

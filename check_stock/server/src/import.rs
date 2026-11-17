@@ -19,7 +19,9 @@ use crate::data_dir::{DataDirLock, LockError};
 use crate::db::{open_writer, DbError, BUSY_TIMEOUT};
 use crate::inventory_import;
 use crate::migrations::{self, MigrationError, TABLE_PREFIX};
+use crate::repricing;
 use check_stock_core::inventory_db::InventoryDb;
+use check_stock_core::repricing::{load_ruleset, Ruleset};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, MAIN_DB};
 use std::path::{Path, PathBuf};
 
@@ -61,6 +63,8 @@ pub enum ImportError {
     NothingToRefresh(PathBuf),
     /// `PRAGMA integrity_check` found problems in the copy.
     Corrupt(Vec<String>),
+    /// The desktop repricing ruleset (`--ruleset`) cannot be read.
+    Ruleset(String),
     Lock(LockError),
     Sqlite(rusqlite::Error),
     Migration(MigrationError),
@@ -96,6 +100,7 @@ impl std::fmt::Display for ImportError {
                 "the copy failed the integrity check, nothing was replaced: {}",
                 messages.join("; ")
             ),
+            ImportError::Ruleset(why) => write!(f, "{why}; nothing was imported"),
             ImportError::Lock(e) => write!(f, "{e}"),
             ImportError::Sqlite(e) => write!(f, "database error: {e}"),
             ImportError::Migration(e) => write!(f, "{e}"),
@@ -209,6 +214,69 @@ pub fn refresh_desktop(source: &Path, data_dir: &Path) -> Result<ImportReport, I
         taken_at,
         previous_kept_as: Some(previous_kept_as),
     })
+}
+
+/// Reads the desktop app's repricing ruleset (`repricing_ruleset.json`):
+/// refused unread above core's size cap, sanitized like every ruleset.
+/// Read before the database is copied, so a bad file stops the import.
+pub fn read_ruleset(path: &Path) -> Result<Ruleset, ImportError> {
+    load_ruleset(path).map_err(ImportError::Ruleset)
+}
+
+/// What `import-desktop --ruleset` did with the ruleset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RulesetImport {
+    /// Published as this revision.
+    Published(i64),
+    /// The same rules are already published (this revision).
+    Unchanged(i64),
+}
+
+/// Publishes `ruleset` on the server in `data_dir` as the next revision
+/// (audited, actor `import-desktop`), unless it is already the published
+/// one. Takes the data folder lock.
+pub fn publish_ruleset(ruleset: &Ruleset, data_dir: &Path) -> Result<RulesetImport, ImportError> {
+    let _lock = DataDirLock::acquire(data_dir)?;
+    let db = inventory_db_in(data_dir);
+    if !db.path().exists() {
+        return Err(ImportError::NothingToRefresh(db.path().to_path_buf()));
+    }
+    let mut conn = open_writer(&db)?;
+    let tx = conn.transaction()?;
+    let current = repricing::published(&tx)?;
+    let mut ruleset = ruleset.clone();
+    ruleset.sanitize();
+    if current.revision > 0 && current.ruleset == ruleset {
+        return Ok(RulesetImport::Unchanged(current.revision));
+    }
+    let now = chrono::Utc::now();
+    let revision =
+        match repricing::publish_in_tx(&tx, &ruleset, current.revision, now, "import-desktop")? {
+            Ok(revision) => revision,
+            // Impossible under the lock and in one transaction.
+            Err(_) => {
+                return Err(ImportError::Ruleset(
+                    "the ruleset changed meanwhile".to_string(),
+                ))
+            }
+        };
+    audit::record(
+        &tx,
+        now,
+        Actor::Cli,
+        action::REPRICING_PUBLISHED,
+        Some(&revision.to_string()),
+        serde_json::json!({
+            "revision": revision,
+            "previous": current.revision,
+            "source": "desktop",
+            "name": ruleset.name,
+            "rules": ruleset.rules.len(),
+            "enabled": ruleset.rules.iter().filter(|r| r.enabled).count(),
+        }),
+    )?;
+    tx.commit()?;
+    Ok(RulesetImport::Published(revision))
 }
 
 /// What `restore-inventory` did.

@@ -76,6 +76,19 @@ import type {
   SingleCard,
   UpdateUserRequest,
   UserView,
+  DraftRequest,
+  DraftSaved,
+  ListingExplained,
+  ManualRequest,
+  PriceExportRequest,
+  PriceExportResult,
+  PriceExportSummary,
+  PublishedView,
+  RepricingSetup,
+  ReviewPage,
+  ReviewQuery,
+  TicksRequest,
+  TicksResult,
 } from "./types";
 
 export const keys = {
@@ -110,6 +123,10 @@ export const keys = {
   bulkDraft: ["bulk-draft"] as const,
   bulkHistory: ["bulk-history"] as const,
   bulkCards: ["bulk-cards"] as const,
+  repricingSetup: ["repricing-setup"] as const,
+  repricingReview: ["repricing-review"] as const,
+  repricingListing: ["repricing-listing"] as const,
+  repricingExports: ["repricing-exports"] as const,
   digest: ["digest"] as const,
 };
 
@@ -512,7 +529,7 @@ export function useExportRestock() {
 }
 
 /** Each report reaches the shared market data through its own routes (its own permission). */
-export type MarketBase = "/api/movers" | "/api/mispricing";
+export type MarketBase = "/api/movers" | "/api/mispricing" | "/api/repricing/market";
 
 /** The shared market data: job and what is loaded; polled while it loads. */
 export function useMarketStatus(base: MarketBase) {
@@ -998,4 +1015,170 @@ export function useManageBulkLot() {
 /** The TCG Powertools CSV of lot `id`. */
 export function downloadBulkCsv(id: number) {
   return download(`/api/bulk-lots/${id}/csv`, undefined, `bulk_lot_${id}.csv`);
+}
+
+// ── Repricing ───────────────────────────────────────────────────────────────
+
+export function useRepricingSetup() {
+  return useQuery({ queryKey: keys.repricingSetup, queryFn: () => api.get<RepricingSetup>("/api/repricing/setup") });
+}
+
+/** The review query string (only what differs from the server's defaults is left to it). */
+export function reviewQuery(q: ReviewQuery): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(q)) {
+    if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
+  }
+  return params.toString();
+}
+
+/** One page of the review; `draftKey` changes whenever the user's draft was saved. */
+export function useRepricingReview(query: ReviewQuery | null, draftKey: string) {
+  return useQuery({
+    queryKey: [...keys.repricingReview, draftKey, query],
+    queryFn: () => {
+      if (!query) throw new Error("no query");
+      return api.get<ReviewPage>(`/api/repricing/review?${reviewQuery(query)}`);
+    },
+    enabled: query !== null,
+    placeholderData: (previous) => previous,
+    retry: false,
+  });
+}
+
+/** How one listing got its price (null pile: nothing to show). */
+export function useRepricingListing(pile: string | null, draft: boolean, draftKey: string) {
+  return useQuery({
+    queryKey: [...keys.repricingListing, pile, draft, draftKey],
+    queryFn: () =>
+      api.get<ListingExplained>(`/api/repricing/listings/${encodeURIComponent(pile ?? "")}?draft=${String(draft)}`),
+    enabled: pile !== null,
+  });
+}
+
+function refreshReview(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({ queryKey: keys.repricingReview });
+  void queryClient.invalidateQueries({ queryKey: keys.repricingListing });
+}
+
+export function useSaveRulesetDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: DraftRequest) => api.put<DraftSaved>("/api/repricing/draft", request),
+    onSuccess: (saved) => {
+      queryClient.setQueryData<RepricingSetup>(keys.repricingSetup, (setup) =>
+        setup ? { ...setup, draft: saved.draft } : setup,
+      );
+    },
+  });
+}
+
+/** Saves the draft while the page goes away (reload, closed tab). */
+export function saveRulesetDraftOnExit(request: DraftRequest): void {
+  void api.put("/api/repricing/draft", request, { keepalive: true }).catch(() => undefined);
+}
+
+export function useDropRulesetDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.delete<void>("/api/repricing/draft"),
+    onSuccess: () => {
+      queryClient.setQueryData<RepricingSetup>(keys.repricingSetup, (setup) =>
+        setup ? { ...setup, draft: null } : setup,
+      );
+      refreshReview(queryClient);
+    },
+  });
+}
+
+export function useOpenRulesetFile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (json: string) => api.post<DraftSaved>("/api/repricing/draft/file", { json }),
+    onSuccess: (saved) => {
+      queryClient.setQueryData<RepricingSetup>(keys.repricingSetup, (setup) =>
+        setup ? { ...setup, draft: saved.draft } : setup,
+      );
+      refreshReview(queryClient);
+    },
+  });
+}
+
+export function usePublishRuleset() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (expected_revision: number) => api.post<PublishedView>("/api/repricing/publish", { expected_revision }),
+    onSuccess: (published) => {
+      queryClient.setQueryData<RepricingSetup>(keys.repricingSetup, (setup) =>
+        setup ? { ...setup, published, draft: null } : setup,
+      );
+      refreshReview(queryClient);
+    },
+  });
+}
+
+export function downloadRuleset(draft: boolean) {
+  return download(`/api/repricing/ruleset.json?draft=${String(draft)}`, undefined, "repricing_ruleset.json");
+}
+
+/** Ticks listings for the export; ticks of named piles show at once. */
+export function useSetTicks() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: TicksRequest) => api.put<TicksResult>("/api/repricing/review/ticks", request),
+    onMutate: async (request) => {
+      if (!("piles" in request.target) || request.ticked === null) return;
+      const piles = new Set(request.target.piles);
+      const ticked = request.ticked;
+      await queryClient.cancelQueries({ queryKey: keys.repricingReview });
+      queryClient.setQueriesData<ReviewPage>({ queryKey: keys.repricingReview }, (page) =>
+        page
+          ? {
+              ...page,
+              rows: page.rows.map((r) =>
+                piles.has(r.pile) ? { ...r, ticked: ticked && !r.held_back, overridden: ticked } : r,
+              ),
+            }
+          : page,
+      );
+    },
+    onSettled: () => refreshReview(queryClient),
+  });
+}
+
+export function useSetManualPrice() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: ManualRequest) => api.put<void>("/api/repricing/review/manual", request),
+    onSettled: () => refreshReview(queryClient),
+  });
+}
+
+export function useResetReview() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<void>("/api/repricing/review/reset"),
+    onSettled: () => refreshReview(queryClient),
+  });
+}
+
+export function useExportPrices() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: PriceExportRequest) => api.post<PriceExportResult>("/api/repricing/export", request),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: keys.repricingExports }),
+  });
+}
+
+export function useRepricingExports(enabled: boolean) {
+  return useQuery({
+    queryKey: keys.repricingExports,
+    queryFn: () => api.get<PriceExportSummary[]>("/api/repricing/exports"),
+    enabled,
+  });
+}
+
+/** The new prices (or the undo file) of a kept export; `fileName` if the server names none. */
+export function downloadPriceExport(id: number, undo: boolean, fileName: string) {
+  return download(`/api/repricing/exports/${id}/${undo ? "undo" : "csv"}`, undefined, fileName);
 }

@@ -22,6 +22,7 @@ mod movers;
 mod picking;
 mod precon_ev;
 mod reports;
+mod repricing;
 mod search;
 mod singles;
 mod stock_analysis;
@@ -161,6 +162,7 @@ fn api(state: AppState) -> Api {
     let api = stock_checker::routes(api);
     let api = picking::routes(api);
     let api = bulk_lots::routes(api);
+    let api = repricing::routes(api);
     home::routes(api)
 }
 

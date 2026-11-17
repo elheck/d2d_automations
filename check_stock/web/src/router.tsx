@@ -16,6 +16,7 @@ import { PreconEvPage } from "./pages/PreconEvPage";
 import { PreconProductPage } from "./pages/PreconProductPage";
 import { BinAnalysisPage } from "./pages/BinAnalysisPage";
 import { BulkLotsPage } from "./pages/BulkLotsPage";
+import { RepricingPage } from "./pages/RepricingPage";
 import { BinMovesPage } from "./pages/BinMovesPage";
 import { InventoryImportPage } from "./pages/InventoryImportPage";
 import { PickingPage } from "./pages/PickingPage";
@@ -174,6 +175,16 @@ const bulkLotsRoute = createRoute({
   ),
 });
 
+const repricingRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/repricing",
+  component: () => (
+    <RequirePermission permission="repricing.view">
+      <RepricingPage />
+    </RequirePermission>
+  ),
+});
+
 const binsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/bins",
@@ -256,6 +267,7 @@ const routeTree = rootRoute.addChildren([
     binsRoute,
     binMovesRoute,
     bulkLotsRoute,
+    repricingRoute,
     searchRoute,
     stockCheckerRoute,
     pickingRoute,
