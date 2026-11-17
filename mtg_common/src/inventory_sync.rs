@@ -20,9 +20,11 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 pub const MAX_BULK_IDS: usize = 10_000;
 /// Maximum snapshot dates per bulk price-snapshot request.
 pub const MAX_SNAPSHOT_DATES: usize = 8;
-/// Upper bound the client applies to `GET /api/search` result limits. The
-/// server does not cap `limit` itself, so the client keeps requests bounded.
-pub const MAX_SEARCH_LIMIT: usize = 10_000;
+/// Most results of one `GET /api/search`. The server caps `limit` at this
+/// value too; the precon loader asks for 5,000 (the whole Commander catalog).
+pub const MAX_SEARCH_LIMIT: usize = 5_000;
+/// Longest search text the server accepts (characters).
+pub const MAX_SEARCH_QUERY_CHARS: usize = 100;
 
 /// Clamps a requested search limit into `1..=MAX_SEARCH_LIMIT`.
 pub fn clamp_search_limit(limit: usize) -> usize {

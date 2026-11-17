@@ -6,6 +6,8 @@ description = "Web backend of the MTG stock checker (LAN only)"
 
 [dependencies]
 check_stock_core = { path = "../core", features = ["ts"] }
+# Shared network helpers (trusted proxies, Host allowlist), also used by inventory_sync.
+mtg_common = { path = "../../mtg_common" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 tower-http = { version = "0.6", features = ["catch-panic", "set-header", "timeout"] }

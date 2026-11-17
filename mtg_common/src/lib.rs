@@ -3,6 +3,7 @@ pub mod error;
 pub mod file_cache;
 pub mod inventory_sync;
 pub mod mtgjson;
+pub mod net;
 pub mod scryfall;
 
 pub use cardmarket::{product_url, PriceGuide, PriceGuideEntry, PriceGuideFile};

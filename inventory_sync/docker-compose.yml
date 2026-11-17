@@ -17,6 +17,9 @@ volumes:
     driver: local
 
 # Container runs continuously, checking every 12 hours and syncing when needed
+# The image listens on 0.0.0.0 inside the container (INVENTORY_SYNC_WEB_BIND).
+# Behind Caddy, also set INVENTORY_SYNC_TRUSTED_PROXIES (Caddy's address) and
+# INVENTORY_SYNC_ALLOWED_HOSTS (the names the tracker is reached by).
 # Web UI available at http://localhost:3000
 # Deploy with: docker compose up -d
 # View logs: docker compose logs -f

@@ -15,6 +15,9 @@ pub enum InventoryError {
     Database(rusqlite::Error),
     /// Card not found on Scryfall
     ScryfallNotFound(String),
+    /// Scryfall answered with an error other than "not found" (busy, down);
+    /// worth asking again later
+    ScryfallUnavailable(String),
     /// No image available for card
     NoImageAvailable(String),
     /// Failed to fetch image from URL
@@ -30,6 +33,9 @@ impl fmt::Display for InventoryError {
             InventoryError::Database(e) => write!(f, "Database error: {}", e),
             InventoryError::ScryfallNotFound(name) => {
                 write!(f, "Card not found on Scryfall: {}", name)
+            }
+            InventoryError::ScryfallUnavailable(what) => {
+                write!(f, "Scryfall is unavailable: {}", what)
             }
             InventoryError::NoImageAvailable(name) => {
                 write!(f, "No image available for card: {}", name)
@@ -49,6 +55,7 @@ impl std::error::Error for InventoryError {
             InventoryError::HttpStatus(_) => None,
             InventoryError::Database(e) => Some(e),
             InventoryError::ScryfallNotFound(_) => None,
+            InventoryError::ScryfallUnavailable(_) => None,
             InventoryError::NoImageAvailable(_) => None,
             InventoryError::ImageFetchFailed(_) => None,
         }

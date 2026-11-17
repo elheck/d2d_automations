@@ -123,92 +123,9 @@ pub fn parse_service_url(raw: &str) -> Result<String, String> {
     Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
-/// Host names the server answers to. A request whose `Host` header names any
-/// other host is refused, so a web page that points its own domain at
-/// `127.0.0.1` (DNS rebinding) cannot talk to the server through a browser.
-/// Loopback names are always allowed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostAllowlist {
-    hosts: Vec<String>,
-}
-
-/// Always allowed: the machine itself.
-pub const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "[::1]"];
-
-impl HostAllowlist {
-    /// Loopback names plus `extra` (e.g. `stock.example.com`).
-    pub fn new(extra: &[String]) -> Result<Self, String> {
-        let mut hosts: Vec<String> = LOOPBACK_HOSTS.iter().map(|h| h.to_string()).collect();
-        for raw in extra {
-            let host = raw.trim().to_ascii_lowercase();
-            if !is_valid_host_name(&host) {
-                return Err(format!(
-                    "not a valid host name: {raw:?} (letters, digits, '-' and '.', no port, no wildcards)"
-                ));
-            }
-            if !hosts.contains(&host) {
-                hosts.push(host);
-            }
-        }
-        Ok(Self { hosts })
-    }
-
-    /// Whether a `Host` header value (with or without port) is allowed.
-    pub fn allows(&self, host_header: &str) -> bool {
-        match host_without_port(host_header) {
-            Some(host) => self.hosts.iter().any(|h| h.eq_ignore_ascii_case(host)),
-            None => false,
-        }
-    }
-
-    /// The allowed names, loopback first.
-    pub fn hosts(&self) -> &[String] {
-        &self.hosts
-    }
-}
-
-/// `example.com:8080` → `example.com`, `[::1]:8080` → `[::1]`. `None` for
-/// anything malformed.
-fn host_without_port(value: &str) -> Option<&str> {
-    let value = value.trim();
-    if value.is_empty() {
-        return None;
-    }
-    if let Some(rest) = value.strip_prefix('[') {
-        let end = rest.find(']')?;
-        let after = &rest[end + 1..];
-        if !(after.is_empty() || is_port_suffix(after)) {
-            return None;
-        }
-        return Some(&value[..end + 2]);
-    }
-    match value.split_once(':') {
-        Some((host, port)) if is_port_suffix(&format!(":{port}")) => Some(host),
-        Some(_) => None,
-        None => Some(value),
-    }
-}
-
-fn is_port_suffix(s: &str) -> bool {
-    s.strip_prefix(':')
-        .is_some_and(|p| !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()))
-}
-
-/// A DNS name (labels of letters, digits and `-`) or an IPv4 address.
-fn is_valid_host_name(host: &str) -> bool {
-    if host.is_empty() || host.len() > 253 {
-        return false;
-    }
-    host.split('.').all(|label| {
-        !label.is_empty()
-            && label.len() <= 63
-            && !label.starts_with('-')
-            && !label.ends_with('-')
-            && label
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-    })
-}
+/// Host names the server answers to (shared with inventory_sync in
+/// [`mtg_common::net`]).
+pub use mtg_common::net::{HostAllowlist, LOOPBACK_HOSTS};
 
 #[cfg(test)]
 #[path = "config_tests.rs"]

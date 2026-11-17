@@ -71,6 +71,10 @@ USER appuser
 
 # Default database path inside container
 ENV RUST_LOG=info
+# The web UI listens on loopback unless told otherwise; inside a container it
+# must listen on all of the container's interfaces for the port mapping
+# (what the host publishes decides who can reach it).
+ENV INVENTORY_SYNC_WEB_BIND=0.0.0.0
 
 # Mount point for persistent data
 VOLUME ["/data"]

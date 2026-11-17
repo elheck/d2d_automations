@@ -773,6 +773,7 @@ dependencies = [
  "getrandom 0.4.3",
  "http-body-util",
  "log",
+ "mtg_common",
  "reqwest",
  "rpassword",
  "rusqlite",
